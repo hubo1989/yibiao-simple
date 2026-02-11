@@ -31,6 +31,9 @@ class Settings(BaseSettings):
     max_file_size: int = 10 * 1024 * 1024  # 10MB
     upload_dir: str = "uploads"
     
+    # 数据库设置
+    database_url: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/yibiao"
+
     # OpenAI默认设置
     default_model: str = "gpt-3.5-turbo"
     

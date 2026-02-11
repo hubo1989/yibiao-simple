@@ -1,5 +1,8 @@
 """FastAPI应用主入口"""
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
+from sqlalchemy import text
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
@@ -8,13 +11,27 @@ import fastapi.middleware.cors
 import starlette.middleware.cors
 
 from .config import settings
+from .db.database import engine
 from .routers import config, document, outline, content, search, expand
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """应用生命周期：启动时验证数据库连接，关闭时释放连接池"""
+    # startup
+    async with engine.begin() as conn:
+        await conn.execute(text("SELECT 1"))
+    yield
+    # shutdown
+    await engine.dispose()
+
 
 # 创建FastAPI应用实例
 app = FastAPI(
     title=settings.app_name,
     version=settings.app_version,
-    description="基于FastAPI的AI写标书助手后端API"
+    description="基于FastAPI的AI写标书助手后端API",
+    lifespan=lifespan,
 )
 
 # 添加CORS中间件
@@ -63,12 +80,17 @@ if os.path.exists("static"):
             # 这些路径应该由FastAPI处理，如果到这里说明404
             from fastapi import HTTPException
             raise HTTPException(status_code=404, detail="API endpoint not found")
-        
+
+        # 路径遍历防护：规范化路径并确保不逃逸出 static 目录
+        static_file_path = os.path.normpath(os.path.join("static", full_path))
+        if not static_file_path.startswith("static" + os.sep) and static_file_path != "static":
+            from fastapi import HTTPException
+            raise HTTPException(status_code=400, detail="Invalid path")
+
         # 检查是否是静态文件
-        static_file_path = os.path.join("static", full_path)
         if os.path.exists(static_file_path) and os.path.isfile(static_file_path):
             return FileResponse(static_file_path)
-        
+
         # 对于其他所有路径，返回React应用的index.html（SPA路由）
         return FileResponse("static/index.html")
 else:
