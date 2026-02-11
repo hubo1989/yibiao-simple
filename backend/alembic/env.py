@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import async_engine_from_config
 
 from app.config import settings
 from app.db.base import Base
+from app.models.user import User  # noqa: F401 — 注册模型到 Base.metadata
 
 # Alembic Config 对象
 config = context.config

@@ -3,10 +3,10 @@
   "sessionId": "f9bacff0-5517-4db0-aeb9-3b160a361fda",
   "status": "running",
   "startedAt": "2026-02-11T11:43:11.270Z",
-  "updatedAt": "2026-02-11T12:14:02.155Z",
-  "currentIteration": 0,
+  "updatedAt": "2026-02-11T12:28:08.186Z",
+  "currentIteration": 1,
   "maxIterations": 10,
-  "tasksCompleted": 0,
+  "tasksCompleted": 1,
   "isPaused": false,
   "agentPlugin": "claude",
   "trackerState": {
@@ -17,8 +17,8 @@
       {
         "id": "US-001",
         "title": "引入 PostgreSQL 数据库和 SQLAlchemy ORM 基础设施",
-        "status": "open",
-        "completedInSession": false
+        "status": "completed",
+        "completedInSession": true
       },
       {
         "id": "US-002",
@@ -190,7 +190,18 @@
       }
     ]
   },
-  "iterations": [],
+  "iterations": [
+    {
+      "iteration": 1,
+      "status": "completed",
+      "taskId": "US-001",
+      "taskTitle": "引入 PostgreSQL 数据库和 SQLAlchemy ORM 基础设施",
+      "taskCompleted": true,
+      "durationMs": 1840198,
+      "startedAt": "2026-02-11T11:43:21.953Z",
+      "endedAt": "2026-02-11T12:14:02.151Z"
+    }
+  ],
   "skippedTaskIds": [],
   "cwd": "/Users/hubo/.superset/worktrees/yibiao-simple/parcel",
   "activeTaskIds": [],

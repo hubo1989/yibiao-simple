@@ -27,6 +27,8 @@ seleniumbase==4.33.3
 undetected-chromedriver==3.5.5
 # MCP服务支持
 mcp==1.13.1
+# 验证
+email-validator==2.2.0
 # 数据库支持
 sqlalchemy[asyncio]==2.0.41
 asyncpg==0.30.0
