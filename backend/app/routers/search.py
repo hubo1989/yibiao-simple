@@ -6,6 +6,9 @@
 from fastapi import APIRouter, HTTPException, Query
 from typing import List, Optional
 from pydantic import BaseModel
+from urllib.parse import urlparse
+import ipaddress
+import socket
 import logging
 
 from ..services.search_service import search_service
@@ -160,6 +163,33 @@ async def search_formatted(request: SearchRequest):
         logger.error(f"格式化搜索API异常: {str(e)}")
         raise HTTPException(status_code=500, detail=f"搜索服务异常: {str(e)}")
 
+def _is_private_url(url: str) -> bool:
+    """检查 URL 是否指向内网地址，防止 SSRF 攻击"""
+    try:
+        parsed = urlparse(url)
+        hostname = parsed.hostname
+        if not hostname:
+            return True
+
+        # 检查常见内网域名
+        if hostname in ("localhost", "127.0.0.1", "::1", "0.0.0.0"):
+            return True
+
+        # 解析域名为 IP 并检查是否为私有地址
+        try:
+            resolved_ips = socket.getaddrinfo(hostname, None)
+            for _, _, _, _, sockaddr in resolved_ips:
+                ip = ipaddress.ip_address(sockaddr[0])
+                if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved:
+                    return True
+        except (socket.gaierror, ValueError):
+            return True
+
+        return False
+    except Exception:
+        return True
+
+
 @router.post("/load-url", response_model=UrlContentResponse, summary="读取URL内容")
 async def load_url_content(request: UrlContentRequest):
     """
@@ -180,7 +210,11 @@ async def load_url_content(request: UrlContentRequest):
         # 验证URL格式
         if not request.url.startswith(('http://', 'https://')):
             raise HTTPException(status_code=400, detail="URL格式不正确，必须以http://或https://开头")
-        
+
+        # SSRF 防护：禁止访问内网地址
+        if _is_private_url(request.url):
+            raise HTTPException(status_code=403, detail="禁止访问内网地址")
+
         try:
             result = await search_service.load_url_content_async(request.url, request.max_chars)
             

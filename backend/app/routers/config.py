@@ -23,17 +23,25 @@ async def save_config(config: ConfigRequest):
             return ConfigResponse(success=False, message="配置保存失败")
             
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"保存配置时发生错误: {str(e)}")
+        raise HTTPException(status_code=500, detail="保存配置时发生错误")
 
 
 @router.get("/load", response_model=dict)
 async def load_config():
-    """加载保存的配置"""
+    """加载保存的配置（API Key 脱敏返回）"""
     try:
         config = config_manager.load_config()
+        # API Key 脱敏：仅返回前4位和后4位，中间用 **** 替代
+        api_key = config.get("api_key", "")
+        if api_key and len(api_key) > 8:
+            config["api_key_masked"] = api_key[:4] + "****" + api_key[-4:]
+        elif api_key:
+            config["api_key_masked"] = "****"
+        else:
+            config["api_key_masked"] = ""
         return config
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"加载配置时发生错误: {str(e)}")
+        raise HTTPException(status_code=500, detail="加载配置时发生错误")
 
 
 @router.post("/models", response_model=ModelListResponse)

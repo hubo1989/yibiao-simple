@@ -36,16 +36,27 @@ def set_paragraph_font_simsun(paragraph: docx.text.paragraph.Paragraph) -> None:
 async def upload_file(file: UploadFile = File(...)):
     """上传文档文件并提取文本内容"""
     try:
-        # 检查文件类型
+        # 检查文件类型（Content-Type + magic bytes 双重校验）
         allowed_types = [
             "application/pdf",
             "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
         ]
-        
+
         if file.content_type not in allowed_types:
             return FileUploadResponse(
                 success=False,
                 message="不支持的文件类型，请上传PDF或Word文档"
+            )
+
+        # Magic bytes 校验：防止伪造 Content-Type
+        header = await file.read(8)
+        await file.seek(0)
+        is_pdf = header[:5] == b'%PDF-'
+        is_docx = header[:4] == b'PK\x03\x04'  # docx 本质是 ZIP
+        if not (is_pdf or is_docx):
+            return FileUploadResponse(
+                success=False,
+                message="文件内容与类型不匹配，请上传有效的PDF或Word文档"
             )
         
         # 处理文件并提取文本
@@ -428,8 +439,8 @@ async def export_word(request: WordExportRequest):
             headers=headers
         )
     except Exception as e:
-        # 打印详细错误信息到控制台，方便排查
         import traceback
-        print("导出Word失败:", str(e))
+        logger_msg = f"导出Word失败: {str(e)}"
+        print(logger_msg)
         traceback.print_exc()
-        raise HTTPException(status_code=500, detail=f"导出Word失败: {str(e)}")
+        raise HTTPException(status_code=500, detail="导出Word失败，请稍后重试")
