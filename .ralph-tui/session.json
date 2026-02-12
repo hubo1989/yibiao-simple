@@ -3,10 +3,10 @@
   "sessionId": "c195db03-f5d5-4903-92dc-e8b68263b4a9",
   "status": "running",
   "startedAt": "2026-02-12T01:20:33.720Z",
-  "updatedAt": "2026-02-12T05:12:57.861Z",
-  "currentIteration": 11,
+  "updatedAt": "2026-02-12T05:49:26.667Z",
+  "currentIteration": 12,
   "maxIterations": 10,
-  "tasksCompleted": 11,
+  "tasksCompleted": 12,
   "isPaused": false,
   "agentPlugin": "claude",
   "trackerState": {
@@ -95,8 +95,8 @@
       {
         "id": "US-014",
         "title": "实现章节锁定机制",
-        "status": "open",
-        "completedInSession": false
+        "status": "completed",
+        "completedInSession": true
       },
       {
         "id": "US-015",
@@ -300,6 +300,16 @@
       "durationMs": 517480,
       "startedAt": "2026-02-12T03:05:55.067Z",
       "endedAt": "2026-02-12T03:14:32.547Z"
+    },
+    {
+      "iteration": 12,
+      "status": "completed",
+      "taskId": "US-014",
+      "taskTitle": "实现章节锁定机制",
+      "taskCompleted": true,
+      "durationMs": 411540,
+      "startedAt": "2026-02-12T05:06:06.319Z",
+      "endedAt": "2026-02-12T05:12:57.859Z"
     }
   ],
   "skippedTaskIds": [],
