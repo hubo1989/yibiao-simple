@@ -9,6 +9,7 @@ import Login from './pages/Login';
 import Register from './pages/Register';
 import ProjectList from './pages/ProjectList';
 import ProjectWorkspace from './pages/ProjectWorkspace';
+import Admin from './pages/Admin';
 
 function App() {
   return (
@@ -33,6 +34,16 @@ function App() {
             element={
               <ProtectedRoute>
                 <ProjectWorkspace />
+              </ProtectedRoute>
+            }
+          />
+
+          {/* 管理员专用路由 */}
+          <Route
+            path="/admin"
+            element={
+              <ProtectedRoute allowedRoles={['admin']}>
+                <Admin />
               </ProtectedRoute>
             }
           />

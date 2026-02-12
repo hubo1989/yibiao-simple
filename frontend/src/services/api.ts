@@ -20,6 +20,19 @@ import type {
 import type { Comment, CommentListResponse, CommentCreateRequest } from '../types/comment';
 import type { ProofreadResult } from '../types/proofread';
 import type { ConsistencyCheckResponse } from '../types/consistency';
+import type {
+  AdminUser,
+  AdminUserListResponse,
+  AdminUserCreate,
+  AdminUserUpdate,
+  ResetPasswordRequest,
+  ApiKeyConfig,
+  ApiKeyConfigListResponse,
+  ApiKeyConfigCreate,
+  OperationLogListResponse,
+  OperationLogQuery,
+  UsageStats,
+} from '../types/admin';
 
 const API_BASE_URL = process.env.REACT_APP_API_URL || 'http://localhost:8000';
 
@@ -460,6 +473,83 @@ export const consistencyApi = {
     const response = await api.post<ConsistencyCheckResponse>(
       `/api/projects/${projectId}/consistency-check`
     );
+    return response.data;
+  },
+};
+
+// 后台管理相关 API
+export const adminApi = {
+  // ==================== 用户管理 ====================
+
+  // 获取用户列表
+  listUsers: async (params?: {
+    username?: string;
+    email?: string;
+    role?: string;
+    is_active?: boolean;
+    page?: number;
+    page_size?: number;
+  }): Promise<AdminUserListResponse> => {
+    const response = await api.get<AdminUserListResponse>('/api/admin/users', { params });
+    return response.data;
+  },
+
+  // 创建用户
+  createUser: async (data: AdminUserCreate): Promise<AdminUser> => {
+    const response = await api.post<AdminUser>('/api/admin/users', data);
+    return response.data;
+  },
+
+  // 更新用户
+  updateUser: async (userId: string, data: AdminUserUpdate): Promise<AdminUser> => {
+    const response = await api.put<AdminUser>(`/api/admin/users/${userId}`, data);
+    return response.data;
+  },
+
+  // 重置用户密码
+  resetPassword: async (userId: string, data: ResetPasswordRequest): Promise<AdminUser> => {
+    const response = await api.post<AdminUser>(`/api/admin/users/${userId}/reset-password`, data);
+    return response.data;
+  },
+
+  // ==================== API Key 管理 ====================
+
+  // 获取 API Key 列表
+  listApiKeys: async (params?: { skip?: number; limit?: number }): Promise<ApiKeyConfigListResponse> => {
+    const response = await api.get<ApiKeyConfigListResponse>('/api/admin/api-keys', { params });
+    return response.data;
+  },
+
+  // 创建 API Key
+  createApiKey: async (data: ApiKeyConfigCreate): Promise<ApiKeyConfig> => {
+    const response = await api.post<ApiKeyConfig>('/api/admin/api-keys', data);
+    return response.data;
+  },
+
+  // 删除 API Key
+  deleteApiKey: async (configId: string): Promise<void> => {
+    await api.delete(`/api/admin/api-keys/${configId}`);
+  },
+
+  // 设置默认 API Key
+  setDefaultApiKey: async (configId: string): Promise<ApiKeyConfig> => {
+    const response = await api.put<ApiKeyConfig>(`/api/admin/api-keys/${configId}/default`);
+    return response.data;
+  },
+
+  // ==================== 操作日志 ====================
+
+  // 获取操作日志列表
+  listLogs: async (params?: OperationLogQuery): Promise<OperationLogListResponse> => {
+    const response = await api.get<OperationLogListResponse>('/api/admin/logs', { params });
+    return response.data;
+  },
+
+  // ==================== 统计 ====================
+
+  // 获取使用统计
+  getStats: async (): Promise<UsageStats> => {
+    const response = await api.get<UsageStats>('/api/admin/stats');
     return response.data;
   },
 };
