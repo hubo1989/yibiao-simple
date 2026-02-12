@@ -23,6 +23,7 @@ from ..schemas.project import (
     ProjectSummary,
     ProjectMemberAdd,
     ProjectMemberResponse,
+    ProjectMemberWithUser,
     ProjectProgress,
     ConsistencyCheckRequest,
     ConsistencyCheckResponse,
@@ -160,6 +161,44 @@ async def get_project(
     """获取项目详情"""
     project = await get_project_for_user(project_id, current_user.id, db)
     return project
+
+
+@router.get("/{project_id}/members", response_model=list[ProjectMemberWithUser])
+async def list_project_members(
+    project_id: uuid.UUID,
+    current_user: Annotated[User, Depends(get_current_active_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """获取项目成员列表（包含用户信息）"""
+    # 验证项目存在且用户是成员
+    await get_project_for_user(project_id, current_user.id, db)
+
+    # 查询项目成员及用户信息
+    result = await db.execute(
+        select(
+            project_members.c.user_id,
+            User.username,
+            User.email,
+            project_members.c.role,
+            project_members.c.joined_at,
+        )
+        .select_from(project_members)
+        .join(User, project_members.c.user_id == User.id)
+        .where(project_members.c.project_id == project_id)
+        .order_by(project_members.c.joined_at.asc())
+    )
+    rows = result.fetchall()
+
+    return [
+        ProjectMemberWithUser(
+            user_id=row.user_id,
+            username=row.username,
+            email=row.email,
+            role=row.role,
+            joined_at=row.joined_at,
+        )
+        for row in rows
+    ]
 
 
 @router.put("/{project_id}", response_model=ProjectResponse)

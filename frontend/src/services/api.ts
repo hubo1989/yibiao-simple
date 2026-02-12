@@ -3,7 +3,7 @@
  */
 import axios, { AxiosError } from 'axios';
 import type { User, LoginRequest, RegisterRequest, Token } from '../types/auth';
-import type { ProjectSummary, Project, ProjectCreate, ProjectProgress } from '../types/project';
+import type { ProjectSummary, Project, ProjectCreate, ProjectProgress, ProjectMember } from '../types/project';
 import type {
   VersionSummary,
   VersionResponse,
@@ -11,6 +11,13 @@ import type {
   VersionDiffResponse,
   VersionRollbackResponse,
 } from '../types/version';
+import type {
+  ChapterContentResponse,
+  LockResponse,
+  StatusUpdateResponse,
+  ChapterStatus,
+} from '../types/chapter';
+import type { Comment, CommentListResponse, CommentCreateRequest } from '../types/comment';
 
 const API_BASE_URL = process.env.REACT_APP_API_URL || 'http://localhost:8000';
 
@@ -167,6 +174,12 @@ export const projectApi = {
   // 获取项目进度
   getProgress: async (projectId: string): Promise<ProjectProgress> => {
     const response = await api.get<ProjectProgress>(`/api/projects/${projectId}/progress`);
+    return response.data;
+  },
+
+  // 获取项目成员列表
+  getMembers: async (projectId: string): Promise<ProjectMember[]> => {
+    const response = await api.get<ProjectMember[]>(`/api/projects/${projectId}/members`);
     return response.data;
   },
 };
@@ -354,6 +367,72 @@ export const versionApi = {
       { params: { change_summary: changeSummary } }
     );
     return response.data;
+  },
+};
+
+// 章节相关 API
+export const chapterApi = {
+  // 获取章节详情
+  get: async (chapterId: string): Promise<ChapterContentResponse> => {
+    const response = await api.get<ChapterContentResponse>(`/api/chapters/${chapterId}`);
+    return response.data;
+  },
+
+  // 锁定章节
+  lock: async (chapterId: string): Promise<LockResponse> => {
+    const response = await api.post<LockResponse>(`/api/chapters/${chapterId}/lock`);
+    return response.data;
+  },
+
+  // 解锁章节
+  unlock: async (chapterId: string): Promise<LockResponse> => {
+    const response = await api.post<LockResponse>(`/api/chapters/${chapterId}/unlock`);
+    return response.data;
+  },
+
+  // 更新章节内容
+  updateContent: async (chapterId: string, content: string, changeSummary?: string): Promise<ChapterContentResponse> => {
+    const response = await api.put<ChapterContentResponse>(`/api/chapters/${chapterId}/content`, {
+      content,
+      change_summary: changeSummary,
+    });
+    return response.data;
+  },
+
+  // 更新章节状态
+  updateStatus: async (chapterId: string, status: ChapterStatus): Promise<StatusUpdateResponse> => {
+    const response = await api.put<StatusUpdateResponse>(`/api/chapters/${chapterId}/status`, {
+      status,
+    });
+    return response.data;
+  },
+};
+
+// 评论批注相关 API
+export const commentApi = {
+  // 获取章节批注列表
+  list: async (chapterId: string, includeResolved = false): Promise<CommentListResponse> => {
+    const response = await api.get<CommentListResponse>(`/api/chapters/${chapterId}/comments`, {
+      params: { include_resolved: includeResolved },
+    });
+    return response.data;
+  },
+
+  // 创建批注
+  create: async (chapterId: string, data: CommentCreateRequest): Promise<Comment> => {
+    const response = await api.post<Comment>(`/api/chapters/${chapterId}/comments`, data);
+    return response.data;
+  },
+
+  // 标记批注为已解决
+  resolve: async (commentId: string): Promise<Comment> => {
+    const response = await api.put<Comment>(`/api/comments/${commentId}/resolve`);
+    return response.data;
+  },
+
+  // 删除批注
+  delete: async (commentId: string): Promise<void> => {
+    await api.delete(`/api/comments/${commentId}`);
   },
 };
 

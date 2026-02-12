@@ -11,6 +11,7 @@ import type { Project, ProjectProgress } from '../types/project';
 import ConfigPanel from '../components/ConfigPanel';
 import StepBar from '../components/StepBar';
 import VersionHistory from '../components/VersionHistory';
+import MemberSidebar from '../components/MemberSidebar';
 import DocumentAnalysis from './DocumentAnalysis';
 import OutlineEdit from './OutlineEdit';
 import ContentEdit from './ContentEdit';
@@ -24,6 +25,8 @@ const ProjectWorkspace: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [showVersionHistory, setShowVersionHistory] = useState(false);
+  const [showMemberSidebar, setShowMemberSidebar] = useState(false);
+  const [activeCommentChapter, setActiveCommentChapter] = useState<string | null>(null);
 
   const {
     state,
@@ -111,6 +114,8 @@ const ProjectWorkspace: React.FC = () => {
             outlineData={state.outlineData}
             selectedChapter={state.selectedChapter}
             onChapterSelect={updateSelectedChapter}
+            projectId={projectId}
+            onToggleComments={(chapterId) => setActiveCommentChapter(chapterId)}
           />
         );
       default:
@@ -173,6 +178,16 @@ const ProjectWorkspace: React.FC = () => {
             </div>
             <StepBar steps={steps} currentStep={state.currentStep} />
             <div className="flex items-center space-x-4">
+              <button
+                onClick={() => setShowMemberSidebar(true)}
+                className="inline-flex items-center px-3 py-1.5 text-sm font-medium text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded-md"
+                title="项目成员"
+              >
+                <svg className="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" />
+                </svg>
+                成员
+              </button>
               <button
                 onClick={() => setShowVersionHistory(true)}
                 className="inline-flex items-center px-3 py-1.5 text-sm font-medium text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded-md"
@@ -239,6 +254,15 @@ const ProjectWorkspace: React.FC = () => {
           projectId={projectId}
           isOpen={showVersionHistory}
           onClose={() => setShowVersionHistory(false)}
+        />
+      )}
+
+      {/* 项目成员侧边栏 */}
+      {projectId && (
+        <MemberSidebar
+          projectId={projectId}
+          isOpen={showMemberSidebar}
+          onClose={() => setShowMemberSidebar(false)}
         />
       )}
     </div>

@@ -56,3 +56,23 @@ export const PROJECT_STATUS_COLORS: Record<ProjectStatus, string> = {
   reviewing: 'bg-yellow-100 text-yellow-800',
   completed: 'bg-green-100 text-green-800',
 };
+
+export interface ProjectMember {
+  user_id: string;
+  username: string;
+  email: string;
+  role: ProjectMemberRole;
+  joined_at: string;
+}
+
+export const PROJECT_MEMBER_ROLE_LABELS: Record<ProjectMemberRole, string> = {
+  owner: '所有者',
+  editor: '编辑',
+  reviewer: '审核员',
+};
+
+export const PROJECT_MEMBER_ROLE_COLORS: Record<ProjectMemberRole, string> = {
+  owner: 'bg-purple-100 text-purple-800',
+  editor: 'bg-blue-100 text-blue-800',
+  reviewer: 'bg-green-100 text-green-800',
+};

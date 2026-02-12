@@ -4,16 +4,19 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import ReactMarkdown from 'react-markdown';
 import { OutlineData, OutlineItem } from '../types';
-import { DocumentTextIcon, PlayIcon, DocumentArrowDownIcon, CheckCircleIcon, ExclamationCircleIcon, ArrowUpIcon } from '@heroicons/react/24/outline';
+import { DocumentTextIcon, PlayIcon, DocumentArrowDownIcon, CheckCircleIcon, ExclamationCircleIcon, ArrowUpIcon, ChatBubbleLeftIcon } from '@heroicons/react/24/outline';
 import { contentApi, ChapterContentRequest, documentApi } from '../services/api';
 import { saveAs } from 'file-saver';
-import { Paragraph, TextRun } from 'docx';
 import { draftStorage } from '../utils/draftStorage';
+import ChapterStatusBadge from '../components/ChapterStatusBadge';
+import type { ChapterStatus } from '../types/chapter';
 
 interface ContentEditProps {
   outlineData: OutlineData | null;
   selectedChapter: string;
   onChapterSelect: (chapterId: string) => void;
+  projectId?: string;
+  onToggleComments?: (chapterId: string) => void;
 }
 
 interface GenerationProgress {
@@ -29,6 +32,8 @@ const ContentEdit: React.FC<ContentEditProps> = ({
   outlineData,
   selectedChapter,
   onChapterSelect,
+  projectId,
+  onToggleComments,
 }) => {
   const [isGenerating, setIsGenerating] = useState(false);
   const [progress, setProgress] = useState<GenerationProgress>({
@@ -139,19 +144,46 @@ const ContentEdit: React.FC<ContentEditProps> = ({
     return !item.children || item.children.length === 0;
   };
 
+  // 根据内容状态确定章节状态
+  const getChapterStatus = (item: OutlineItem, isGenerating: boolean): ChapterStatus => {
+    if (isGenerating) return 'generated';
+    if (!isLeafNode(item)) {
+      // 非叶子节点根据子节点状态判断
+      return 'pending';
+    }
+    const content = getLeafItemContent(item.id) || item.content;
+    if (content) return 'generated';
+    return 'pending';
+  };
+
   // 渲染目录结构
   const renderOutline = (items: OutlineItem[], level: number = 1): React.ReactElement[] => {
     return items.map((item) => {
       const isLeaf = isLeafNode(item);
       const currentContent = isLeaf ? getLeafItemContent(item.id) : item.content;
-      
+      const isGeneratingThis = progress.generating.has(item.id);
+      const chapterStatus = getChapterStatus(item, isGeneratingThis);
+
       return (
         <div key={item.id} className={`mb-${level === 1 ? '8' : '4'}`}>
-          {/* 标题 */}
-          <div className={`text-${level === 1 ? 'xl' : level === 2 ? 'lg' : 'base'} font-${level === 1 ? 'bold' : 'semibold'} text-gray-900 mb-2`}>
-            {item.id} {item.title}
+          {/* 标题和状态 */}
+          <div className="flex items-center space-x-3 mb-2">
+            <div className={`text-${level === 1 ? 'xl' : level === 2 ? 'lg' : 'base'} font-${level === 1 ? 'bold' : 'semibold'} text-gray-900`}>
+              {item.id} {item.title}
+            </div>
+            <ChapterStatusBadge status={chapterStatus} />
+            {isLeaf && onToggleComments && (
+              <button
+                onClick={() => onToggleComments(item.id)}
+                className="inline-flex items-center px-2 py-1 text-xs text-gray-500 hover:text-gray-700 hover:bg-gray-100 rounded"
+                title="查看批注"
+              >
+                <ChatBubbleLeftIcon className="w-3 h-3 mr-1" />
+                批注
+              </button>
+            )}
           </div>
-          
+
           {/* 描述 */}
           <div className="text-sm text-gray-600 mb-4">
             {item.description}
@@ -167,7 +199,7 @@ const ContentEdit: React.FC<ContentEditProps> = ({
               ) : (
                 <div className="text-gray-400 italic py-4">
                   <DocumentTextIcon className="inline w-4 h-4 mr-2" />
-                  {progress.generating.has(item.id) ? (
+                  {isGeneratingThis ? (
                     <span className="text-blue-600">正在生成内容...</span>
                   ) : (
                     '内容待生成...'

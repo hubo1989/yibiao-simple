@@ -59,6 +59,17 @@ class ProjectMemberResponse(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class ProjectMemberWithUser(BaseModel):
+    """项目成员响应（包含用户信息）"""
+    user_id: uuid.UUID
+    username: str
+    email: str
+    role: ProjectMemberRole
+    joined_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
 class ProjectResponse(ProjectBase):
     """项目响应"""
     id: uuid.UUID
