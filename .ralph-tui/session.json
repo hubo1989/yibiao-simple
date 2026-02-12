@@ -3,10 +3,10 @@
   "sessionId": "c195db03-f5d5-4903-92dc-e8b68263b4a9",
   "status": "running",
   "startedAt": "2026-02-12T01:20:33.720Z",
-  "updatedAt": "2026-02-12T02:43:58.582Z",
-  "currentIteration": 9,
+  "updatedAt": "2026-02-12T03:14:32.550Z",
+  "currentIteration": 10,
   "maxIterations": 10,
-  "tasksCompleted": 9,
+  "tasksCompleted": 10,
   "isPaused": false,
   "agentPlugin": "claude",
   "trackerState": {
@@ -83,8 +83,8 @@
       {
         "id": "US-012",
         "title": "迁移目录和内容生成接口到项目上下文",
-        "status": "open",
-        "completedInSession": false
+        "status": "completed",
+        "completedInSession": true
       },
       {
         "id": "US-013",
@@ -280,6 +280,16 @@
       "durationMs": 487417,
       "startedAt": "2026-02-12T02:19:33.981Z",
       "endedAt": "2026-02-12T02:27:41.398Z"
+    },
+    {
+      "iteration": 10,
+      "status": "completed",
+      "taskId": "US-012",
+      "taskTitle": "迁移目录和内容生成接口到项目上下文",
+      "taskCompleted": true,
+      "durationMs": 976073,
+      "startedAt": "2026-02-12T02:27:42.505Z",
+      "endedAt": "2026-02-12T02:43:58.578Z"
     }
   ],
   "skippedTaskIds": [],
