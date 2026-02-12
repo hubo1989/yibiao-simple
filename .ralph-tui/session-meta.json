@@ -2,13 +2,13 @@
   "id": "c195db03-f5d5-4903-92dc-e8b68263b4a9",
   "status": "running",
   "startedAt": "2026-02-12T01:20:33.561Z",
-  "updatedAt": "2026-02-12T12:30:00.039Z",
+  "updatedAt": "2026-02-12T12:43:37.226Z",
   "agentPlugin": "claude",
   "trackerPlugin": "json",
   "prdPath": "./tasks/prd.json",
-  "currentIteration": 23,
-  "maxIterations": 24,
+  "currentIteration": 24,
+  "maxIterations": 25,
   "totalTasks": 0,
-  "tasksCompleted": 23,
+  "tasksCompleted": 24,
   "cwd": "/Users/hubo/.superset/worktrees/yibiao-simple/parcel"
 }
