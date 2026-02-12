@@ -3,10 +3,10 @@
   "sessionId": "c195db03-f5d5-4903-92dc-e8b68263b4a9",
   "status": "running",
   "startedAt": "2026-02-12T01:20:33.720Z",
-  "updatedAt": "2026-02-12T09:40:44.874Z",
-  "currentIteration": 19,
+  "updatedAt": "2026-02-12T09:49:09.164Z",
+  "currentIteration": 20,
   "maxIterations": 10,
-  "tasksCompleted": 19,
+  "tasksCompleted": 20,
   "isPaused": false,
   "agentPlugin": "claude",
   "trackerState": {
@@ -143,8 +143,8 @@
       {
         "id": "US-022",
         "title": "前端：项目列表和项目管理页面",
-        "status": "open",
-        "completedInSession": false
+        "status": "completed",
+        "completedInSession": true
       },
       {
         "id": "US-023",
@@ -380,6 +380,16 @@
       "durationMs": 1072699,
       "startedAt": "2026-02-12T09:01:39.145Z",
       "endedAt": "2026-02-12T09:19:31.844Z"
+    },
+    {
+      "iteration": 20,
+      "status": "completed",
+      "taskId": "US-022",
+      "taskTitle": "前端：项目列表和项目管理页面",
+      "taskCompleted": true,
+      "durationMs": 419219,
+      "startedAt": "2026-02-12T09:33:45.649Z",
+      "endedAt": "2026-02-12T09:40:44.868Z"
     }
   ],
   "skippedTaskIds": [],
