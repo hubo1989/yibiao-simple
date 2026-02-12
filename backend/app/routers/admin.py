@@ -1,15 +1,15 @@
 """管理员 API 路由"""
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Annotated
 
 from fastapi import APIRouter, HTTPException, Depends, status, Query
-from sqlalchemy import select, func, or_, and_
+from sqlalchemy import select, func, or_, and_, extract
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import joinedload
 
 from ..db.database import get_db
-from ..models.user import User
+from ..models.user import User, UserRole
 from ..models.project import Project
 from ..models.api_key_config import ApiKeyConfig
 from ..models.operation_log import OperationLog, ActionType
@@ -25,7 +25,16 @@ from ..schemas.operation_log import (
     OperationLogDetail,
     AuditLogQuery,
 )
+from ..schemas.user import (
+    UserResponse,
+    UserListResponse,
+    AdminUserCreate,
+    AdminUserUpdate,
+    ResetPasswordRequest,
+    UsageStatsResponse,
+)
 from ..auth.dependencies import require_admin
+from ..auth.security import get_password_hash
 from ..utils.encryption import encryption_service
 
 router = APIRouter(prefix="/api/admin", tags=["管理员"])
@@ -333,3 +342,260 @@ async def get_action_stats(
         "total": sum(stats.values()),
         "by_action": stats,
     }
+
+
+# ==================== 用户管理接口 ====================
+
+@router.get("/users", response_model=UserListResponse)
+async def list_users(
+    current_user: Annotated[User, Depends(require_admin)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+    username: str | None = Query(None, description="按用户名筛选（模糊匹配）"),
+    email: str | None = Query(None, description="按邮箱筛选（模糊匹配）"),
+    role: UserRole | None = Query(None, description="按角色筛选"),
+    is_active: bool | None = Query(None, description="按启用状态筛选"),
+    page: int = Query(1, ge=1, description="页码（从 1 开始）"),
+    page_size: int = Query(20, ge=1, le=100, description="每页数量"),
+):
+    """
+    获取用户列表（仅管理员）
+
+    支持按用户名、邮箱、角色、启用状态筛选
+    支持分页查询
+    """
+    # 构建基础查询
+    base_query = select(User)
+
+    # 应用筛选条件
+    conditions = []
+
+    if username:
+        conditions.append(User.username.ilike(f"%{username}%"))
+
+    if email:
+        conditions.append(User.email.ilike(f"%{email}%"))
+
+    if role:
+        conditions.append(User.role == role)
+
+    if is_active is not None:
+        conditions.append(User.is_active == is_active)
+
+    if conditions:
+        base_query = base_query.where(and_(*conditions))
+
+    # 查询总数
+    count_query = select(func.count()).select_from(base_query.subquery())
+    total_result = await db.execute(count_query)
+    total = total_result.scalar() or 0
+
+    # 分页查询
+    offset = (page - 1) * page_size
+    query = base_query.order_by(User.created_at.desc()).offset(offset).limit(page_size)
+
+    result = await db.execute(query)
+    users = result.scalars().all()
+
+    return UserListResponse(
+        items=[UserResponse.model_validate(user) for user in users],
+        total=total,
+        page=page,
+        page_size=page_size,
+    )
+
+
+@router.post("/users", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
+async def create_user(
+    data: AdminUserCreate,
+    current_user: Annotated[User, Depends(require_admin)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """
+    创建用户（仅管理员）
+
+    管理员可以创建新用户并指定角色和初始密码
+    """
+    # 检查用户名是否已存在
+    result = await db.execute(select(User).where(User.username == data.username))
+    if result.scalar_one_or_none():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="用户名已存在",
+        )
+
+    # 检查邮箱是否已存在
+    result = await db.execute(select(User).where(User.email == data.email))
+    if result.scalar_one_or_none():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="邮箱已存在",
+        )
+
+    # 创建用户
+    new_user = User(
+        username=data.username,
+        email=data.email,
+        hashed_password=get_password_hash(data.password),
+        role=data.role,
+        is_active=data.is_active,
+    )
+
+    db.add(new_user)
+    await db.flush()
+    await db.refresh(new_user)
+
+    return UserResponse.model_validate(new_user)
+
+
+@router.put("/users/{user_id}", response_model=UserResponse)
+async def update_user(
+    user_id: uuid.UUID,
+    data: AdminUserUpdate,
+    current_user: Annotated[User, Depends(require_admin)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """
+    更新用户信息（仅管理员）
+
+    管理员可以修改用户的用户名、邮箱、角色和启用状态
+    """
+    # 查找用户
+    result = await db.execute(select(User).where(User.id == user_id))
+    user = result.scalar_one_or_none()
+
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="用户不存在",
+        )
+
+    # 防止管理员禁用自己
+    if user.id == current_user.id and data.is_active is False:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="不能禁用自己的账户",
+        )
+
+    # 检查用户名是否与其他用户冲突
+    if data.username and data.username != user.username:
+        result = await db.execute(select(User).where(User.username == data.username))
+        if result.scalar_one_or_none():
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="用户名已存在",
+            )
+        user.username = data.username
+
+    # 检查邮箱是否与其他用户冲突
+    if data.email and data.email != user.email:
+        result = await db.execute(select(User).where(User.email == data.email))
+        if result.scalar_one_or_none():
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="邮箱已存在",
+            )
+        user.email = data.email
+
+    # 更新角色
+    if data.role:
+        user.role = data.role
+
+    # 更新启用状态
+    if data.is_active is not None:
+        user.is_active = data.is_active
+
+    await db.flush()
+    await db.refresh(user)
+
+    return UserResponse.model_validate(user)
+
+
+@router.post("/users/{user_id}/reset-password", response_model=UserResponse)
+async def reset_user_password(
+    user_id: uuid.UUID,
+    data: ResetPasswordRequest,
+    current_user: Annotated[User, Depends(require_admin)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """
+    重置用户密码（仅管理员）
+
+    管理员可以为用户设置新密码
+    """
+    # 查找用户
+    result = await db.execute(select(User).where(User.id == user_id))
+    user = result.scalar_one_or_none()
+
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="用户不存在",
+        )
+
+    # 更新密码
+    user.hashed_password = get_password_hash(data.new_password)
+
+    await db.flush()
+    await db.refresh(user)
+
+    return UserResponse.model_validate(user)
+
+
+# ==================== 使用统计接口 ====================
+
+@router.get("/stats", response_model=UsageStatsResponse)
+async def get_usage_stats(
+    current_user: Annotated[User, Depends(require_admin)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """
+    获取使用统计（仅管理员）
+
+    返回总项目数、总用户数、活跃用户数、本月生成次数和 Token 消耗估算
+    """
+    # 总项目数
+    projects_result = await db.execute(select(func.count(Project.id)))
+    total_projects = projects_result.scalar() or 0
+
+    # 总用户数
+    users_result = await db.execute(select(func.count(User.id)))
+    total_users = users_result.scalar() or 0
+
+    # 活跃用户数（is_active = True）
+    active_users_result = await db.execute(
+        select(func.count(User.id)).where(User.is_active == True)
+    )
+    active_users = active_users_result.scalar() or 0
+
+    # 计算本月开始时间
+    now = datetime.now(timezone.utc)
+    month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+
+    # 本月生成次数（统计所有内容生成相关的操作）
+    generation_actions = [
+        ActionType.AI_GENERATE,
+        ActionType.AI_PROOFREAD,
+        ActionType.CONSISTENCY_CHECK,
+    ]
+
+    monthly_generations_result = await db.execute(
+        select(func.count(OperationLog.id)).where(
+            and_(
+                OperationLog.created_at >= month_start,
+                OperationLog.action.in_(generation_actions),
+            )
+        )
+    )
+    monthly_generations = monthly_generations_result.scalar() or 0
+
+    # Token 消耗估算（基于生成次数 × 估算平均值 2000 tokens）
+    # 这是一个简化估算，实际应该记录每次 API 调用的 token 使用量
+    estimated_tokens = monthly_generations * 2000
+
+    return UsageStatsResponse(
+        total_projects=total_projects,
+        total_users=total_users,
+        active_users=active_users,
+        monthly_generations=monthly_generations,
+        estimated_tokens=estimated_tokens,
+    )
