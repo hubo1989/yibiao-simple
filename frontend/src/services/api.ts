@@ -1,23 +1,123 @@
 /**
  * API服务
  */
-import axios from 'axios';
+import axios, { AxiosError } from 'axios';
+import type { User, LoginRequest, RegisterRequest, Token } from '../types/auth';
 
 const API_BASE_URL = process.env.REACT_APP_API_URL || 'http://localhost:8000';
 
+const TOKEN_KEY = 'auth_token';
+const REFRESH_TOKEN_KEY = 'refresh_token';
+
 const api = axios.create({
   baseURL: API_BASE_URL,
-  timeout: 120000, // 调整为60秒
+  timeout: 120000,
 });
+
+// Token 管理函数
+export function getStoredToken(): string | null {
+  return localStorage.getItem(TOKEN_KEY);
+}
+
+export function getStoredRefreshToken(): string | null {
+  return localStorage.getItem(REFRESH_TOKEN_KEY);
+}
+
+export function setStoredTokens(accessToken: string, refreshToken: string): void {
+  localStorage.setItem(TOKEN_KEY, accessToken);
+  localStorage.setItem(REFRESH_TOKEN_KEY, refreshToken);
+}
+
+export function clearStoredTokens(): void {
+  localStorage.removeItem(TOKEN_KEY);
+  localStorage.removeItem(REFRESH_TOKEN_KEY);
+}
+
+export function setAuthToken(token: string | null): void {
+  if (token) {
+    api.defaults.headers.common['Authorization'] = `Bearer ${token}`;
+  } else {
+    delete api.defaults.headers.common['Authorization'];
+  }
+}
+
+export function clearAuthToken(): void {
+  delete api.defaults.headers.common['Authorization'];
+}
+
+// 请求拦截器：自动附加 Authorization header
+api.interceptors.request.use(
+  (config) => {
+    const token = getStoredToken();
+    if (token && !config.headers['Authorization']) {
+      config.headers['Authorization'] = `Bearer ${token}`;
+    }
+    return config;
+  },
+  (error) => Promise.reject(error)
+);
 
 // 响应拦截器
 api.interceptors.response.use(
   (response) => response,
-  (error) => {
+  async (error: AxiosError) => {
+    const originalRequest = error.config as any;
+
+    // 如果是 401 错误且不是刷新 token 请求，尝试刷新 token
+    if (error.response?.status === 401 && !originalRequest._retry) {
+      originalRequest._retry = true;
+
+      const refreshToken = getStoredRefreshToken();
+      if (refreshToken) {
+        try {
+          const response = await axios.post<Token>(`${API_BASE_URL}/api/auth/refresh`, {
+            refresh_token: refreshToken,
+          });
+
+          const { access_token, refresh_token } = response.data;
+          setStoredTokens(access_token, refresh_token);
+          setAuthToken(access_token);
+
+          // 重试原始请求
+          originalRequest.headers['Authorization'] = `Bearer ${access_token}`;
+          return api(originalRequest);
+        } catch {
+          // 刷新 token 失败，清除认证状态
+          clearStoredTokens();
+          clearAuthToken();
+          // 跳转到登录页
+          if (window.location.pathname !== '/login') {
+            window.location.href = '/login';
+          }
+        }
+      }
+    }
+
     console.error('API请求错误:', error);
     return Promise.reject(error);
   }
 );
+
+// 认证相关 API
+export const authApi = {
+  // 用户登录
+  login: (credentials: LoginRequest) =>
+    api.post<Token>('/api/auth/login', credentials),
+
+  // 用户注册
+  register: (data: RegisterRequest) =>
+    api.post<Token>('/api/auth/register', data),
+
+  // 获取当前用户信息
+  getMe: async (): Promise<User> => {
+    const response = await api.get<User>('/api/auth/me');
+    return response.data;
+  },
+
+  // 刷新令牌
+  refresh: (refreshToken: string) =>
+    api.post<Token>('/api/auth/refresh', { refresh_token: refreshToken }),
+};
 
 export interface ConfigData {
   api_key: string;
