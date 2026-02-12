@@ -10,6 +10,7 @@ from app.config import settings
 from app.db.base import Base
 from app.models.user import User  # noqa: F401 — 注册模型到 Base.metadata
 from app.models.project import Project, project_members  # noqa: F401
+from app.models.chapter import Chapter  # noqa: F401
 
 # Alembic Config 对象
 config = context.config
