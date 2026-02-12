@@ -4,6 +4,13 @@
 import axios, { AxiosError } from 'axios';
 import type { User, LoginRequest, RegisterRequest, Token } from '../types/auth';
 import type { ProjectSummary, Project, ProjectCreate, ProjectProgress } from '../types/project';
+import type {
+  VersionSummary,
+  VersionResponse,
+  VersionList,
+  VersionDiffResponse,
+  VersionRollbackResponse,
+} from '../types/version';
 
 const API_BASE_URL = process.env.REACT_APP_API_URL || 'http://localhost:8000';
 
@@ -299,6 +306,54 @@ export const expandApi = {
       },
       timeout: 300000, // 文件上传专用超时设置：5分钟
     });
+  },
+};
+
+// 版本历史相关API
+export const versionApi = {
+  // 获取版本列表
+  list: async (projectId: string, params?: {
+    chapter_id?: string;
+    change_type?: string;
+    skip?: number;
+    limit?: number;
+  }): Promise<VersionList> => {
+    const response = await api.get<VersionList>(`/api/projects/${projectId}/versions`, { params });
+    return response.data;
+  },
+
+  // 获取版本详情
+  get: async (projectId: string, versionId: string): Promise<VersionResponse> => {
+    const response = await api.get<VersionResponse>(`/api/projects/${projectId}/versions/${versionId}`);
+    return response.data;
+  },
+
+  // 对比两个版本
+  diff: async (projectId: string, v1: string, v2: string): Promise<VersionDiffResponse> => {
+    const response = await api.get<VersionDiffResponse>(`/api/projects/${projectId}/versions/diff`, {
+      params: { v1, v2 },
+    });
+    return response.data;
+  },
+
+  // 回滚到指定版本
+  rollback: async (projectId: string, versionId: string, createSnapshot = true): Promise<VersionRollbackResponse> => {
+    const response = await api.post<VersionRollbackResponse>(
+      `/api/projects/${projectId}/versions/${versionId}/rollback`,
+      null,
+      { params: { create_snapshot: createSnapshot } }
+    );
+    return response.data;
+  },
+
+  // 手动创建快照
+  createSnapshot: async (projectId: string, changeSummary?: string): Promise<VersionResponse> => {
+    const response = await api.post<VersionResponse>(
+      `/api/projects/${projectId}/versions`,
+      null,
+      { params: { change_summary: changeSummary } }
+    );
+    return response.data;
   },
 };
 

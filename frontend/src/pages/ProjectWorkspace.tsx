@@ -10,6 +10,7 @@ import { useAppState } from '../hooks/useAppState';
 import type { Project, ProjectProgress } from '../types/project';
 import ConfigPanel from '../components/ConfigPanel';
 import StepBar from '../components/StepBar';
+import VersionHistory from '../components/VersionHistory';
 import DocumentAnalysis from './DocumentAnalysis';
 import OutlineEdit from './OutlineEdit';
 import ContentEdit from './ContentEdit';
@@ -22,6 +23,7 @@ const ProjectWorkspace: React.FC = () => {
   const [progress, setProgress] = useState<ProjectProgress | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [showVersionHistory, setShowVersionHistory] = useState(false);
 
   const {
     state,
@@ -171,6 +173,16 @@ const ProjectWorkspace: React.FC = () => {
             </div>
             <StepBar steps={steps} currentStep={state.currentStep} />
             <div className="flex items-center space-x-4">
+              <button
+                onClick={() => setShowVersionHistory(true)}
+                className="inline-flex items-center px-3 py-1.5 text-sm font-medium text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded-md"
+                title="版本历史"
+              >
+                <svg className="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                </svg>
+                版本历史
+              </button>
               <span className="text-sm text-gray-600">
                 {user?.username} ({user?.role === 'admin' ? '管理员' : user?.role === 'reviewer' ? '审核员' : '编辑'})
               </span>
@@ -220,6 +232,15 @@ const ProjectWorkspace: React.FC = () => {
           </div>
         </div>
       </div>
+
+      {/* 版本历史侧边栏 */}
+      {projectId && (
+        <VersionHistory
+          projectId={projectId}
+          isOpen={showVersionHistory}
+          onClose={() => setShowVersionHistory(false)}
+        />
+      )}
     </div>
   );
 };
