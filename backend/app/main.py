@@ -12,7 +12,7 @@ import starlette.middleware.cors
 
 from .config import settings
 from .db.database import engine
-from .routers import config, document, outline, content, search, expand, auth, admin
+from .routers import config, document, outline, content, search, expand, auth, admin, projects
 
 
 @asynccontextmanager
@@ -46,6 +46,7 @@ app.add_middleware(
 # 注册路由
 app.include_router(auth.router)
 app.include_router(admin.router)
+app.include_router(projects.router)
 app.include_router(config.router)
 app.include_router(document.router)
 app.include_router(outline.router)
