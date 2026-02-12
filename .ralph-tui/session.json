@@ -3,10 +3,10 @@
   "sessionId": "c195db03-f5d5-4903-92dc-e8b68263b4a9",
   "status": "running",
   "startedAt": "2026-02-12T01:20:33.720Z",
-  "updatedAt": "2026-02-12T02:19:32.914Z",
-  "currentIteration": 7,
+  "updatedAt": "2026-02-12T02:27:41.400Z",
+  "currentIteration": 8,
   "maxIterations": 10,
-  "tasksCompleted": 7,
+  "tasksCompleted": 8,
   "isPaused": false,
   "agentPlugin": "claude",
   "trackerState": {
@@ -71,8 +71,8 @@
       {
         "id": "US-010",
         "title": "实现项目 CRUD API 和成员管理",
-        "status": "open",
-        "completedInSession": false
+        "status": "completed",
+        "completedInSession": true
       },
       {
         "id": "US-011",
@@ -260,6 +260,16 @@
       "durationMs": 717778,
       "startedAt": "2026-02-12T02:03:45.244Z",
       "endedAt": "2026-02-12T02:15:43.022Z"
+    },
+    {
+      "iteration": 8,
+      "status": "completed",
+      "taskId": "US-010",
+      "taskTitle": "实现项目 CRUD API 和成员管理",
+      "taskCompleted": true,
+      "durationMs": 228817,
+      "startedAt": "2026-02-12T02:15:44.095Z",
+      "endedAt": "2026-02-12T02:19:32.912Z"
     }
   ],
   "skippedTaskIds": [],
