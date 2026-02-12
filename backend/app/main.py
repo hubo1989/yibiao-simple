@@ -12,7 +12,7 @@ import starlette.middleware.cors
 
 from .config import settings
 from .db.database import engine
-from .routers import config, document, outline, content, search, expand, auth, admin, projects, versions, chapters, comments
+from .routers import config, document, outline, content, search, expand, auth, admin, projects, versions, chapters, comments, templates
 from .middleware import AuditMiddleware
 
 
@@ -51,6 +51,7 @@ app.add_middleware(AuditMiddleware)
 app.include_router(auth.router)
 app.include_router(admin.router)
 app.include_router(projects.router)
+app.include_router(templates.router)
 app.include_router(versions.router)
 app.include_router(chapters.router)
 app.include_router(comments.router)

@@ -6,6 +6,14 @@ from .api_key_config import (
     ApiKeyConfigResponse,
     ApiKeyConfigListResponse,
 )
+from .template import (
+    TemplateBase,
+    TemplateCreate,
+    TemplateUpdate,
+    TemplateResponse,
+    TemplateSummary,
+    ProjectFromTemplateCreate,
+)
 
 __all__ = [
     "UserBase",
@@ -17,4 +25,10 @@ __all__ = [
     "ApiKeyConfigUpdate",
     "ApiKeyConfigResponse",
     "ApiKeyConfigListResponse",
+    "TemplateBase",
+    "TemplateCreate",
+    "TemplateUpdate",
+    "TemplateResponse",
+    "TemplateSummary",
+    "ProjectFromTemplateCreate",
 ]
