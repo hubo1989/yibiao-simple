@@ -4,32 +4,88 @@ from typing import Dict, Any, List, AsyncGenerator
 import json
 import asyncio
 
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from ..utils.outline_util import get_random_indexes, calculate_nodes_distribution, generate_one_outline_json_by_level1
 from ..utils.json_util import check_json
 from ..utils.config_manager import config_manager
+from ..utils.encryption import encryption_service
+from ..models.api_key_config import ApiKeyConfig
+from ..db.database import async_session_factory
 
 
 class OpenAIService:
     """OpenAI服务类"""
-    
-    def __init__(self):
-        """初始化OpenAI服务，从config_manager读取配置"""
-        # 从配置管理器加载配置
-        config = config_manager.load_config()
-        self.api_key = config.get('api_key', '')
-        self.base_url = config.get('base_url', '')
-        self.model_name = config.get('model_name', 'gpt-3.5-turbo')
 
-        # 初始化OpenAI客户端 - 使用异步客户端
-        self.client = openai.AsyncOpenAI(
-            api_key=self.api_key,
-            base_url=self.base_url if self.base_url else None
+    def __init__(self, db: AsyncSession | None = None):
+        """
+        初始化OpenAI服务
+
+        Args:
+            db: 可选的数据库会话。如果提供，将从数据库读取默认配置；
+                否则使用同步方式从数据库获取配置
+        """
+        self._db = db
+        self.api_key = ''
+        self.base_url = ''
+        self.model_name = 'gpt-3.5-turbo'
+        self._client = None
+
+    async def _load_config_from_db(self) -> bool:
+        """从数据库加载默认 API Key 配置"""
+        if self._db is None:
+            # 没有传入 db 会话，创建一个临时的
+            async with async_session_factory() as session:
+                return await self._fetch_default_config(session)
+        return await self._fetch_default_config(self._db)
+
+    async def _fetch_default_config(self, db: AsyncSession) -> bool:
+        """从数据库获取默认配置"""
+        result = await db.execute(
+            select(ApiKeyConfig).where(ApiKeyConfig.is_default == True).limit(1)
         )
+        config = result.scalar_one_or_none()
+
+        if config:
+            self.api_key = encryption_service.decrypt(config.api_key_encrypted)
+            self.base_url = config.base_url or ''
+            self.model_name = config.model_name
+            return True
+        return False
+
+    async def _ensure_initialized(self):
+        """确保服务已初始化"""
+        if self._client is None:
+            # 先尝试从数据库加载配置
+            loaded = await self._load_config_from_db()
+
+            # 如果数据库中没有配置，回退到本地配置文件
+            if not loaded:
+                config = config_manager.load_config()
+                self.api_key = config.get('api_key', '')
+                self.base_url = config.get('base_url', '')
+                self.model_name = config.get('model_name', 'gpt-3.5-turbo')
+
+            # 初始化 OpenAI 客户端
+            self._client = openai.AsyncOpenAI(
+                api_key=self.api_key,
+                base_url=self.base_url if self.base_url else None
+            )
+
+    @property
+    def client(self):
+        """获取 OpenAI 客户端（向后兼容）"""
+        if self._client is None:
+            # 同步初始化（仅在无法使用 async 的情况下）
+            raise RuntimeError("OpenAIService 需要先调用 async 方法进行初始化")
+        return self._client
     
     async def get_available_models(self) -> List[str]:
         """获取可用的模型列表"""
+        await self._ensure_initialized()
         try:
-            models = await self.client.models.list()
+            models = await self._client.models.list()
             chat_models = []
             for model in models.data:
                 model_id = model.id.lower()
@@ -40,14 +96,15 @@ class OpenAIService:
             raise Exception(f"获取模型列表失败: {str(e)}")
     
     async def stream_chat_completion(
-        self, 
-        messages: list, 
+        self,
+        messages: list,
         temperature: float = 0.7,
         response_format: dict = None
     ) -> AsyncGenerator[str, None]:
         """流式聊天完成请求 - 真正的异步实现"""
+        await self._ensure_initialized()
         try:
-            stream = await self.client.chat.completions.create(
+            stream = await self._client.chat.completions.create(
                 model=self.model_name,
                 messages=messages,
                 temperature=temperature,
