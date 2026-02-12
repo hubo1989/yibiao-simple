@@ -515,14 +515,15 @@
         "cd frontend && npx tsc --noEmit passes"
       ],
       "priority": 8,
-      "passes": false,
+      "passes": true,
       "notes": "",
       "dependsOn": [
         "US-022",
         "US-014",
         "US-015",
         "US-016"
-      ]
+      ],
+      "completionNotes": "Completed by agent"
     },
     {
       "id": "US-025",
@@ -633,6 +634,6 @@
     }
   ],
   "metadata": {
-    "updatedAt": "2026-02-12T09:49:09.163Z"
+    "updatedAt": "2026-02-12T10:16:06.339Z"
   }
 }

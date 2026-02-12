@@ -3,10 +3,10 @@
   "sessionId": "c195db03-f5d5-4903-92dc-e8b68263b4a9",
   "status": "running",
   "startedAt": "2026-02-12T01:20:33.720Z",
-  "updatedAt": "2026-02-12T09:49:09.164Z",
-  "currentIteration": 20,
+  "updatedAt": "2026-02-12T10:16:06.341Z",
+  "currentIteration": 21,
   "maxIterations": 10,
-  "tasksCompleted": 20,
+  "tasksCompleted": 21,
   "isPaused": false,
   "agentPlugin": "claude",
   "trackerState": {
@@ -149,8 +149,8 @@
       {
         "id": "US-023",
         "title": "前端：版本历史和 Diff 对比页面",
-        "status": "open",
-        "completedInSession": false
+        "status": "completed",
+        "completedInSession": true
       },
       {
         "id": "US-024",
@@ -390,6 +390,16 @@
       "durationMs": 419219,
       "startedAt": "2026-02-12T09:33:45.649Z",
       "endedAt": "2026-02-12T09:40:44.868Z"
+    },
+    {
+      "iteration": 21,
+      "status": "completed",
+      "taskId": "US-023",
+      "taskTitle": "前端：版本历史和 Diff 对比页面",
+      "taskCompleted": true,
+      "durationMs": 465193,
+      "startedAt": "2026-02-12T09:41:23.969Z",
+      "endedAt": "2026-02-12T09:49:09.162Z"
     }
   ],
   "skippedTaskIds": [],
