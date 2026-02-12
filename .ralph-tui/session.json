@@ -3,10 +3,10 @@
   "sessionId": "c195db03-f5d5-4903-92dc-e8b68263b4a9",
   "status": "running",
   "startedAt": "2026-02-12T01:20:33.720Z",
-  "updatedAt": "2026-02-12T01:54:02.493Z",
-  "currentIteration": 4,
+  "updatedAt": "2026-02-12T02:03:44.176Z",
+  "currentIteration": 5,
   "maxIterations": 10,
-  "tasksCompleted": 4,
+  "tasksCompleted": 5,
   "isPaused": false,
   "agentPlugin": "claude",
   "trackerState": {
@@ -53,8 +53,8 @@
       {
         "id": "US-007",
         "title": "实现 JWT 认证：注册、登录、Token 签发与验证",
-        "status": "open",
-        "completedInSession": false
+        "status": "completed",
+        "completedInSession": true
       },
       {
         "id": "US-008",
@@ -230,6 +230,16 @@
       "durationMs": 305247,
       "startedAt": "2026-02-12T01:38:21.002Z",
       "endedAt": "2026-02-12T01:43:26.249Z"
+    },
+    {
+      "iteration": 5,
+      "status": "completed",
+      "taskId": "US-007",
+      "taskTitle": "实现 JWT 认证：注册、登录、Token 签发与验证",
+      "taskCompleted": true,
+      "durationMs": 635164,
+      "startedAt": "2026-02-12T01:43:27.326Z",
+      "endedAt": "2026-02-12T01:54:02.490Z"
     }
   ],
   "skippedTaskIds": [],
