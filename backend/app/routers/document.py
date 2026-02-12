@@ -1,11 +1,24 @@
 """文档处理相关API路由"""
+import uuid
 from typing import Annotated
 
-from fastapi import APIRouter, UploadFile, File, HTTPException, Depends
+from fastapi import APIRouter, UploadFile, File, HTTPException, Depends, Form, status
 from fastapi.responses import StreamingResponse
+from pydantic import BaseModel, Field
+from sqlalchemy import select, and_, exists
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from ..models.schemas import FileUploadResponse, AnalysisRequest, AnalysisType, WordExportRequest
+from ..models.schemas import (
+    FileUploadResponse,
+    AnalysisRequest,
+    AnalysisType,
+    WordExportRequest,
+    ProjectFileUploadResponse,
+    ProjectAnalysisRequest,
+)
 from ..models.user import User
+from ..models.project import Project, project_members
+from ..db.database import get_db
 from ..services.file_service import FileService
 from ..services.openai_service import OpenAIService
 from ..utils.config_manager import config_manager
@@ -459,3 +472,266 @@ async def export_word(
         print(logger_msg)
         traceback.print_exc()
         raise HTTPException(status_code=500, detail="导出Word失败，请稍后重试")
+
+
+# ============ 项目上下文版本的接口 ============
+
+async def _verify_project_member(
+    project_id: uuid.UUID,
+    user_id: uuid.UUID,
+    db: AsyncSession,
+) -> Project:
+    """验证用户是项目成员并返回项目"""
+    # 检查用户是否是项目成员
+    member_exists = await db.execute(
+        select(exists().where(
+            and_(
+                project_members.c.project_id == project_id,
+                project_members.c.user_id == user_id,
+            )
+        ))
+    )
+    if not member_exists.scalar():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="项目不存在或您没有访问权限",
+        )
+
+    # 获取项目
+    result = await db.execute(select(Project).where(Project.id == project_id))
+    project = result.scalar_one_or_none()
+    if not project:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="项目不存在",
+        )
+    return project
+
+
+@router.post("/upload-to-project", response_model=ProjectFileUploadResponse)
+async def upload_file_to_project(
+    project_id: Annotated[str, Form(...)],
+    file: UploadFile = File(...),
+    current_user: Annotated[User, Depends(require_editor)] = None,
+    db: Annotated[AsyncSession, Depends(get_db)] = None,
+):
+    """上传文档文件到指定项目，提取文本内容并保存到项目记录"""
+    try:
+        # 验证 project_id 格式
+        try:
+            project_uuid = uuid.UUID(project_id)
+        except ValueError:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="无效的项目ID格式",
+            )
+
+        # 验证用户是项目成员
+        project = await _verify_project_member(project_uuid, current_user.id, db)
+
+        # 检查文件类型（Content-Type + magic bytes 双重校验）
+        allowed_types = [
+            "application/pdf",
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        ]
+
+        if file.content_type not in allowed_types:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="不支持的文件类型，请上传PDF或Word文档",
+            )
+
+        # Magic bytes 校验：防止伪造 Content-Type
+        header = await file.read(8)
+        await file.seek(0)
+        is_pdf = header[:5] == b'%PDF-'
+        is_docx = header[:4] == b'PK\x03\x04'  # docx 本质是 ZIP
+        if not (is_pdf or is_docx):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="文件内容与类型不匹配，请上传有效的PDF或Word文档",
+            )
+
+        # 处理文件并提取文本
+        file_content = await FileService.process_uploaded_file(file)
+
+        # 保存文件内容到项目记录
+        project.file_content = file_content
+        await db.flush()
+        await db.refresh(project)
+
+        return ProjectFileUploadResponse(
+            success=True,
+            message=f"文件 {file.filename} 已上传并保存到项目",
+            project_id=str(project.id),
+            file_content_length=len(file_content),
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"文件处理失败: {str(e)}",
+        )
+
+
+@router.post("/analyze-project-stream")
+async def analyze_project_document_stream(
+    request: ProjectAnalysisRequest,
+    current_user: Annotated[User, Depends(require_editor)] = None,
+    db: Annotated[AsyncSession, Depends(get_db)] = None,
+):
+    """流式分析项目文档内容，并将分析结果保存到项目记录"""
+    try:
+        # 验证 project_id 格式
+        try:
+            project_uuid = uuid.UUID(request.project_id)
+        except ValueError:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="无效的项目ID格式",
+            )
+
+        # 验证用户是项目成员并获取项目
+        project = await _verify_project_member(project_uuid, current_user.id, db)
+
+        # 检查项目是否有文件内容
+        if not project.file_content:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="项目尚未上传文档，请先上传招标文件",
+            )
+
+        # 加载配置
+        config = config_manager.load_config()
+
+        if not config.get('api_key'):
+            raise HTTPException(status_code=400, detail="请先配置OpenAI API密钥")
+
+        # 创建OpenAI服务实例
+        openai_service = OpenAIService()
+
+        # 用于收集分析结果的变量
+        collected_result = []
+
+        async def generate():
+            nonlocal collected_result
+
+            # 构建分析提示词
+            if request.analysis_type == AnalysisType.OVERVIEW:
+                system_prompt = """你是一个专业的标书撰写专家。请分析用户发来的招标文件，提取并总结项目概述信息。
+
+请重点关注以下方面：
+1. 项目名称和基本信息
+2. 项目背景和目的
+3. 项目规模和预算
+4. 项目时间安排
+5. 项目要实施的具体内容
+6. 主要技术特点
+7. 其他关键要求
+
+工作要求：
+1. 保持提取信息的全面性和准确性，尽量使用原文内容，不要自己编写
+2. 只关注与项目实施有关的内容，不提取商务信息
+3. 直接返回整理好的项目概述，除此之外不返回任何其他内容
+"""
+            else:  # requirements
+                system_prompt = """你是一名专业的招标文件分析师，擅长从复杂的招标文档中高效提取"技术评分项"相关内容。请严格按照以下步骤和规则执行任务：
+### 1. 目标定位
+- 重点识别文档中与"技术评分"、"评标方法"、"评分标准"、"技术参数"、"技术要求"、"技术方案"、"技术部分"或"评审要素"相关的章节（如"第X章 评标方法"或"附件X：技术评分表"）。
+- 一定不要提取商务、价格、资质等于技术类评分项无关的条目。
+### 2. 提取内容要求
+对每一项技术评分项，按以下结构化格式输出（若信息缺失，标注"未提及"），如果评分项不够明确，你需要根据上下文分析并也整理成如下格式：
+【评分项名称】：<原文描述，保留专业术语>
+【权重/分值】：<具体分值或占比，如"30分"或"40%">
+【评分标准】：<详细规则，如"≥95%得满分，每低1%扣0.5分">
+【数据来源】：<文档中的位置，如"第5.2.3条"或"附件3-表2">
+
+### 3. 处理规则
+- **模糊表述**：有些招标文件格式不是很标准，没有明确的"技术评分表"，但一定都会有"技术评分"相关内容，请根据上下文判断评分项。
+- **表格处理**：若评分项以表格形式呈现，按行提取，并标注"[表格数据]"。
+- **分层结构**：若存在二级评分项（如"技术方案→子项1、子项2"），用缩进或编号体现层级关系。
+- **单位统一**：将所有分值统一为"分"或"%"，并注明原文单位（如原文为"20点"则标注"[原文：20点]"）。
+
+### 4. 输出示例
+【评分项名称】：系统可用性
+【权重/分值】：25分
+【评分标准】：年平均故障时间≤1小时得满分；每增加1小时扣2分，最高扣10分。
+【数据来源】：附件4-技术评分细则（第3页）
+
+【评分项名称】：响应时间
+【权重/分值】：15分 [原文：15%]
+【评分标准】：≤50ms得满分；每增加10ms扣1分。
+【数据来源】：第6.1.2条
+
+### 5. 验证步骤
+提取完成后，执行以下自检：
+- [ ] 所有技术评分项是否覆盖（无遗漏）？
+- [ ] 是否错误提取商务、价格、资质等于技术类评分项无关的条目？
+- [ ] 权重总和是否与文档声明的技术分总分一致（如"技术部分共60分"）？
+
+直接返回提取结果，除此之外不输出任何其他内容
+"""
+
+            analysis_type_cn = "项目概述" if request.analysis_type == AnalysisType.OVERVIEW else "技术评分要求"
+            user_prompt = f"请分析以下招标文件内容，提取{analysis_type_cn}信息：\n\n{project.file_content}"
+
+            messages = [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt}
+            ]
+
+            # 流式返回分析结果，同时收集完整结果
+            async for chunk in openai_service.stream_chat_completion(messages, temperature=0.3):
+                collected_result.append(chunk)
+                yield f"data: {json.dumps({'chunk': chunk}, ensure_ascii=False)}\n\n"
+
+            # 发送结束信号
+            yield "data: [DONE]\n\n"
+
+            # 将分析结果保存到项目记录
+            full_result = "".join(collected_result)
+            if request.analysis_type == AnalysisType.OVERVIEW:
+                project.project_overview = full_result
+            else:
+                project.tech_requirements = full_result
+            await db.flush()
+
+        return sse_response(generate())
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"文档分析失败: {str(e)}",
+        )
+
+
+class ProjectAnalysisResult(BaseModel):
+    """项目分析结果响应"""
+    project_id: str
+    file_content: str | None = None
+    project_overview: str | None = None
+    tech_requirements: str | None = None
+    file_content_length: int = Field(..., description="文件内容字符数")
+
+
+@router.get("/project-analysis/{project_id}", response_model=ProjectAnalysisResult)
+async def get_project_analysis(
+    project_id: uuid.UUID,
+    current_user: Annotated[User, Depends(require_editor)] = None,
+    db: Annotated[AsyncSession, Depends(get_db)] = None,
+):
+    """获取项目的文档分析结果"""
+    # 验证用户是项目成员并获取项目
+    project = await _verify_project_member(project_id, current_user.id, db)
+
+    return ProjectAnalysisResult(
+        project_id=str(project.id),
+        file_content=project.file_content,
+        project_overview=project.project_overview,
+        tech_requirements=project.tech_requirements,
+        file_content_length=len(project.file_content) if project.file_content else 0,
+    )

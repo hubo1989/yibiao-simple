@@ -97,3 +97,19 @@ class WordExportRequest(BaseModel):
     project_name: Optional[str] = Field(None, description="项目名称")
     project_overview: Optional[str] = Field(None, description="项目概述")
     outline: List[OutlineItem] = Field(..., description="目录结构，包含内容")
+
+
+# ============ 项目上下文相关 Schema ============
+
+class ProjectFileUploadResponse(BaseModel):
+    """项目文件上传响应"""
+    success: bool
+    message: str
+    project_id: str
+    file_content_length: int = Field(..., description="文件内容字符数")
+
+
+class ProjectAnalysisRequest(BaseModel):
+    """基于项目的文档分析请求"""
+    project_id: str = Field(..., description="项目ID")
+    analysis_type: AnalysisType = Field(..., description="分析类型")
