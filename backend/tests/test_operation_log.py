@@ -216,9 +216,11 @@ class TestOperationLogSchemas:
             OperationLogSummary.model_validate(MockLog1()),
             OperationLogSummary.model_validate(MockLog2()),
         ]
-        log_list = OperationLogList(items=items, total=2)
+        log_list = OperationLogList(items=items, total=2, page=1, page_size=20)
         assert len(log_list.items) == 2
         assert log_list.total == 2
+        assert log_list.page == 1
+        assert log_list.page_size == 20
 
     def test_operation_log_filter(self):
         """测试筛选条件 schema"""

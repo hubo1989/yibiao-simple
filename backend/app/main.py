@@ -13,6 +13,7 @@ import starlette.middleware.cors
 from .config import settings
 from .db.database import engine
 from .routers import config, document, outline, content, search, expand, auth, admin, projects, versions, chapters, comments
+from .middleware import AuditMiddleware
 
 
 @asynccontextmanager
@@ -42,6 +43,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# 添加审计日志中间件
+app.add_middleware(AuditMiddleware)
 
 # 注册路由
 app.include_router(auth.router)
