@@ -18,6 +18,8 @@ import type {
   ChapterStatus,
 } from '../types/chapter';
 import type { Comment, CommentListResponse, CommentCreateRequest } from '../types/comment';
+import type { ProofreadResult } from '../types/proofread';
+import type { ConsistencyCheckResponse } from '../types/consistency';
 
 const API_BASE_URL = process.env.REACT_APP_API_URL || 'http://localhost:8000';
 
@@ -433,6 +435,32 @@ export const commentApi = {
   // 删除批注
   delete: async (commentId: string): Promise<void> => {
     await api.delete(`/api/comments/${commentId}`);
+  },
+};
+
+// 校对相关 API
+export const proofreadApi = {
+  // 触发章节校对（流式返回）
+  proofreadChapter: (chapterId: string) => {
+    const token = getStoredToken();
+    return fetch(`${API_BASE_URL}/api/chapters/${chapterId}/proofread`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
+      },
+    });
+  },
+};
+
+// 一致性检查相关 API
+export const consistencyApi = {
+  // 检查项目跨章节一致性
+  checkConsistency: async (projectId: string): Promise<ConsistencyCheckResponse> => {
+    const response = await api.post<ConsistencyCheckResponse>(
+      `/api/projects/${projectId}/consistency-check`
+    );
+    return response.data;
   },
 };
 

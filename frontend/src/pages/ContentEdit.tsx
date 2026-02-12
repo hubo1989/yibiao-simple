@@ -4,12 +4,23 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import ReactMarkdown from 'react-markdown';
 import { OutlineData, OutlineItem } from '../types';
-import { DocumentTextIcon, PlayIcon, DocumentArrowDownIcon, CheckCircleIcon, ExclamationCircleIcon, ArrowUpIcon, ChatBubbleLeftIcon } from '@heroicons/react/24/outline';
-import { contentApi, ChapterContentRequest, documentApi } from '../services/api';
+import {
+  DocumentTextIcon,
+  PlayIcon,
+  DocumentArrowDownIcon,
+  CheckCircleIcon,
+  ExclamationCircleIcon,
+  ArrowUpIcon,
+  ChatBubbleLeftIcon,
+  DocumentCheckIcon,
+} from '@heroicons/react/24/outline';
+import { contentApi, documentApi, proofreadApi, chapterApi, ChapterContentRequest } from '../services/api';
 import { saveAs } from 'file-saver';
 import { draftStorage } from '../utils/draftStorage';
 import ChapterStatusBadge from '../components/ChapterStatusBadge';
+import ProofreadPanel from '../components/ProofreadPanel';
 import type { ChapterStatus } from '../types/chapter';
+import type { ProofreadResult, ProofreadIssue } from '../types/proofread';
 
 interface ContentEditProps {
   outlineData: OutlineData | null;
@@ -17,6 +28,7 @@ interface ContentEditProps {
   onChapterSelect: (chapterId: string) => void;
   projectId?: string;
   onToggleComments?: (chapterId: string) => void;
+  onToggleConsistency?: () => void;
 }
 
 interface GenerationProgress {
@@ -34,6 +46,7 @@ const ContentEdit: React.FC<ContentEditProps> = ({
   onChapterSelect,
   projectId,
   onToggleComments,
+  onToggleConsistency,
 }) => {
   const [isGenerating, setIsGenerating] = useState(false);
   const [progress, setProgress] = useState<GenerationProgress>({
@@ -45,6 +58,14 @@ const ContentEdit: React.FC<ContentEditProps> = ({
   });
   const [leafItems, setLeafItems] = useState<OutlineItem[]>([]);
   const [showScrollToTop, setShowScrollToTop] = useState(false);
+
+  // 校对相关状态
+  const [showProofreadPanel, setShowProofreadPanel] = useState(false);
+  const [proofreadChapterId, setProofreadChapterId] = useState<string | null>(null);
+  const [proofreadChapterTitle, setProofreadChapterTitle] = useState('');
+  const [proofreadResult, setProofreadResult] = useState<ProofreadResult | null>(null);
+  const [isProofreading, setIsProofreading] = useState(false);
+  const [proofreadStreamingText, setProofreadStreamingText] = useState('');
 
   // 收集所有叶子节点
   const collectLeafItems = useCallback((items: OutlineItem[]): OutlineItem[] => {
@@ -156,6 +177,112 @@ const ContentEdit: React.FC<ContentEditProps> = ({
     return 'pending';
   };
 
+  // 触发章节校对
+  const handleProofreadChapter = async (chapterId: string, chapterTitle: string) => {
+    setProofreadChapterId(chapterId);
+    setProofreadChapterTitle(chapterTitle);
+    setProofreadResult(null);
+    setProofreadStreamingText('');
+    setShowProofreadPanel(true);
+    setIsProofreading(true);
+
+    try {
+      const response = await proofreadApi.proofreadChapter(chapterId);
+      if (!response.ok) {
+        throw new Error('校对请求失败');
+      }
+
+      const reader = response.body?.getReader();
+      if (!reader) throw new Error('无法读取响应');
+
+      let fullContent = '';
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        const chunk = new TextDecoder().decode(value);
+        const lines = chunk.split('\n');
+
+        for (const line of lines) {
+          if (line.startsWith('data: ')) {
+            const data = line.slice(6);
+            try {
+              const parsed = JSON.parse(data);
+
+              if (parsed.chunk) {
+                fullContent += parsed.chunk;
+                setProofreadStreamingText(fullContent);
+              } else if (parsed.done && parsed.result) {
+                setProofreadResult(parsed.result);
+                setProofreadStreamingText('');
+              } else if (parsed.error) {
+                throw new Error(parsed.error);
+              }
+            } catch {
+              // 忽略JSON解析错误
+            }
+          }
+        }
+      }
+    } catch (error) {
+      console.error('校对失败:', error);
+      alert('校对失败，请重试');
+    } finally {
+      setIsProofreading(false);
+    }
+  };
+
+  // 接受校对建议
+  const handleApplySuggestion = async (issue: ProofreadIssue) => {
+    if (!proofreadChapterId) return;
+
+    try {
+      // 获取当前章节内容
+      const chapterData = await chapterApi.get(proofreadChapterId);
+      let content = chapterData.content || '';
+
+      // 简单实现：将建议附加到内容末尾（实际场景中可能需要更智能的替换）
+      // 这里我们用一个占位符标记修改
+      const suggestionNote = `\n\n<!-- 校对建议：${issue.suggestion} -->`;
+
+      // 更新章节内容
+      await chapterApi.updateContent(
+        proofreadChapterId,
+        content + suggestionNote,
+        `应用校对建议：${issue.issue}`
+      );
+
+      // 更新本地状态
+      setLeafItems(prevItems =>
+        prevItems.map(item =>
+          item.id === proofreadChapterId
+            ? { ...item, content: content + suggestionNote }
+            : item
+        )
+      );
+
+      alert('建议已应用到内容中');
+    } catch (error) {
+      console.error('应用建议失败:', error);
+      alert('应用建议失败');
+    }
+  };
+
+  // 手动编辑内容
+  const handleEditContent = (issue: ProofreadIssue) => {
+    // 提示用户去编辑
+    alert(`请根据以下建议手动编辑内容：\n\n${issue.suggestion}`);
+  };
+
+  // 关闭校对面板
+  const handleCloseProofreadPanel = () => {
+    setShowProofreadPanel(false);
+    setProofreadChapterId(null);
+    setProofreadResult(null);
+    setProofreadStreamingText('');
+  };
+
   // 渲染目录结构
   const renderOutline = (items: OutlineItem[], level: number = 1): React.ReactElement[] => {
     return items.map((item) => {
@@ -172,6 +299,17 @@ const ContentEdit: React.FC<ContentEditProps> = ({
               {item.id} {item.title}
             </div>
             <ChapterStatusBadge status={chapterStatus} />
+            {isLeaf && currentContent && (
+              <button
+                onClick={() => handleProofreadChapter(item.id, item.title)}
+                disabled={isProofreading}
+                className="inline-flex items-center px-2 py-1 text-xs text-purple-600 hover:text-purple-800 hover:bg-purple-50 rounded disabled:opacity-50"
+                title="AI 校对"
+              >
+                <DocumentCheckIcon className="w-3 h-3 mr-1" />
+                校对
+              </button>
+            )}
             {isLeaf && onToggleComments && (
               <button
                 onClick={() => onToggleComments(item.id)}
@@ -470,6 +608,16 @@ const ContentEdit: React.FC<ContentEditProps> = ({
             </div>
             
             <div className="flex items-center space-x-3">
+              {onToggleConsistency && (
+                <button
+                  onClick={onToggleConsistency}
+                  className="inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-purple-500"
+                  title="跨章节一致性检查"
+                >
+                  <DocumentCheckIcon className="w-4 h-4 mr-2" />
+                  一致性检查
+                </button>
+              )}
               <button
                 onClick={handleGenerateContent}
                 disabled={isGenerating}
@@ -478,7 +626,7 @@ const ContentEdit: React.FC<ContentEditProps> = ({
                 <PlayIcon className="w-4 h-4 mr-2" />
                 {isGenerating ? '生成中...' : '生成标书'}
               </button>
-              
+
               <button
                 onClick={handleExportWord}
                 disabled={isGenerating}
@@ -568,6 +716,18 @@ const ContentEdit: React.FC<ContentEditProps> = ({
           <ArrowUpIcon className="w-5 h-5" />
         </button>
       )}
+
+      {/* 校对结果面板 */}
+      <ProofreadPanel
+        isOpen={showProofreadPanel}
+        onClose={handleCloseProofreadPanel}
+        proofreadResult={proofreadResult}
+        isLoading={isProofreading}
+        streamingText={proofreadStreamingText}
+        onApplySuggestion={handleApplySuggestion}
+        onEditContent={handleEditContent}
+        chapterTitle={proofreadChapterTitle}
+      />
     </div>
   );
 };

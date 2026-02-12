@@ -5,13 +5,15 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
-import { projectApi } from '../services/api';
+import { projectApi, consistencyApi } from '../services/api';
 import { useAppState } from '../hooks/useAppState';
 import type { Project, ProjectProgress } from '../types/project';
+import type { ConsistencyCheckResponse } from '../types/consistency';
 import ConfigPanel from '../components/ConfigPanel';
 import StepBar from '../components/StepBar';
 import VersionHistory from '../components/VersionHistory';
 import MemberSidebar from '../components/MemberSidebar';
+import ConsistencyPanel from '../components/ConsistencyPanel';
 import DocumentAnalysis from './DocumentAnalysis';
 import OutlineEdit from './OutlineEdit';
 import ContentEdit from './ContentEdit';
@@ -26,6 +28,9 @@ const ProjectWorkspace: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [showVersionHistory, setShowVersionHistory] = useState(false);
   const [showMemberSidebar, setShowMemberSidebar] = useState(false);
+  const [showConsistencyPanel, setShowConsistencyPanel] = useState(false);
+  const [consistencyResult, setConsistencyResult] = useState<ConsistencyCheckResponse | null>(null);
+  const [isCheckingConsistency, setIsCheckingConsistency] = useState(false);
   const [activeCommentChapter, setActiveCommentChapter] = useState<string | null>(null);
 
   const {
@@ -87,6 +92,22 @@ const ProjectWorkspace: React.FC = () => {
     navigate('/');
   };
 
+  // 一致性检查
+  const handleCheckConsistency = async () => {
+    if (!projectId) return;
+
+    setIsCheckingConsistency(true);
+    try {
+      const result = await consistencyApi.checkConsistency(projectId);
+      setConsistencyResult(result);
+    } catch (error: any) {
+      console.error('一致性检查失败:', error);
+      alert(error.response?.data?.detail || '一致性检查失败，请重试');
+    } finally {
+      setIsCheckingConsistency(false);
+    }
+  };
+
   const renderCurrentPage = () => {
     switch (state.currentStep) {
       case 0:
@@ -116,6 +137,7 @@ const ProjectWorkspace: React.FC = () => {
             onChapterSelect={updateSelectedChapter}
             projectId={projectId}
             onToggleComments={(chapterId) => setActiveCommentChapter(chapterId)}
+            onToggleConsistency={() => setShowConsistencyPanel(true)}
           />
         );
       default:
@@ -265,6 +287,15 @@ const ProjectWorkspace: React.FC = () => {
           onClose={() => setShowMemberSidebar(false)}
         />
       )}
+
+      {/* 一致性检查面板 */}
+      <ConsistencyPanel
+        isOpen={showConsistencyPanel}
+        onClose={() => setShowConsistencyPanel(false)}
+        result={consistencyResult}
+        isLoading={isCheckingConsistency}
+        onCheck={handleCheckConsistency}
+      />
     </div>
   );
 };
