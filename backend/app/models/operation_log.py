@@ -32,6 +32,7 @@ class ActionType(str, PyEnum):
     CHAPTER_CREATE = "chapter_create"   # 创建章节
     CHAPTER_UPDATE = "chapter_update"   # 更新章节
     CHAPTER_DELETE = "chapter_delete"   # 删除章节
+    CHAPTER_STATUS_CHANGE = "chapter_status_change"  # 章节状态变更
 
     # 版本操作
     VERSION_CREATE = "version_create"   # 创建版本

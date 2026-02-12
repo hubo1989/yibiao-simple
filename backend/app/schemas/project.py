@@ -5,6 +5,19 @@ from datetime import datetime
 from pydantic import BaseModel, Field
 
 from ..models.project import ProjectStatus, ProjectMemberRole
+from ..models.chapter import ChapterStatus
+
+
+class ProjectProgress(BaseModel):
+    """项目进度统计"""
+    total_chapters: int = Field(..., description="章节总数")
+    pending: int = Field(default=0, description="待生成章节数")
+    generated: int = Field(default=0, description="已生成章节数")
+    reviewing: int = Field(default=0, description="审核中章节数")
+    finalized: int = Field(default=0, description="已定稿章节数")
+    completion_percentage: float = Field(default=0.0, description="完成百分比")
+
+    model_config = {"from_attributes": True}
 
 
 class ProjectBase(BaseModel):

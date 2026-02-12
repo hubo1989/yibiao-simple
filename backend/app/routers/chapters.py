@@ -1,19 +1,20 @@
-"""章节相关 API 路由 - 包含锁定机制"""
+"""章节相关 API 路由 - 包含锁定机制和状态流转"""
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Annotated
 
 from fastapi import APIRouter, HTTPException, Depends, status
 from pydantic import BaseModel, Field
-from sqlalchemy import select, and_
+from sqlalchemy import select, and_, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..models.chapter import Chapter, ChapterStatus
 from ..models.project import project_members, ProjectMemberRole
 from ..models.version import ProjectVersion, ChangeType
-from ..models.user import User
+from ..models.user import User, UserRole
+from ..models.operation_log import OperationLog, ActionType
 from ..db.database import get_db
-from ..auth.dependencies import require_editor
+from ..auth.dependencies import require_editor, get_current_active_user
 from ..services.version_service import VersionService
 
 router = APIRouter(prefix="/api/chapters", tags=["章节管理"])
@@ -52,6 +53,21 @@ class ChapterContentResponse(BaseModel):
     locked_by_username: str | None = None
     is_locked: bool = False
     lock_expired: bool = False
+
+
+class StatusUpdateRequest(BaseModel):
+    """章节状态更新请求"""
+    status: ChapterStatus = Field(..., description="目标状态")
+
+
+class StatusUpdateResponse(BaseModel):
+    """章节状态更新响应"""
+    id: str
+    chapter_number: str
+    title: str
+    old_status: str
+    new_status: str
+    message: str
 
 
 # ============ Helper Functions ============
@@ -437,4 +453,138 @@ async def get_chapter(
         locked_by_username=locker_username,
         is_locked=chapter.locked_by is not None,
         lock_expired=lock_expired,
+    )
+
+
+# ============ 状态流转 API ============
+
+# 定义允许的状态转换规则
+# 格式: {当前状态: {目标状态: [允许的项目角色列表]}}
+STATUS_TRANSITIONS: dict[ChapterStatus, dict[ChapterStatus, list[ProjectMemberRole]]] = {
+    ChapterStatus.PENDING: {
+        ChapterStatus.GENERATED: [ProjectMemberRole.OWNER, ProjectMemberRole.EDITOR],
+    },
+    ChapterStatus.GENERATED: {
+        ChapterStatus.REVIEWING: [ProjectMemberRole.OWNER, ProjectMemberRole.EDITOR],
+    },
+    ChapterStatus.REVIEWING: {
+        ChapterStatus.FINALIZED: [ProjectMemberRole.OWNER, ProjectMemberRole.REVIEWER],
+        ChapterStatus.GENERATED: [ProjectMemberRole.OWNER, ProjectMemberRole.REVIEWER],  # 打回
+    },
+    ChapterStatus.FINALIZED: {
+        # finalized 状态不能再变更，除非是 admin
+    },
+}
+
+
+def _validate_status_transition(
+    current_status: ChapterStatus,
+    target_status: ChapterStatus,
+    project_role: ProjectMemberRole,
+    user_global_role: UserRole,
+) -> tuple[bool, str]:
+    """
+    验证状态转换是否合法
+
+    Returns:
+        tuple: (is_valid, error_message)
+    """
+    # 全局 Admin 可以任意转换状态
+    if user_global_role == UserRole.ADMIN:
+        return True, ""
+
+    # 检查是否是有效的转换
+    if current_status not in STATUS_TRANSITIONS:
+        return False, f"当前状态 {current_status.value} 不允许变更"
+
+    allowed_transitions = STATUS_TRANSITIONS[current_status]
+    if target_status not in allowed_transitions:
+        return False, f"不允许从 {current_status.value} 转换到 {target_status.value}"
+
+    # 检查角色权限
+    allowed_roles = allowed_transitions[target_status]
+    if project_role not in allowed_roles:
+        roles_str = "、".join(r.value for r in allowed_roles)
+        return False, f"当前角色 ({project_role.value}) 无权执行此状态转换，需要角色：{roles_str}"
+
+    return True, ""
+
+
+@router.put("/{chapter_id}/status", response_model=StatusUpdateResponse)
+async def update_chapter_status(
+    chapter_id: uuid.UUID,
+    request: StatusUpdateRequest,
+    current_user: Annotated[User, Depends(get_current_active_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """
+    更新章节状态
+
+    状态流转规则：
+    - pending -> generated: editor/owner
+    - generated -> reviewing: editor/owner
+    - reviewing -> finalized: reviewer/owner
+    - reviewing -> generated: reviewer/owner (打回)
+    - admin 可以任意转换状态
+    """
+    # 获取章节
+    result = await db.execute(select(Chapter).where(Chapter.id == chapter_id))
+    chapter = result.scalar_one_or_none()
+
+    if not chapter:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="章节不存在",
+        )
+
+    # 验证项目成员资格
+    project_role = await _verify_project_member(chapter.project_id, current_user.id, db)
+    if project_role is None:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="您不是该项目的成员",
+        )
+
+    # 验证状态转换
+    old_status = chapter.status
+    new_status = request.status
+
+    is_valid, error_message = _validate_status_transition(
+        old_status, new_status, project_role, current_user.role
+    )
+
+    if not is_valid:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=error_message,
+        )
+
+    # 更新状态
+    chapter.status = new_status
+    chapter.updated_at = datetime.now(timezone.utc)
+
+    # 记录操作日志
+    log_entry = OperationLog(
+        user_id=current_user.id,
+        project_id=chapter.project_id,
+        action=ActionType.CHAPTER_STATUS_CHANGE,
+        detail={
+            "chapter_id": str(chapter.id),
+            "chapter_number": chapter.chapter_number,
+            "chapter_title": chapter.title,
+            "old_status": old_status.value,
+            "new_status": new_status.value,
+        },
+    )
+    db.add(log_entry)
+
+    await db.flush()
+
+    return StatusUpdateResponse(
+        id=str(chapter.id),
+        chapter_number=chapter.chapter_number,
+        title=chapter.title,
+        old_status=old_status.value,
+        new_status=new_status.value,
+        message=f"章节状态已从 {old_status.value} 更新为 {new_status.value}",
     )

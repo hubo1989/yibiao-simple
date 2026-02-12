@@ -3,12 +3,13 @@ import uuid
 from typing import Annotated
 
 from fastapi import APIRouter, HTTPException, Depends, status, Query
-from sqlalchemy import select, and_, exists
+from sqlalchemy import select, and_, exists, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..db.database import get_db
 from ..models.user import User
 from ..models.project import Project, ProjectStatus, ProjectMemberRole, project_members
+from ..models.chapter import Chapter, ChapterStatus
 from ..schemas.project import (
     ProjectCreate,
     ProjectUpdate,
@@ -16,6 +17,7 @@ from ..schemas.project import (
     ProjectSummary,
     ProjectMemberAdd,
     ProjectMemberResponse,
+    ProjectProgress,
 )
 from ..auth.dependencies import get_current_active_user, require_editor
 
@@ -292,4 +294,48 @@ async def remove_project_member(
                 project_members.c.user_id == user_id,
             )
         )
+    )
+
+
+@router.get("/{project_id}/progress", response_model=ProjectProgress)
+async def get_project_progress(
+    project_id: uuid.UUID,
+    current_user: Annotated[User, Depends(get_current_active_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """
+    获取项目进度统计
+
+    返回各状态的章节数量和完成百分比
+    """
+    # 验证项目存在且用户是成员
+    await get_project_for_user(project_id, current_user.id, db)
+
+    # 统计各状态章节数量
+    status_counts = {}
+    for chapter_status in ChapterStatus:
+        result = await db.execute(
+            select(func.count(Chapter.id)).where(
+                and_(
+                    Chapter.project_id == project_id,
+                    Chapter.status == chapter_status,
+                )
+            )
+        )
+        status_counts[chapter_status] = result.scalar() or 0
+
+    total = sum(status_counts.values())
+
+    # 计算完成百分比 (finalized / total)
+    completion_percentage = 0.0
+    if total > 0:
+        completion_percentage = round(status_counts[ChapterStatus.FINALIZED] / total * 100, 2)
+
+    return ProjectProgress(
+        total_chapters=total,
+        pending=status_counts[ChapterStatus.PENDING],
+        generated=status_counts[ChapterStatus.GENERATED],
+        reviewing=status_counts[ChapterStatus.REVIEWING],
+        finalized=status_counts[ChapterStatus.FINALIZED],
+        completion_percentage=completion_percentage,
     )
