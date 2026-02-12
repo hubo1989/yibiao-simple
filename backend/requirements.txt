@@ -33,3 +33,6 @@ email-validator==2.2.0
 sqlalchemy[asyncio]==2.0.41
 asyncpg==0.30.0
 alembic==1.15.2
+# JWT 认证
+python-jose[cryptography]==3.4.0
+bcrypt==4.2.1

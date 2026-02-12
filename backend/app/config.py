@@ -5,6 +5,7 @@ except ImportError:
     from pydantic import BaseSettings
 from typing import Optional
 import os
+import secrets
 
 
 class Settings(BaseSettings):
@@ -12,31 +13,37 @@ class Settings(BaseSettings):
     app_name: str = "AI写标书助手"
     app_version: str = "2.0.0"
     debug: bool = False
-    
+
     # CORS设置
     cors_origins: list = [
-        "http://localhost:3000", 
+        "http://localhost:3000",
         "http://127.0.0.1:3000",
-        "http://localhost:3001", 
+        "http://localhost:3001",
         "http://127.0.0.1:3001",
-        "http://localhost:3002", 
+        "http://localhost:3002",
         "http://127.0.0.1:3002",
-        "http://localhost:3003", 
+        "http://localhost:3003",
         "http://127.0.0.1:3003",
-        "http://localhost:3004", 
+        "http://localhost:3004",
         "http://127.0.0.1:3004"
     ]
-    
+
     # 文件上传设置
     max_file_size: int = 10 * 1024 * 1024  # 10MB
     upload_dir: str = "uploads"
-    
+
     # 数据库设置
     database_url: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/yibiao"
 
     # OpenAI默认设置
     default_model: str = "gpt-3.5-turbo"
-    
+
+    # JWT 认证设置
+    secret_key: str = secrets.token_urlsafe(32)
+    algorithm: str = "HS256"
+    access_token_expire_minutes: int = 30
+    refresh_token_expire_days: int = 7
+
     class Config:
         env_file = ".env"
 
