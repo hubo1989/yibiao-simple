@@ -24,6 +24,18 @@ PROOFREAD_ISSUE_SCHEMA = {
     "suggestion": "修改建议"
 }
 
+# 跨章节一致性检查矛盾类型定义
+CONSISTENCY_CONTRADICTION_SCHEMA = {
+    "severity": "critical|warning|info",
+    "category": "data|terminology|timeline|commitment|scope",
+    "description": "矛盾描述",
+    "chapter_a": "涉及章节A的编号和标题",
+    "chapter_b": "涉及章节B的编号和标题",
+    "detail_a": "章节A中的相关内容",
+    "detail_b": "章节B中的相关内容",
+    "suggestion": "统一的建议"
+}
+
 
 class OpenAIService:
     """OpenAI服务类"""
@@ -563,6 +575,121 @@ class OpenAIService:
         async for chunk in self.stream_chat_completion(
             messages,
             temperature=0.3,  # 较低温度以获得更稳定的校对结果
+            response_format={"type": "json_object"}
+        ):
+            yield chunk
+
+    async def check_consistency(
+        self,
+        chapter_summaries: list[dict[str, str]],
+        project_overview: str | None = None,
+        tech_requirements: str | None = None,
+    ) -> AsyncGenerator[str, None]:
+        """
+        检查跨章节一致性，检测并报告跨章节矛盾
+
+        Args:
+            chapter_summaries: 章节摘要列表，每个元素包含：
+                - chapter_number: 章节编号（如 "1.2.3"）
+                - title: 章节标题
+                - summary: 章节内容摘要（包含关键承诺、数据、时间线等）
+            project_overview: 项目概述信息
+            tech_requirements: 招标文件的技术评分要求
+
+        Yields:
+            流式返回的一致性检查结果（JSON 格式）
+        """
+        schema_json = json.dumps({
+            "contradictions": [
+                CONSISTENCY_CONTRADICTION_SCHEMA
+            ],
+            "summary": "整体一致性评估摘要",
+            "overall_consistency": "consistent|minor_issues|major_issues"
+        })
+
+        # 构建章节摘要信息
+        chapters_info = []
+        for chapter in chapter_summaries:
+            chapters_info.append(
+                f"【{chapter.get('chapter_number', '')} {chapter.get('title', '')}】\n"
+                f"{chapter.get('summary', '')}"
+            )
+        chapters_text = "\n\n".join(chapters_info)
+
+        project_info = ""
+        if project_overview:
+            project_info = f"""
+<项目概述>
+{project_overview}
+</项目概述>
+"""
+
+        requirements_info = ""
+        if tech_requirements:
+            requirements_info = f"""
+<招标文件技术要求>
+{tech_requirements}
+</招标文件技术要求>
+"""
+
+        system_prompt = f"""### 角色
+你是专业的标书审核专家，负责检查标书中跨章节的一致性问题。
+
+### 任务
+分析提供的章节摘要，检测以下类型的跨章节矛盾：
+
+1. **数据矛盾 (data)**: 同一数据在不同章节中数值不一致
+   - 例：A章节承诺"10名工程师"，B章节写"15名工程师"
+   - 例：A章节预算"500万"，B章节预算"600万"
+
+2. **术语矛盾 (terminology)**: 同一概念使用不同术语或定义不一致
+   - 例：A章节称"项目经理"，B章节称"项目负责人"
+   - 例：同一产品名称在不同章节拼写不同
+
+3. **时间线矛盾 (timeline)**: 项目计划时间节点冲突
+   - 例：A章节说"第一阶段1个月"，B章节说"第一阶段2周"
+   - 例：交付日期不一致
+
+4. **承诺矛盾 (commitment)**: 服务承诺或保证不一致
+   - 例：A章节承诺"7×24小时服务"，B章节写"工作日服务"
+   - 例：质保期年限不一致
+
+5. **范围矛盾 (scope)**: 工作范围描述不一致
+   - 例：A章节说"包含系统A"，B章节说"不包含系统A"
+
+### 严重程度定义
+- **critical**: 严重矛盾，可能导致失分或废标，必须修改
+- **warning**: 一般不一致，建议统一以提高专业度
+- **info**: 轻微差异，可以优化
+
+### 输出格式
+返回 JSON 格式，包含 contradictions 数组、summary 摘要和 overall_consistency 评估：
+{schema_json}
+
+### 注意事项
+- 只报告真实的矛盾，不要过度解读
+- 如果没有发现矛盾，返回空数组，overall_consistency 为 "consistent"
+- 每个矛盾必须涉及至少两个不同章节
+"""
+
+        user_prompt = f"""### 项目信息
+{project_info}{requirements_info}
+### 章节摘要汇总
+
+{chapters_text}
+
+请分析以上章节摘要，检测跨章节的一致性问题，输出 JSON 格式的检查结果。
+"""
+
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt}
+        ]
+
+        # 流式返回一致性检查结果
+        async for chunk in self.stream_chat_completion(
+            messages,
+            temperature=0.3,
             response_format={"type": "json_object"}
         ):
             yield chunk

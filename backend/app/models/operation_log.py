@@ -41,6 +41,7 @@ class ActionType(str, PyEnum):
     # AI 操作
     AI_GENERATE = "ai_generate"         # AI 生成内容
     AI_PROOFREAD = "ai_proofread"       # AI 校对
+    CONSISTENCY_CHECK = "consistency_check"  # 跨章节一致性检查
 
     # 导出操作
     EXPORT_DOCX = "export_docx"         # 导出 Word

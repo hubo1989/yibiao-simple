@@ -1,8 +1,11 @@
 """项目 CRUD API 路由"""
 import uuid
+import json
+from datetime import datetime, timezone
 from typing import Annotated
 
 from fastapi import APIRouter, HTTPException, Depends, status, Query
+from fastapi.responses import StreamingResponse
 from sqlalchemy import select, and_, exists, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -10,6 +13,9 @@ from ..db.database import get_db
 from ..models.user import User
 from ..models.project import Project, ProjectStatus, ProjectMemberRole, project_members
 from ..models.chapter import Chapter, ChapterStatus
+from ..models.consistency_result import ConsistencyResult, ConsistencySeverity, ConsistencyCategory
+from ..models.operation_log import OperationLog, ActionType
+from ..services.openai_service import OpenAIService
 from ..schemas.project import (
     ProjectCreate,
     ProjectUpdate,
@@ -18,6 +24,9 @@ from ..schemas.project import (
     ProjectMemberAdd,
     ProjectMemberResponse,
     ProjectProgress,
+    ConsistencyCheckRequest,
+    ConsistencyCheckResponse,
+    ContradictionItem,
 )
 from ..auth.dependencies import get_current_active_user, require_editor
 
@@ -338,4 +347,130 @@ async def get_project_progress(
         reviewing=status_counts[ChapterStatus.REVIEWING],
         finalized=status_counts[ChapterStatus.FINALIZED],
         completion_percentage=completion_percentage,
+    )
+
+
+@router.post(
+    "/{project_id}/consistency-check",
+    response_model=ConsistencyCheckResponse,
+    status_code=status.HTTP_200_OK,
+)
+async def check_project_consistency(
+    project_id: uuid.UUID,
+    current_user: Annotated[User, Depends(get_current_active_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """
+    检查项目跨章节一致性
+
+    自动提取项目中所有已生成内容的章节摘要，进行跨章节一致性检查，
+    检测数据、术语、时间线、承诺和范围等方面的矛盾。
+    """
+    from datetime import datetime
+
+    # 验证项目存在且用户是成员
+    project = await get_project_for_user(project_id, current_user.id, db)
+
+    # 获取项目中所有有内容的章节
+    result = await db.execute(
+        select(Chapter)
+        .where(
+            and_(
+                Chapter.project_id == project_id,
+                Chapter.content.isnot(None),
+                Chapter.content != "",
+            )
+        )
+        .order_by(Chapter.chapter_number)
+    )
+    chapters = result.scalars().all()
+
+    if len(chapters) < 2:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="至少需要2个有内容的章节才能进行跨章节一致性检查",
+        )
+
+    # 准备章节摘要（截取内容前2000字符作为摘要）
+    chapter_summaries = [
+        {
+            "chapter_number": ch.chapter_number,
+            "title": ch.title,
+            "summary": (ch.content[:2000] if ch.content and len(ch.content) > 2000 else ch.content) or "",
+        }
+        for ch in chapters
+    ]
+
+    # 调用 AI 服务进行一致性检查
+    openai_service = OpenAIService(db=db)
+
+    full_content = ""
+    async for chunk in openai_service.check_consistency(
+        chapter_summaries=chapter_summaries,
+        project_overview=project.project_overview,
+        tech_requirements=project.tech_requirements,
+    ):
+        full_content += chunk
+
+    # 解析 AI 返回的 JSON
+    try:
+        result_data = json.loads(full_content)
+    except json.JSONDecodeError:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="AI 返回的结果格式无效",
+        )
+
+    # 统计矛盾数量
+    contradictions = result_data.get("contradictions", [])
+    contradiction_count = len(contradictions)
+    critical_count = sum(
+        1 for c in contradictions
+        if c.get("severity") == "critical"
+    )
+
+    # 保存检查结果到数据库
+    consistency_result = ConsistencyResult(
+        project_id=project_id,
+        contradictions=json.dumps(contradictions, ensure_ascii=False),
+        summary=result_data.get("summary", ""),
+        overall_consistency=result_data.get("overall_consistency", "consistent"),
+        contradiction_count=contradiction_count,
+        critical_count=critical_count,
+    )
+    db.add(consistency_result)
+    await db.flush()
+    await db.refresh(consistency_result)
+
+    # 记录操作日志
+    log_entry = OperationLog(
+        user_id=current_user.id,
+        project_id=project_id,
+        action=ActionType.CONSISTENCY_CHECK,
+        detail={"message": f"完成跨章节一致性检查，发现 {contradiction_count} 个矛盾"},
+    )
+    db.add(log_entry)
+
+    await db.commit()
+
+    # 构建响应
+    return ConsistencyCheckResponse(
+        contradictions=[
+            ContradictionItem(
+                severity=ConsistencySeverity(c.get("severity", "info")),
+                category=ConsistencyCategory(c.get("category", "data")),
+                description=c.get("description", ""),
+                chapter_a=c.get("chapter_a", ""),
+                chapter_b=c.get("chapter_b", ""),
+                detail_a=c.get("detail_a", ""),
+                detail_b=c.get("detail_b", ""),
+                suggestion=c.get("suggestion", ""),
+            )
+            for c in contradictions
+        ],
+        summary=result_data.get("summary", ""),
+        overall_consistency=result_data.get("overall_consistency", "consistent"),
+        contradiction_count=contradiction_count,
+        critical_count=critical_count,
+        created_at=consistency_result.created_at,
     )
