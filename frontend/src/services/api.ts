@@ -3,6 +3,7 @@
  */
 import axios, { AxiosError } from 'axios';
 import type { User, LoginRequest, RegisterRequest, Token } from '../types/auth';
+import type { ProjectSummary, Project, ProjectCreate, ProjectProgress } from '../types/project';
 
 const API_BASE_URL = process.env.REACT_APP_API_URL || 'http://localhost:8000';
 
@@ -117,6 +118,50 @@ export const authApi = {
   // 刷新令牌
   refresh: (refreshToken: string) =>
     api.post<Token>('/api/auth/refresh', { refresh_token: refreshToken }),
+};
+
+// 项目相关 API
+export const projectApi = {
+  // 获取项目列表
+  list: async (params?: {
+    status?: string;
+    sort_by?: string;
+    sort_order?: string;
+    skip?: number;
+    limit?: number;
+  }): Promise<ProjectSummary[]> => {
+    const response = await api.get<ProjectSummary[]>('/api/projects', { params });
+    return response.data;
+  },
+
+  // 获取项目详情
+  get: async (projectId: string): Promise<Project> => {
+    const response = await api.get<Project>(`/api/projects/${projectId}`);
+    return response.data;
+  },
+
+  // 创建项目
+  create: async (data: ProjectCreate): Promise<Project> => {
+    const response = await api.post<Project>('/api/projects', data);
+    return response.data;
+  },
+
+  // 更新项目
+  update: async (projectId: string, data: Partial<ProjectCreate & { status: string }>): Promise<Project> => {
+    const response = await api.put<Project>(`/api/projects/${projectId}`, data);
+    return response.data;
+  },
+
+  // 删除项目
+  delete: async (projectId: string): Promise<void> => {
+    await api.delete(`/api/projects/${projectId}`);
+  },
+
+  // 获取项目进度
+  getProgress: async (projectId: string): Promise<ProjectProgress> => {
+    const response = await api.get<ProjectProgress>(`/api/projects/${projectId}/progress`);
+    return response.data;
+  },
 };
 
 export interface ConfigData {

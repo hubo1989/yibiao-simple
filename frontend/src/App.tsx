@@ -7,7 +7,8 @@ import { AuthProvider } from './contexts/AuthContext';
 import ProtectedRoute from './components/ProtectedRoute';
 import Login from './pages/Login';
 import Register from './pages/Register';
-import Dashboard from './pages/Dashboard';
+import ProjectList from './pages/ProjectList';
+import ProjectWorkspace from './pages/ProjectWorkspace';
 
 function App() {
   return (
@@ -23,7 +24,15 @@ function App() {
             path="/"
             element={
               <ProtectedRoute>
-                <Dashboard />
+                <ProjectList />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/project/:projectId"
+            element={
+              <ProtectedRoute>
+                <ProjectWorkspace />
               </ProtectedRoute>
             }
           />
