@@ -3,10 +3,10 @@
   "sessionId": "c195db03-f5d5-4903-92dc-e8b68263b4a9",
   "status": "running",
   "startedAt": "2026-02-12T01:20:33.720Z",
-  "updatedAt": "2026-02-12T06:23:58.202Z",
-  "currentIteration": 13,
+  "updatedAt": "2026-02-12T07:02:08.160Z",
+  "currentIteration": 14,
   "maxIterations": 10,
-  "tasksCompleted": 13,
+  "tasksCompleted": 14,
   "isPaused": false,
   "agentPlugin": "claude",
   "trackerState": {
@@ -107,8 +107,8 @@
       {
         "id": "US-016",
         "title": "实现章节状态流转 API",
-        "status": "open",
-        "completedInSession": false
+        "status": "completed",
+        "completedInSession": true
       },
       {
         "id": "US-017",
@@ -320,6 +320,16 @@
       "durationMs": 697923,
       "startedAt": "2026-02-12T05:37:48.742Z",
       "endedAt": "2026-02-12T05:49:26.665Z"
+    },
+    {
+      "iteration": 14,
+      "status": "completed",
+      "taskId": "US-016",
+      "taskTitle": "实现章节状态流转 API",
+      "taskCompleted": true,
+      "durationMs": 636029,
+      "startedAt": "2026-02-12T06:13:22.170Z",
+      "endedAt": "2026-02-12T06:23:58.199Z"
     }
   ],
   "skippedTaskIds": [],
