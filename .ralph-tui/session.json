@@ -3,10 +3,10 @@
   "sessionId": "c195db03-f5d5-4903-92dc-e8b68263b4a9",
   "status": "running",
   "startedAt": "2026-02-12T01:20:33.720Z",
-  "updatedAt": "2026-02-12T01:23:49.052Z",
-  "currentIteration": 0,
+  "updatedAt": "2026-02-12T01:31:45.765Z",
+  "currentIteration": 1,
   "maxIterations": 10,
-  "tasksCompleted": 0,
+  "tasksCompleted": 1,
   "isPaused": false,
   "agentPlugin": "claude",
   "trackerState": {
@@ -29,8 +29,8 @@
       {
         "id": "US-003",
         "title": "创建 projects 表和项目模型",
-        "status": "open",
-        "completedInSession": false
+        "status": "completed",
+        "completedInSession": true
       },
       {
         "id": "US-004",
@@ -190,7 +190,18 @@
       }
     ]
   },
-  "iterations": [],
+  "iterations": [
+    {
+      "iteration": 1,
+      "status": "completed",
+      "taskId": "US-003",
+      "taskTitle": "创建 projects 表和项目模型",
+      "taskCompleted": true,
+      "durationMs": 191714,
+      "startedAt": "2026-02-12T01:20:37.333Z",
+      "endedAt": "2026-02-12T01:23:49.047Z"
+    }
+  ],
   "skippedTaskIds": [],
   "cwd": "/Users/hubo/.superset/worktrees/yibiao-simple/parcel",
   "activeTaskIds": [],
