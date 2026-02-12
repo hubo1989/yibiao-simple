@@ -1,12 +1,12 @@
 {
   "version": 1,
-  "sessionId": "f9bacff0-5517-4db0-aeb9-3b160a361fda",
+  "sessionId": "c195db03-f5d5-4903-92dc-e8b68263b4a9",
   "status": "running",
-  "startedAt": "2026-02-11T11:43:11.270Z",
-  "updatedAt": "2026-02-11T12:28:08.186Z",
-  "currentIteration": 1,
+  "startedAt": "2026-02-12T01:20:33.720Z",
+  "updatedAt": "2026-02-12T01:23:49.052Z",
+  "currentIteration": 0,
   "maxIterations": 10,
-  "tasksCompleted": 1,
+  "tasksCompleted": 0,
   "isPaused": false,
   "agentPlugin": "claude",
   "trackerState": {
@@ -18,12 +18,12 @@
         "id": "US-001",
         "title": "引入 PostgreSQL 数据库和 SQLAlchemy ORM 基础设施",
         "status": "completed",
-        "completedInSession": true
+        "completedInSession": false
       },
       {
         "id": "US-002",
         "title": "创建 users 表和用户模型",
-        "status": "open",
+        "status": "completed",
         "completedInSession": false
       },
       {
@@ -190,18 +190,7 @@
       }
     ]
   },
-  "iterations": [
-    {
-      "iteration": 1,
-      "status": "completed",
-      "taskId": "US-001",
-      "taskTitle": "引入 PostgreSQL 数据库和 SQLAlchemy ORM 基础设施",
-      "taskCompleted": true,
-      "durationMs": 1840198,
-      "startedAt": "2026-02-11T11:43:21.953Z",
-      "endedAt": "2026-02-11T12:14:02.151Z"
-    }
-  ],
+  "iterations": [],
   "skippedTaskIds": [],
   "cwd": "/Users/hubo/.superset/worktrees/yibiao-simple/parcel",
   "activeTaskIds": [],
