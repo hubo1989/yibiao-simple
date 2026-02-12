@@ -3,10 +3,10 @@
   "sessionId": "c195db03-f5d5-4903-92dc-e8b68263b4a9",
   "status": "running",
   "startedAt": "2026-02-12T01:20:33.720Z",
-  "updatedAt": "2026-02-12T05:49:26.667Z",
-  "currentIteration": 12,
+  "updatedAt": "2026-02-12T06:23:58.202Z",
+  "currentIteration": 13,
   "maxIterations": 10,
-  "tasksCompleted": 12,
+  "tasksCompleted": 13,
   "isPaused": false,
   "agentPlugin": "claude",
   "trackerState": {
@@ -101,8 +101,8 @@
       {
         "id": "US-015",
         "title": "实现评论批注 API",
-        "status": "open",
-        "completedInSession": false
+        "status": "completed",
+        "completedInSession": true
       },
       {
         "id": "US-016",
@@ -310,6 +310,16 @@
       "durationMs": 411540,
       "startedAt": "2026-02-12T05:06:06.319Z",
       "endedAt": "2026-02-12T05:12:57.859Z"
+    },
+    {
+      "iteration": 13,
+      "status": "completed",
+      "taskId": "US-015",
+      "taskTitle": "实现评论批注 API",
+      "taskCompleted": true,
+      "durationMs": 697923,
+      "startedAt": "2026-02-12T05:37:48.742Z",
+      "endedAt": "2026-02-12T05:49:26.665Z"
     }
   ],
   "skippedTaskIds": [],
