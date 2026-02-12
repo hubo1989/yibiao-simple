@@ -113,3 +113,32 @@ class ProjectAnalysisRequest(BaseModel):
     """基于项目的文档分析请求"""
     project_id: str = Field(..., description="项目ID")
     analysis_type: AnalysisType = Field(..., description="分析类型")
+
+
+# ============ 项目上下文版本的目录和内容生成 Schema ============
+
+class ProjectOutlineRequest(BaseModel):
+    """基于项目的目录生成请求"""
+    project_id: str = Field(..., description="项目ID")
+
+
+class ProjectContentGenerateRequest(BaseModel):
+    """基于项目的章节内容生成请求"""
+    project_id: str = Field(..., description="项目ID")
+    chapter_id: str = Field(..., description="章节ID")
+
+
+class ChapterCreatedResponse(BaseModel):
+    """章节创建响应"""
+    id: str
+    chapter_number: str
+    title: str
+    parent_id: Optional[str] = None
+    status: str = "pending"
+
+
+class ProjectOutlineResponse(BaseModel):
+    """项目目录生成响应"""
+    project_id: str
+    chapters: List[ChapterCreatedResponse]
+    total_count: int
