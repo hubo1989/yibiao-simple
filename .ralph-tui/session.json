@@ -3,10 +3,10 @@
   "sessionId": "c195db03-f5d5-4903-92dc-e8b68263b4a9",
   "status": "running",
   "startedAt": "2026-02-12T01:20:33.720Z",
-  "updatedAt": "2026-02-12T09:19:31.847Z",
-  "currentIteration": 18,
+  "updatedAt": "2026-02-12T09:40:44.874Z",
+  "currentIteration": 19,
   "maxIterations": 10,
-  "tasksCompleted": 18,
+  "tasksCompleted": 19,
   "isPaused": false,
   "agentPlugin": "claude",
   "trackerState": {
@@ -137,8 +137,8 @@
       {
         "id": "US-021",
         "title": "前端：登录注册页面和认证状态管理",
-        "status": "open",
-        "completedInSession": false
+        "status": "completed",
+        "completedInSession": true
       },
       {
         "id": "US-022",
@@ -370,6 +370,16 @@
       "durationMs": 721672,
       "startedAt": "2026-02-12T08:47:34.308Z",
       "endedAt": "2026-02-12T08:59:35.980Z"
+    },
+    {
+      "iteration": 19,
+      "status": "completed",
+      "taskId": "US-021",
+      "taskTitle": "前端：登录注册页面和认证状态管理",
+      "taskCompleted": true,
+      "durationMs": 1072699,
+      "startedAt": "2026-02-12T09:01:39.145Z",
+      "endedAt": "2026-02-12T09:19:31.844Z"
     }
   ],
   "skippedTaskIds": [],
