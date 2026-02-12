@@ -3,10 +3,10 @@
   "sessionId": "c195db03-f5d5-4903-92dc-e8b68263b4a9",
   "status": "running",
   "startedAt": "2026-02-12T01:20:33.720Z",
-  "updatedAt": "2026-02-12T08:59:35.983Z",
-  "currentIteration": 17,
+  "updatedAt": "2026-02-12T09:19:31.847Z",
+  "currentIteration": 18,
   "maxIterations": 10,
-  "tasksCompleted": 17,
+  "tasksCompleted": 18,
   "isPaused": false,
   "agentPlugin": "claude",
   "trackerState": {
@@ -131,8 +131,8 @@
       {
         "id": "US-020",
         "title": "实现后台管理 API：用户管理和使用统计",
-        "status": "open",
-        "completedInSession": false
+        "status": "completed",
+        "completedInSession": true
       },
       {
         "id": "US-021",
@@ -360,6 +360,16 @@
       "durationMs": 884297,
       "startedAt": "2026-02-12T08:14:41.952Z",
       "endedAt": "2026-02-12T08:29:26.249Z"
+    },
+    {
+      "iteration": 18,
+      "status": "completed",
+      "taskId": "US-020",
+      "taskTitle": "实现后台管理 API：用户管理和使用统计",
+      "taskCompleted": true,
+      "durationMs": 721672,
+      "startedAt": "2026-02-12T08:47:34.308Z",
+      "endedAt": "2026-02-12T08:59:35.980Z"
     }
   ],
   "skippedTaskIds": [],
