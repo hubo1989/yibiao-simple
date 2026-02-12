@@ -62,3 +62,62 @@ class VersionRollbackRequest(BaseModel):
         default=True,
         description="回滚前是否创建当前状态快照"
     )
+
+
+class VersionDiffInfo(BaseModel):
+    """版本差异中的版本信息"""
+    id: str
+    version_number: int
+    created_at: str
+    change_type: str
+
+
+class ChapterChange(BaseModel):
+    """章节变更记录"""
+    type: str = Field(..., description="变更类型: added, deleted, modified")
+    chapter_id: str = Field(..., description="章节 ID")
+    chapter_number: str | None = Field(None, description="章节编号")
+    title: str | None = Field(None, description="章节标题")
+    old_content: str | None = Field(None, description="旧内容")
+    new_content: str | None = Field(None, description="新内容")
+    old_title: str | None = Field(None, description="旧标题")
+    new_title: str | None = Field(None, description="新标题")
+    content_changed: bool | None = Field(None, description="内容是否变化")
+    title_changed: bool | None = Field(None, description="标题是否变化")
+
+
+class VersionDiffSummary(BaseModel):
+    """版本差异摘要"""
+    total_changes: int = Field(..., description="总变更数")
+    added: int = Field(..., description="新增章节数")
+    deleted: int = Field(..., description="删除章节数")
+    modified: int = Field(..., description="修改章节数")
+    changes: list[ChapterChange] = Field(default_factory=list, description="变更列表")
+
+
+class VersionDiffResponse(BaseModel):
+    """版本差异对比响应"""
+    v1: VersionDiffInfo = Field(..., description="版本1信息")
+    v2: VersionDiffInfo = Field(..., description="版本2信息")
+    diff: VersionDiffSummary | dict[str, Any] = Field(..., description="差异结果")
+
+
+class RestoredChapter(BaseModel):
+    """恢复的章节信息"""
+    id: str
+    chapter_number: str
+    action: str = Field(..., description="操作类型: updated")
+
+
+class VersionRollbackResponse(BaseModel):
+    """版本回滚响应"""
+    success: bool = Field(..., description="是否成功")
+    target_version_number: int | None = Field(None, description="目标版本号")
+    new_version_id: str | None = Field(None, description="新创建的版本 ID")
+    new_version_number: int | None = Field(None, description="新版本号")
+    pre_snapshot_id: str | None = Field(None, description="回滚前快照 ID")
+    restored_chapters: list[RestoredChapter] = Field(
+        default_factory=list,
+        description="恢复的章节列表"
+    )
+    error: str | None = Field(None, description="错误信息")
