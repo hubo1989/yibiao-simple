@@ -3,10 +3,10 @@
   "sessionId": "c195db03-f5d5-4903-92dc-e8b68263b4a9",
   "status": "running",
   "startedAt": "2026-02-12T01:20:33.720Z",
-  "updatedAt": "2026-02-12T10:48:56.809Z",
-  "currentIteration": 22,
+  "updatedAt": "2026-02-12T12:42:20.124Z",
+  "currentIteration": 23,
   "maxIterations": 10,
-  "tasksCompleted": 22,
+  "tasksCompleted": 23,
   "isPaused": false,
   "agentPlugin": "claude",
   "trackerState": {
@@ -161,8 +161,8 @@
       {
         "id": "US-025",
         "title": "前端：AI 校对结果展示和审阅交互",
-        "status": "open",
-        "completedInSession": false
+        "status": "completed",
+        "completedInSession": true
       },
       {
         "id": "US-026",
@@ -410,6 +410,16 @@
       "durationMs": 863001,
       "startedAt": "2026-02-12T10:01:43.335Z",
       "endedAt": "2026-02-12T10:16:06.336Z"
+    },
+    {
+      "iteration": 23,
+      "status": "completed",
+      "taskId": "US-025",
+      "taskTitle": "前端：AI 校对结果展示和审阅交互",
+      "taskCompleted": true,
+      "durationMs": 1021451,
+      "startedAt": "2026-02-12T10:31:55.355Z",
+      "endedAt": "2026-02-12T10:48:56.806Z"
     }
   ],
   "skippedTaskIds": [],
