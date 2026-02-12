@@ -3,10 +3,10 @@
   "sessionId": "c195db03-f5d5-4903-92dc-e8b68263b4a9",
   "status": "running",
   "startedAt": "2026-02-12T01:20:33.720Z",
-  "updatedAt": "2026-02-12T12:51:58.311Z",
-  "currentIteration": 24,
+  "updatedAt": "2026-02-12T20:05:34.641Z",
+  "currentIteration": 25,
   "maxIterations": 10,
-  "tasksCompleted": 24,
+  "tasksCompleted": 25,
   "isPaused": false,
   "agentPlugin": "claude",
   "trackerState": {
@@ -173,8 +173,8 @@
       {
         "id": "US-027",
         "title": "Docker Compose 部署配置",
-        "status": "open",
-        "completedInSession": false
+        "status": "completed",
+        "completedInSession": true
       },
       {
         "id": "US-028",
@@ -430,6 +430,16 @@
       "durationMs": 740081,
       "startedAt": "2026-02-12T12:30:00.040Z",
       "endedAt": "2026-02-12T12:42:20.121Z"
+    },
+    {
+      "iteration": 25,
+      "status": "completed",
+      "taskId": "US-027",
+      "taskTitle": "Docker Compose 部署配置",
+      "taskCompleted": true,
+      "durationMs": 501080,
+      "startedAt": "2026-02-12T12:43:37.229Z",
+      "endedAt": "2026-02-12T12:51:58.309Z"
     }
   ],
   "skippedTaskIds": [],
