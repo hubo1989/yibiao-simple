@@ -15,6 +15,16 @@ from ..models.api_key_config import ApiKeyConfig
 from ..db.database import async_session_factory
 
 
+# 校对结果类型定义
+PROOFREAD_ISSUE_SCHEMA = {
+    "severity": "critical|warning|info",
+    "category": "compliance|language|consistency|redundancy",
+    "position": "问题所在位置描述",
+    "issue": "问题描述",
+    "suggestion": "修改建议"
+}
+
+
 class OpenAIService:
     """OpenAI服务类"""
 
@@ -453,3 +463,106 @@ class OpenAIService:
         )
 
         return json.loads(full_content.strip())
+
+    async def proofread_chapter(
+        self,
+        chapter_title: str,
+        chapter_content: str,
+        tech_requirements: str,
+        sibling_chapter_titles: list[str] | None = None,
+        project_overview: str | None = None,
+    ) -> AsyncGenerator[str, None]:
+        """
+        校对章节内容，检查合规性、语言质量和一致性问题
+
+        Args:
+            chapter_title: 章节标题
+            chapter_content: 章节内容
+            tech_requirements: 招标文件的评分要求
+            sibling_chapter_titles: 同级章节标题列表（用于检查重复）
+            project_overview: 项目概述信息
+
+        Yields:
+            流式返回的校对结果（JSON 格式）
+        """
+        schema_json = json.dumps({
+            "issues": [
+                PROOFREAD_ISSUE_SCHEMA
+            ],
+            "summary": "整体问题摘要"
+        })
+
+        # 构建同级章节信息
+        sibling_info = ""
+        if sibling_chapter_titles:
+            sibling_info = f"""
+<同级章节标题>
+{chr(10).join(f'- {title}' for title in sibling_chapter_titles)}
+</同级章节标题>
+"""
+
+        project_info = ""
+        if project_overview:
+            project_info = f"""
+<项目概述>
+{project_overview}
+</项目概述>
+"""
+
+        system_prompt = f"""### 角色
+你是专业的标书审核专家，负责检查标书内容的质量问题。
+
+### 任务
+对提供的章节内容进行全面校对，识别以下类型的问题：
+
+1. **合规性问题 (compliance)**: 内容是否符合招标文件的评分要求和技术规范
+2. **语言质量问题 (language)**: 语法错误、表达不当、用词不准确等
+3. **一致性问题 (consistency)**: 内容前后矛盾、数据不一致、逻辑混乱
+4. **冗余问题 (redundancy)**: 与同级章节内容重复、不必要的重复表述
+
+### 严重程度定义
+- **critical**: 严重问题，可能导致失分或被废标
+- **warning**: 一般问题，建议修改以提高质量
+- **info**: 轻微问题或优化建议
+
+### 输出格式
+返回 JSON 格式，包含 issues 数组和 summary 摘要：
+{schema_json}
+
+### 注意事项
+- 问题定位要准确，position 描述应能让用户快速定位
+- 修改建议要具体可操作
+- 如果没有发现问题，返回空数组
+"""
+
+        user_prompt = f"""### 项目信息
+{project_info}
+<招标文件评分要求>
+{tech_requirements}
+</招标文件评分要求>
+{sibling_info}
+
+### 待校对章节
+<章节标题>
+{chapter_title}
+</章节标题>
+
+<章节内容>
+{chapter_content}
+</章节内容>
+
+请根据招标文件的评分要求对上述内容进行全面校对，输出 JSON 格式的校对结果。
+"""
+
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt}
+        ]
+
+        # 流式返回校对结果
+        async for chunk in self.stream_chat_completion(
+            messages,
+            temperature=0.3,  # 较低温度以获得更稳定的校对结果
+            response_format={"type": "json_object"}
+        ):
+            yield chunk

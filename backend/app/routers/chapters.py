@@ -1,21 +1,25 @@
 """章节相关 API 路由 - 包含锁定机制和状态流转"""
 import uuid
+import json
 from datetime import datetime, timedelta, timezone
-from typing import Annotated
+from typing import Annotated, AsyncGenerator
 
 from fastapi import APIRouter, HTTPException, Depends, status
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import select, and_, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..models.chapter import Chapter, ChapterStatus
-from ..models.project import project_members, ProjectMemberRole
+from ..models.project import project_members, ProjectMemberRole, Project
 from ..models.version import ProjectVersion, ChangeType
 from ..models.user import User, UserRole
 from ..models.operation_log import OperationLog, ActionType
+from ..models.proofread_result import ProofreadResult, IssueSeverity, IssueCategory
 from ..db.database import get_db
 from ..auth.dependencies import require_editor, get_current_active_user
 from ..services.version_service import VersionService
+from ..services.openai_service import OpenAIService
 
 router = APIRouter(prefix="/api/chapters", tags=["章节管理"])
 
@@ -587,4 +591,216 @@ async def update_chapter_status(
         old_status=old_status.value,
         new_status=new_status.value,
         message=f"章节状态已从 {old_status.value} 更新为 {new_status.value}",
+    )
+
+
+# ============ 校对 API Schemas ============
+
+class ProofreadIssueItem(BaseModel):
+    """单个校对问题"""
+    severity: str = Field(..., description="严重程度: critical/warning/info")
+    category: str = Field(..., description="问题类别: compliance/language/consistency/redundancy")
+    position: str = Field(..., description="问题所在位置描述")
+    issue: str = Field(..., description="问题描述")
+    suggestion: str = Field(..., description="修改建议")
+
+
+class ProofreadResultData(BaseModel):
+    """校对结果数据"""
+    issues: list[ProofreadIssueItem] = Field(default_factory=list, description="问题列表")
+    summary: str = Field(default="", description="整体问题摘要")
+
+
+class ProofreadResponse(BaseModel):
+    """校对响应"""
+    id: str
+    chapter_id: str
+    project_id: str
+    issues: list[ProofreadIssueItem]
+    summary: str
+    issue_count: int
+    critical_count: int
+    status_changed: bool = Field(..., description="章节状态是否已变为 reviewing")
+    created_at: str
+
+
+# ============ 校对 API Endpoint ============
+
+@router.post("/{chapter_id}/proofread")
+async def proofread_chapter(
+    chapter_id: uuid.UUID,
+    current_user: Annotated[User, Depends(require_editor)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """
+    触发章节校对（流式返回结果）
+
+    - 使用 AI 对章节内容进行合规性检查和语言质量校对
+    - 校对结果保存到数据库
+    - 校对完成后章节状态自动变为 reviewing
+    - 返回 SSE 流式响应
+    """
+    # 获取章节
+    result = await db.execute(select(Chapter).where(Chapter.id == chapter_id))
+    chapter = result.scalar_one_or_none()
+
+    if not chapter:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="章节不存在",
+        )
+
+    # 验证项目成员资格
+    role = await _verify_project_member(chapter.project_id, current_user.id, db)
+    if role is None:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="您不是该项目的成员",
+        )
+
+    # 检查章节是否有内容
+    if not chapter.content:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="章节内容为空，无法校对",
+        )
+
+    # 获取项目信息（包含评分要求）
+    project_result = await db.execute(select(Project).where(Project.id == chapter.project_id))
+    project = project_result.scalar_one_or_none()
+
+    if not project:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="项目不存在",
+        )
+
+    # 获取同级章节标题
+    sibling_titles = []
+    if chapter.parent_id:
+        # 有父章节，获取同级章节
+        sibling_result = await db.execute(
+            select(Chapter.title).where(
+                and_(
+                    Chapter.parent_id == chapter.parent_id,
+                    Chapter.id != chapter_id,
+                )
+            ).order_by(Chapter.order_index)
+        )
+        sibling_titles = [row[0] for row in sibling_result.fetchall()]
+    elif chapter.parent_id is None:
+        # 一级章节，获取其他一级章节
+        sibling_result = await db.execute(
+            select(Chapter.title).where(
+                and_(
+                    Chapter.project_id == chapter.project_id,
+                    Chapter.parent_id.is_(None),
+                    Chapter.id != chapter_id,
+                )
+            ).order_by(Chapter.order_index)
+        )
+        sibling_titles = [row[0] for row in sibling_result.fetchall()]
+
+    # 准备校对参数
+    tech_requirements = project.tech_requirements or ""
+    project_overview = project.project_overview or ""
+
+    async def generate_proofread_stream() -> AsyncGenerator[str, None]:
+        """生成流式校对结果"""
+        openai_service = OpenAIService(db)
+        full_content = ""
+
+        try:
+            async for chunk in openai_service.proofread_chapter(
+                chapter_title=chapter.title,
+                chapter_content=chapter.content,
+                tech_requirements=tech_requirements,
+                sibling_chapter_titles=sibling_titles,
+                project_overview=project_overview,
+            ):
+                full_content += chunk
+                # 发送 SSE 事件
+                yield f"data: {json.dumps({'chunk': chunk}, ensure_ascii=False)}\n\n"
+
+            # 解析校对结果
+            try:
+                result_data = json.loads(full_content.strip())
+                issues = result_data.get("issues", [])
+                summary = result_data.get("summary", "")
+            except json.JSONDecodeError:
+                issues = []
+                summary = "校对结果解析失败"
+                full_content = json.dumps({"issues": [], "summary": summary}, ensure_ascii=False)
+
+            # 统计问题数量
+            issue_count = len(issues)
+            critical_count = sum(1 for i in issues if i.get("severity") == "critical")
+
+            # 保存校对结果到数据库
+            proofread_result = ProofreadResult(
+                chapter_id=chapter.id,
+                project_id=chapter.project_id,
+                issues=json.dumps(issues, ensure_ascii=False),
+                summary=summary,
+                issue_count=issue_count,
+                critical_count=critical_count,
+            )
+            db.add(proofread_result)
+
+            # 更新章节状态为 reviewing
+            old_status = chapter.status
+            status_changed = False
+            if chapter.status != ChapterStatus.REVIEWING:
+                chapter.status = ChapterStatus.REVIEWING
+                chapter.updated_at = datetime.now(timezone.utc)
+                status_changed = True
+
+            # 记录操作日志
+            log_entry = OperationLog(
+                user_id=current_user.id,
+                project_id=chapter.project_id,
+                action=ActionType.AI_PROOFREAD,
+                detail={
+                    "chapter_id": str(chapter.id),
+                    "chapter_number": chapter.chapter_number,
+                    "chapter_title": chapter.title,
+                    "issue_count": issue_count,
+                    "critical_count": critical_count,
+                    "status_changed": status_changed,
+                    "old_status": old_status.value if status_changed else None,
+                    "new_status": ChapterStatus.REVIEWING.value if status_changed else None,
+                },
+            )
+            db.add(log_entry)
+
+            await db.commit()
+
+            # 发送最终结果
+            final_result = {
+                "done": True,
+                "result": {
+                    "id": str(proofread_result.id),
+                    "chapter_id": str(chapter.id),
+                    "project_id": str(chapter.project_id),
+                    "issues": issues,
+                    "summary": summary,
+                    "issue_count": issue_count,
+                    "critical_count": critical_count,
+                    "status_changed": status_changed,
+                    "created_at": proofread_result.created_at.isoformat(),
+                }
+            }
+            yield f"data: {json.dumps(final_result, ensure_ascii=False)}\n\n"
+
+        except Exception as e:
+            yield f"data: {json.dumps({'error': str(e)}, ensure_ascii=False)}\n\n"
+
+    return StreamingResponse(
+        generate_proofread_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        }
     )
