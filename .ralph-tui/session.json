@@ -3,10 +3,10 @@
   "sessionId": "c195db03-f5d5-4903-92dc-e8b68263b4a9",
   "status": "running",
   "startedAt": "2026-02-12T01:20:33.720Z",
-  "updatedAt": "2026-02-12T10:16:06.341Z",
-  "currentIteration": 21,
+  "updatedAt": "2026-02-12T10:48:56.809Z",
+  "currentIteration": 22,
   "maxIterations": 10,
-  "tasksCompleted": 21,
+  "tasksCompleted": 22,
   "isPaused": false,
   "agentPlugin": "claude",
   "trackerState": {
@@ -155,8 +155,8 @@
       {
         "id": "US-024",
         "title": "前端：章节状态流转和协作 UI",
-        "status": "open",
-        "completedInSession": false
+        "status": "completed",
+        "completedInSession": true
       },
       {
         "id": "US-025",
@@ -400,6 +400,16 @@
       "durationMs": 465193,
       "startedAt": "2026-02-12T09:41:23.969Z",
       "endedAt": "2026-02-12T09:49:09.162Z"
+    },
+    {
+      "iteration": 22,
+      "status": "completed",
+      "taskId": "US-024",
+      "taskTitle": "前端：章节状态流转和协作 UI",
+      "taskCompleted": true,
+      "durationMs": 863001,
+      "startedAt": "2026-02-12T10:01:43.335Z",
+      "endedAt": "2026-02-12T10:16:06.336Z"
     }
   ],
   "skippedTaskIds": [],
