@@ -1,14 +1,22 @@
 """配置相关API路由"""
-from fastapi import APIRouter, HTTPException
+from typing import Annotated
+
+from fastapi import APIRouter, HTTPException, Depends
+
 from ..models.schemas import ConfigRequest, ConfigResponse, ModelListResponse
+from ..models.user import User
 from ..services.openai_service import OpenAIService
 from ..utils.config_manager import config_manager
+from ..auth.dependencies import require_editor
 
 router = APIRouter(prefix="/api/config", tags=["配置管理"])
 
 
 @router.post("/save", response_model=ConfigResponse)
-async def save_config(config: ConfigRequest):
+async def save_config(
+    config: ConfigRequest,
+    current_user: Annotated[User, Depends(require_editor)],
+):
     """保存OpenAI配置"""
     try:
         success = config_manager.save_config(
@@ -27,7 +35,9 @@ async def save_config(config: ConfigRequest):
 
 
 @router.get("/load", response_model=dict)
-async def load_config():
+async def load_config(
+    current_user: Annotated[User, Depends(require_editor)],
+):
     """加载保存的配置（API Key 脱敏返回）"""
     try:
         config = config_manager.load_config()
@@ -45,7 +55,10 @@ async def load_config():
 
 
 @router.post("/models", response_model=ModelListResponse)
-async def get_available_models(config: ConfigRequest):
+async def get_available_models(
+    config: ConfigRequest,
+    current_user: Annotated[User, Depends(require_editor)],
+):
     """获取可用的模型列表"""
     try:
         if not config.api_key:

@@ -1,11 +1,17 @@
 """文档处理相关API路由"""
-from fastapi import APIRouter, UploadFile, File, HTTPException
+from typing import Annotated
+
+from fastapi import APIRouter, UploadFile, File, HTTPException, Depends
 from fastapi.responses import StreamingResponse
+
 from ..models.schemas import FileUploadResponse, AnalysisRequest, AnalysisType, WordExportRequest
+from ..models.user import User
 from ..services.file_service import FileService
 from ..services.openai_service import OpenAIService
 from ..utils.config_manager import config_manager
 from ..utils.sse import sse_response
+from ..auth.dependencies import require_editor
+
 import json
 import io
 import re
@@ -33,7 +39,10 @@ def set_paragraph_font_simsun(paragraph: docx.text.paragraph.Paragraph) -> None:
 
 
 @router.post("/upload", response_model=FileUploadResponse)
-async def upload_file(file: UploadFile = File(...)):
+async def upload_file(
+    file: UploadFile = File(...),
+    current_user: Annotated[User, Depends(require_editor)] = None,
+):
     """上传文档文件并提取文本内容"""
     try:
         # 检查文件类型（Content-Type + magic bytes 双重校验）
@@ -76,7 +85,10 @@ async def upload_file(file: UploadFile = File(...)):
 
 
 @router.post("/analyze-stream")
-async def analyze_document_stream(request: AnalysisRequest):
+async def analyze_document_stream(
+    request: AnalysisRequest,
+    current_user: Annotated[User, Depends(require_editor)] = None,
+):
     """流式分析文档内容"""
     try:
         # 加载配置
@@ -167,7 +179,10 @@ async def analyze_document_stream(request: AnalysisRequest):
 
 
 @router.post("/export-word")
-async def export_word(request: WordExportRequest):
+async def export_word(
+    request: WordExportRequest,
+    current_user: Annotated[User, Depends(require_editor)] = None,
+):
     """根据目录数据导出Word文档"""
     try:
         doc = docx.Document()

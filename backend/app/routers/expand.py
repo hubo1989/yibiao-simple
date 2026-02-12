@@ -1,14 +1,23 @@
-from fastapi import APIRouter, UploadFile, File, HTTPException
+"""标书扩写相关API路由"""
+from typing import Annotated
+
+from fastapi import APIRouter, UploadFile, File, HTTPException, Depends
+
 from ..models.schemas import FileUploadResponse
+from ..models.user import User
 from ..services.file_service import FileService
 from ..utils import prompt_manager
 from ..services.openai_service import OpenAIService
+from ..auth.dependencies import require_editor
 
 router = APIRouter(prefix="/api/expand", tags=["标书扩写"])
 
 
 @router.post("/upload", response_model=FileUploadResponse)
-async def upload_file(file: UploadFile = File(...)):
+async def upload_file(
+    file: UploadFile = File(...),
+    current_user: Annotated[User, Depends(require_editor)] = None,
+):
     """上传文档文件并提取文本内容"""
     try:
         # 检查文件类型

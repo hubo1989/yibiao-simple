@@ -3,15 +3,18 @@
 提供搜索API接口
 """
 
-from fastapi import APIRouter, HTTPException, Query
-from typing import List, Optional
+from typing import Annotated, List, Optional
+
+from fastapi import APIRouter, HTTPException, Query, Depends
 from pydantic import BaseModel
 from urllib.parse import urlparse
 import ipaddress
 import socket
 import logging
 
+from ..models.user import User
 from ..services.search_service import search_service
+from ..auth.dependencies import require_reviewer
 
 logger = logging.getLogger(__name__)
 
@@ -51,7 +54,10 @@ class UrlContentResponse(BaseModel):
     content: str
 
 @router.post("/", response_model=SearchResponse, summary="执行搜索")
-async def search_documents(request: SearchRequest):
+async def search_documents(
+    request: SearchRequest,
+    current_user: Annotated[User, Depends(require_reviewer)] = None,
+):
     """
     执行搜索查询
     
@@ -102,7 +108,8 @@ async def search_documents_get(
     query: str = Query(..., description="搜索关键词"),
     max_results: int = Query(5, description="最大结果数量", ge=1, le=20),
     safe_search: str = Query("moderate", description="安全搜索级别"),
-    region: str = Query("cn", description="搜索区域")
+    region: str = Query("cn", description="搜索区域"),
+    current_user: Annotated[User, Depends(require_reviewer)] = None,
 ):
     """
     执行搜索查询（GET方式）
@@ -125,7 +132,10 @@ async def search_documents_get(
     return await search_documents(request)
 
 @router.post("/formatted", summary="获取格式化搜索结果")
-async def search_formatted(request: SearchRequest):
+async def search_formatted(
+    request: SearchRequest,
+    current_user: Annotated[User, Depends(require_reviewer)] = None,
+):
     """
     执行搜索并返回格式化的文本结果
     
@@ -191,7 +201,10 @@ def _is_private_url(url: str) -> bool:
 
 
 @router.post("/load-url", response_model=UrlContentResponse, summary="读取URL内容")
-async def load_url_content(request: UrlContentRequest):
+async def load_url_content(
+    request: UrlContentRequest,
+    current_user: Annotated[User, Depends(require_reviewer)] = None,
+):
     """
     读取网页链接内容
     
