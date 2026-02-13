@@ -1,0 +1,70 @@
+# Git
+.git
+.gitignore
+
+# Python
+__pycache__
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info
+.eggs
+*.egg
+.pytest_cache
+.mypy_cache
+.ruff_cache
+
+# Node
+node_modules
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Build outputs
+frontend/build
+frontend/.next
+backend/dist
+
+# Environment files
+.env
+.env.local
+.env.*.local
+
+# IDE
+.idea
+.vscode
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Docker
+docker-compose*.yml
+Dockerfile*
+.docker
+
+# Documentation
+*.md
+docs/
+
+# Tests
+tests/
+frontend/src/**/*.test.ts
+frontend/src/**/*.test.tsx
+backend/tests/
+
+# Uploads (不需要打包)
+uploads/
+
+# Logs
+*.log
+logs/
+
+# Temporary files
+tmp/
+temp/
+*.tmp

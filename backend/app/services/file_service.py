@@ -4,13 +4,12 @@ import os
 import time
 import gc
 import io
+import base64
 from datetime import datetime
 from typing import Optional, List, Dict, Tuple
 import PyPDF2
 import docx
 from fastapi import UploadFile
-import aiohttp
-import asyncio
 from ..config import settings
 
 # 新增的第三方库
@@ -28,34 +27,13 @@ except ImportError as e:
 class FileService:
     """文件处理服务"""
 
-    # 图片上传配置
-    IMAGE_UPLOAD_URL = "https://mt.agnet.top/image/upload"
-    IMAGE_UPLOAD_TIMEOUT = 30  # 超时时间（秒）
-
     @staticmethod
-    async def upload_image_to_server(image_data: bytes, filename: str) -> Optional[str]:
-        """上传图片到外部服务器"""
-        try:
-            # 准备multipart/form-data格式的数据
-            form_data = aiohttp.FormData()
-            form_data.add_field('file',
-                              io.BytesIO(image_data),
-                              filename=filename,
-                              content_type='image/jpeg')
-
-            timeout = aiohttp.ClientTimeout(total=FileService.IMAGE_UPLOAD_TIMEOUT)
-            async with aiohttp.ClientSession(timeout=timeout) as session:
-                async with session.post(FileService.IMAGE_UPLOAD_URL, data=form_data) as response:
-                    if response.status == 200:
-                        result = await response.json()
-                        # 根据实际API返回格式获取图片URL
-                        return result.get('file_url')
-                    else:
-                        print(f"图片上传失败，状态码: {response.status}")
-                        return None
-        except Exception as e:
-            print(f"图片上传异常: {str(e)}")
-            return None
+    def image_to_data_uri(image_data: bytes, ext: str = "jpg") -> str:
+        """将图片数据转换为 data URI（本地内联，不外传）"""
+        mime_map = {"jpg": "image/jpeg", "jpeg": "image/jpeg", "png": "image/png", "gif": "image/gif", "bmp": "image/bmp"}
+        mime = mime_map.get(ext.lower(), "image/jpeg")
+        b64 = base64.b64encode(image_data).decode("utf-8")
+        return f"data:{mime};base64,{b64}"
 
     @staticmethod
     def extract_images_from_pdf(file_path: str) -> List[Tuple[bytes, str, int, int]]:
@@ -239,22 +217,17 @@ class FileService:
 
                             for i, match in enumerate(img_matches):
                                 if i < len(page_images):
-                                    # 获取对应的图片数据
                                     img_data, ext, img_index = page_images[i]
-                                    filename = f"pdf_page{page_num}_img{img_index}.{ext}"
 
-                                    # 上传图片
-                                    image_url = await FileService.upload_image_to_server(img_data, filename)
+                                    # 本地转换为 data URI，不外传
+                                    image_url = FileService.image_to_data_uri(img_data, ext)
 
-                                    if image_url:
-                                        # 替换图片标记
-                                        old_mark = match.group()
-                                        new_mark = f"[图片{global_img_counter}]"
-                                        processed_text = processed_text.replace(old_mark, new_mark, 1)
+                                    old_mark = match.group()
+                                    new_mark = f"[图片{global_img_counter}]"
+                                    processed_text = processed_text.replace(old_mark, new_mark, 1)
 
-                                        # 记录图片引用
-                                        image_references.append(f"[图片{global_img_counter}]: {image_url}")
-                                        global_img_counter += 1
+                                    image_references.append(f"[图片{global_img_counter}]: {image_url}")
+                                    global_img_counter += 1
 
                             extracted_text.append(processed_text)
                         else:
@@ -387,22 +360,17 @@ class FileService:
 
                                         for match in img_matches:
                                             if global_img_counter <= len(all_images):
-                                                # 获取对应的图片数据
                                                 img_data, ext, img_index = all_images[global_img_counter - 1]
-                                                filename = f"docx_img{global_img_counter}.{ext}"
 
-                                                # 上传图片
-                                                image_url = await FileService.upload_image_to_server(img_data, filename)
+                                                # 本地转换为 data URI，不外传
+                                                image_url = FileService.image_to_data_uri(img_data, ext)
 
-                                                if image_url:
-                                                    # 替换图片标记
-                                                    old_mark = match.group()
-                                                    new_mark = f"[图片{global_img_counter}]"
-                                                    processed_text = processed_text.replace(old_mark, new_mark, 1)
+                                                old_mark = match.group()
+                                                new_mark = f"[图片{global_img_counter}]"
+                                                processed_text = processed_text.replace(old_mark, new_mark, 1)
 
-                                                    # 记录图片引用
-                                                    image_references.append(f"[图片{global_img_counter}]: {image_url}")
-                                                    global_img_counter += 1
+                                                image_references.append(f"[图片{global_img_counter}]: {image_url}")
+                                                global_img_counter += 1
 
                                         extracted_text.append(processed_text)
                                     else:
@@ -451,22 +419,17 @@ class FileService:
 
                         for match in img_matches:
                             if global_img_counter <= len(all_images):
-                                # 获取对应的图片数据
                                 img_data, ext, img_index = all_images[global_img_counter - 1]
-                                filename = f"docx_img{global_img_counter}.{ext}"
 
-                                # 上传图片
-                                image_url = await FileService.upload_image_to_server(img_data, filename)
+                                # 本地转换为 data URI，不外传
+                                image_url = FileService.image_to_data_uri(img_data, ext)
 
-                                if image_url:
-                                    # 替换图片标记
-                                    old_mark = match.group()
-                                    new_mark = f"[图片{global_img_counter}]"
-                                    processed_text = processed_text.replace(old_mark, new_mark, 1)
+                                old_mark = match.group()
+                                new_mark = f"[图片{global_img_counter}]"
+                                processed_text = processed_text.replace(old_mark, new_mark, 1)
 
-                                    # 记录图片引用
-                                    image_references.append(f"[图片{global_img_counter}]: {image_url}")
-                                    global_img_counter += 1
+                                image_references.append(f"[图片{global_img_counter}]: {image_url}")
+                                global_img_counter += 1
 
                         extracted_text.append(processed_text)
                     else:

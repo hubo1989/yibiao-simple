@@ -1,0 +1,644 @@
+{
+  "name": "AI写标书助手企业化升级",
+  "description": "将单机工具型AI写标书助手升级为支持多用户、权限管理、协作、版本控制、AI校对和后台管理的企业级Web应用",
+  "branchName": "ralph/enterprise-upgrade",
+  "userStories": [
+    {
+      "id": "US-001",
+      "title": "引入 PostgreSQL 数据库和 SQLAlchemy ORM 基础设施",
+      "description": "As a developer, I need a relational database layer so that the app can support multi-user persistent data storage.",
+      "acceptanceCriteria": [
+        "安装 sqlalchemy, asyncpg, alembic 依赖并更新 requirements.txt",
+        "在 backend/app/db/ 下创建 database.py（异步引擎、session factory）",
+        "创建 backend/app/db/base.py 定义 Base declarative model",
+        "在 backend/app/config.py 中增加 DATABASE_URL 配置项，支持环境变量覆盖",
+        "初始化 Alembic 迁移目录 backend/alembic/",
+        "应用启动时自动连接数据库，关闭时释放连接池",
+        "cd backend && pytest passes",
+        "类型检查通过"
+      ],
+      "priority": 1,
+      "passes": true,
+      "notes": "PostgreSQL 为主，开发环境可用 SQLite 降级",
+      "dependsOn": [],
+      "completionNotes": "Completed by agent"
+    },
+    {
+      "id": "US-002",
+      "title": "创建 users 表和用户模型",
+      "description": "As a developer, I need a users table to store user accounts with roles.",
+      "acceptanceCriteria": [
+        "创建 backend/app/models/user.py 定义 User ORM 模型",
+        "字段包含：id (UUID), username (unique), email (unique), hashed_password, role (enum: admin/editor/reviewer), is_active, created_at, updated_at",
+        "创建 Alembic 迁移脚本并成功执行",
+        "创建 backend/app/schemas/user.py 定义 UserCreate, UserResponse 等 Pydantic schema",
+        "cd backend && pytest passes",
+        "类型检查通过"
+      ],
+      "priority": 1,
+      "passes": true,
+      "notes": "",
+      "dependsOn": [
+        "US-001"
+      ],
+      "completionNotes": "Completed by agent"
+    },
+    {
+      "id": "US-003",
+      "title": "创建 projects 表和项目模型",
+      "description": "As a developer, I need a projects table to store bid proposal projects with ownership.",
+      "acceptanceCriteria": [
+        "创建 backend/app/models/project.py 定义 Project ORM 模型",
+        "字段包含：id (UUID), name, description, creator_id (FK->users), status (enum: draft/in_progress/reviewing/completed), file_content (原始招标文件文本), project_overview, tech_requirements, created_at, updated_at",
+        "创建 project_members 关联表（user_id, project_id, role）",
+        "创建 Alembic 迁移脚本并成功执行",
+        "创建对应 Pydantic schema",
+        "cd backend && pytest passes",
+        "类型检查通过"
+      ],
+      "priority": 1,
+      "passes": true,
+      "notes": "",
+      "dependsOn": [
+        "US-002"
+      ],
+      "completionNotes": "Completed by agent"
+    },
+    {
+      "id": "US-004",
+      "title": "创建 chapters 表和章节模型",
+      "description": "As a developer, I need a chapters table to persist outline and content data per project.",
+      "acceptanceCriteria": [
+        "创建 backend/app/models/chapter.py 定义 Chapter ORM 模型",
+        "字段包含：id (UUID), project_id (FK->projects), parent_id (自引用), chapter_number (如 1.2.3), title, content (TEXT), status (enum: pending/generated/reviewing/finalized), order_index, locked_by (FK->users, nullable), locked_at, created_at, updated_at",
+        "创建 Alembic 迁移脚本并成功执行",
+        "创建对应 Pydantic schema",
+        "cd backend && pytest passes",
+        "类型检查通过"
+      ],
+      "priority": 1,
+      "passes": true,
+      "notes": "",
+      "dependsOn": [
+        "US-003"
+      ],
+      "completionNotes": "Completed by agent"
+    },
+    {
+      "id": "US-005",
+      "title": "创建 project_versions 表和版本快照模型",
+      "description": "As a developer, I need a version snapshot table to track content changes over time.",
+      "acceptanceCriteria": [
+        "创建 backend/app/models/version.py 定义 ProjectVersion ORM 模型",
+        "字段包含：id (UUID), project_id (FK->projects), chapter_id (FK->chapters, nullable), version_number (auto increment per project), snapshot_data (JSONB, 存储章节内容快照), change_type (enum: ai_generate/manual_edit/proofread/rollback), change_summary, created_by (FK->users), created_at",
+        "创建 Alembic 迁移脚本并成功执行",
+        "创建对应 Pydantic schema",
+        "cd backend && pytest passes",
+        "类型检查通过"
+      ],
+      "priority": 1,
+      "passes": true,
+      "notes": "",
+      "dependsOn": [
+        "US-004"
+      ],
+      "completionNotes": "Completed by agent"
+    },
+    {
+      "id": "US-006",
+      "title": "创建 operation_logs 表和操作日志模型",
+      "description": "As a developer, I need an operation log table to record all significant user actions.",
+      "acceptanceCriteria": [
+        "创建 backend/app/models/operation_log.py 定义 OperationLog ORM 模型",
+        "字段包含：id (UUID), user_id (FK->users), project_id (FK->projects, nullable), action (str), detail (JSONB), ip_address, created_at",
+        "创建 Alembic 迁移脚本并成功执行",
+        "创建对应 Pydantic schema",
+        "cd backend && pytest passes",
+        "类型检查通过"
+      ],
+      "priority": 1,
+      "passes": true,
+      "notes": "",
+      "dependsOn": [
+        "US-005"
+      ],
+      "completionNotes": "Completed by agent"
+    },
+    {
+      "id": "US-007",
+      "title": "实现 JWT 认证：注册、登录、Token 签发与验证",
+      "description": "As a user, I want to register and log in so that my data is secure and isolated.",
+      "acceptanceCriteria": [
+        "安装 python-jose, passlib[bcrypt] 依赖",
+        "创建 backend/app/auth/ 模块，包含 security.py（密码哈希、JWT 生成/验证）",
+        "创建 backend/app/routers/auth.py 路由：POST /api/auth/register, POST /api/auth/login, GET /api/auth/me",
+        "登录成功返回 access_token 和 refresh_token",
+        "Token 包含 user_id 和 role 信息",
+        "创建 get_current_user 依赖注入函数，从 Authorization header 解析 token",
+        "无效/过期 token 返回 401",
+        "密码使用 bcrypt 哈希存储，不明文",
+        "cd backend && pytest passes",
+        "类型检查通过"
+      ],
+      "priority": 2,
+      "passes": true,
+      "notes": "",
+      "dependsOn": [
+        "US-002"
+      ],
+      "completionNotes": "Completed by agent"
+    },
+    {
+      "id": "US-008",
+      "title": "实现角色权限中间件和路由保护",
+      "description": "As an admin, I want role-based access control so that different users have appropriate permissions.",
+      "acceptanceCriteria": [
+        "创建 require_role 依赖注入装饰器，支持 require_role('admin'), require_role('editor', 'admin') 等",
+        "为所有现有 API 路由添加认证保护（除 /health, /api/auth/login, /api/auth/register 外）",
+        "管理员可访问所有接口",
+        "编辑者可访问项目管理、文档处理、内容生成接口",
+        "审阅者只能访问项目查看、评论批注接口",
+        "未授权访问返回 403 并附带中文错误信息",
+        "cd backend && pytest passes",
+        "类型检查通过"
+      ],
+      "priority": 2,
+      "passes": true,
+      "notes": "",
+      "dependsOn": [
+        "US-007"
+      ],
+      "completionNotes": "Completed by agent"
+    },
+    {
+      "id": "US-009",
+      "title": "API Key 统一管理：后台配置替代前端输入",
+      "description": "As an admin, I want to manage API keys centrally so that regular users never see or handle keys.",
+      "acceptanceCriteria": [
+        "创建 backend/app/models/api_key_config.py 定义 ApiKeyConfig ORM 模型（id, provider, api_key_encrypted, base_url, model_name, is_default, created_by, created_at）",
+        "API Key 使用 Fernet 对称加密存储，加密密钥从环境变量读取",
+        "创建 backend/app/routers/admin.py：POST /api/admin/api-keys（新增）, GET /api/admin/api-keys（列表，Key 脱敏）, DELETE /api/admin/api-keys/{id}（删除）, PUT /api/admin/api-keys/{id}/default（设为默认）",
+        "仅 admin 角色可访问以上接口",
+        "修改 OpenAIService 从数据库读取默认 Key 配置，不再依赖本地 JSON 文件",
+        "移除 backend/app/routers/config.py 中旧的 config save/load 接口",
+        "cd backend && pytest passes",
+        "类型检查通过"
+      ],
+      "priority": 2,
+      "passes": true,
+      "notes": "",
+      "dependsOn": [
+        "US-008",
+        "US-006"
+      ],
+      "completionNotes": "Completed by agent"
+    },
+    {
+      "id": "US-010",
+      "title": "实现项目 CRUD API 和成员管理",
+      "description": "As an editor, I want to create and manage bid proposal projects so that my work is organized and persisted.",
+      "acceptanceCriteria": [
+        "创建 backend/app/routers/projects.py：POST /api/projects（创建项目）, GET /api/projects（我的项目列表）, GET /api/projects/{id}（项目详情）, PUT /api/projects/{id}（更新项目）, DELETE /api/projects/{id}（删除项目，仅创建者）",
+        "创建项目时自动将当前用户设为 creator 和 admin 成员",
+        "POST /api/projects/{id}/members（邀请成员）, DELETE /api/projects/{id}/members/{user_id}（移除成员）",
+        "用户只能看到自己参与的项目（数据隔离）",
+        "项目列表支持按状态和时间排序",
+        "cd backend && pytest passes",
+        "类型检查通过"
+      ],
+      "priority": 3,
+      "passes": true,
+      "notes": "",
+      "dependsOn": [
+        "US-008",
+        "US-003"
+      ],
+      "completionNotes": "Completed by agent"
+    },
+    {
+      "id": "US-011",
+      "title": "迁移文档上传和分析接口到项目上下文",
+      "description": "As a developer, I need to refactor document upload/analysis APIs to work within a project context.",
+      "acceptanceCriteria": [
+        "修改 POST /api/document/upload 接受 project_id 参数，文件内容保存到对应项目记录",
+        "修改 POST /api/document/analyze-stream 从项目记录读取 file_content",
+        "分析结果（project_overview, tech_requirements）保存到项目记录而非仅返回前端",
+        "验证用户是项目成员才能操作",
+        "旧接口保持向后兼容或返回友好提示",
+        "cd backend && pytest passes",
+        "类型检查通过"
+      ],
+      "priority": 3,
+      "passes": true,
+      "notes": "",
+      "dependsOn": [
+        "US-010"
+      ],
+      "completionNotes": "Completed by agent"
+    },
+    {
+      "id": "US-012",
+      "title": "迁移目录和内容生成接口到项目上下文",
+      "description": "As a developer, I need to refactor outline/content generation APIs to persist results in the database.",
+      "acceptanceCriteria": [
+        "修改目录生成接口，生成的目录结构保存为 chapters 表记录",
+        "修改内容生成接口，生成的正文保存到对应 chapter.content 字段",
+        "每次 AI 生成自动创建版本快照（调用 version 服务）",
+        "验证用户是项目的 editor 或 admin 才能触发生成",
+        "章节状态在生成后自动变为 generated",
+        "cd backend && pytest passes",
+        "类型检查通过"
+      ],
+      "priority": 3,
+      "passes": true,
+      "notes": "",
+      "dependsOn": [
+        "US-011",
+        "US-004",
+        "US-005"
+      ],
+      "completionNotes": "Completed by agent"
+    },
+    {
+      "id": "US-013",
+      "title": "实现版本快照服务：创建、列表、对比、回滚",
+      "description": "As an editor, I want to view version history and roll back changes so that I don't lose important edits.",
+      "acceptanceCriteria": [
+        "创建 backend/app/services/version_service.py",
+        "create_version(project_id, chapter_id, user_id, change_type, snapshot_data)：自动递增版本号",
+        "GET /api/projects/{id}/versions（项目版本列表，分页）",
+        "GET /api/projects/{id}/versions/{version_id}（版本详情，含完整快照）",
+        "GET /api/projects/{id}/versions/diff?v1=xxx&v2=yyy（两个版本间的 diff，返回章节级别差异）",
+        "POST /api/projects/{id}/versions/{version_id}/rollback（回滚到指定版本，自动创建新版本记录）",
+        "cd backend && pytest passes",
+        "类型检查通过"
+      ],
+      "priority": 3,
+      "passes": true,
+      "notes": "",
+      "dependsOn": [
+        "US-012"
+      ],
+      "completionNotes": "Completed by agent"
+    },
+    {
+      "id": "US-014",
+      "title": "实现章节锁定机制",
+      "description": "As an editor, I want chapters to be locked when someone is editing so that we don't overwrite each other's work.",
+      "acceptanceCriteria": [
+        "POST /api/chapters/{id}/lock：锁定章节（设置 locked_by 和 locked_at）",
+        "POST /api/chapters/{id}/unlock：解锁章节（仅锁定者或 admin 可解锁）",
+        "已锁定章节其他用户不能编辑，返回 409 Conflict 和锁定者信息",
+        "锁定超过 30 分钟自动过期（通过查询时检查实现）",
+        "PUT /api/chapters/{id}/content：保存章节内容时自动创建版本快照",
+        "cd backend && pytest passes",
+        "类型检查通过"
+      ],
+      "priority": 4,
+      "passes": true,
+      "notes": "",
+      "dependsOn": [
+        "US-012"
+      ],
+      "completionNotes": "Completed by agent"
+    },
+    {
+      "id": "US-015",
+      "title": "实现评论批注 API",
+      "description": "As a reviewer, I want to add comments on chapter content so that editors know what needs to be fixed.",
+      "acceptanceCriteria": [
+        "创建 backend/app/models/comment.py 定义 Comment ORM 模型（id, chapter_id, user_id, content, position_start, position_end, is_resolved, resolved_by, created_at）",
+        "创建 Alembic 迁移脚本",
+        "POST /api/chapters/{id}/comments（添加批注）",
+        "GET /api/chapters/{id}/comments（章节批注列表）",
+        "PUT /api/comments/{id}/resolve（标记已解决）",
+        "DELETE /api/comments/{id}（删除批注，仅作者或 admin）",
+        "审阅者和编辑者都可添加批注",
+        "cd backend && pytest passes",
+        "类型检查通过"
+      ],
+      "priority": 4,
+      "passes": true,
+      "notes": "",
+      "dependsOn": [
+        "US-012"
+      ],
+      "completionNotes": "Completed by agent"
+    },
+    {
+      "id": "US-016",
+      "title": "实现章节状态流转 API",
+      "description": "As an editor, I want to track chapter status through a workflow so that I know each chapter's progress.",
+      "acceptanceCriteria": [
+        "PUT /api/chapters/{id}/status 支持状态流转：pending -> generated -> reviewing -> finalized",
+        "状态转换有权限约束：editor 可以 pending->generated, generated->reviewing; reviewer 可以 reviewing->finalized 或 reviewing->generated (打回)",
+        "admin 可以任意转换状态",
+        "状态变更自动记录到 operation_logs",
+        "GET /api/projects/{id}/progress 返回项目整体进度（各状态章节数量统计）",
+        "cd backend && pytest passes",
+        "类型检查通过"
+      ],
+      "priority": 4,
+      "passes": true,
+      "notes": "",
+      "dependsOn": [
+        "US-014"
+      ],
+      "completionNotes": "Completed by agent"
+    },
+    {
+      "id": "US-017",
+      "title": "实现 AI 校对服务：合规性检查和语言质量",
+      "description": "As an editor, I want AI to proofread generated content so that quality issues are caught early.",
+      "acceptanceCriteria": [
+        "在 backend/app/services/openai_service.py 中新增 proofread_chapter 方法",
+        "校对 Prompt 包含：招标文件评分要求（从项目记录读取）、当前章节内容、同级章节标题",
+        "返回结构化的问题列表：[{severity: 'critical'|'warning'|'info', category: 'compliance'|'language'|'consistency'|'redundancy', position: str, issue: str, suggestion: str}]",
+        "POST /api/chapters/{id}/proofread（触发校对，流式返回结果）",
+        "校对结果保存到 chapter 记录或独立表",
+        "校对后章节状态自动变为 reviewing",
+        "cd backend && pytest passes",
+        "类型检查通过"
+      ],
+      "priority": 5,
+      "passes": true,
+      "notes": "",
+      "dependsOn": [
+        "US-012",
+        "US-016"
+      ],
+      "completionNotes": "Completed by agent"
+    },
+    {
+      "id": "US-018",
+      "title": "实现跨章节一致性审查",
+      "description": "As an editor, I want AI to check cross-chapter consistency so that the proposal doesn't contradict itself.",
+      "acceptanceCriteria": [
+        "在 openai_service.py 中新增 check_consistency 方法",
+        "Prompt 接收项目所有章节的摘要和关键承诺（术语、数据、时间线、质保等）",
+        "检测并报告跨章节矛盾（如不同章节中同一数据不一致）",
+        "POST /api/projects/{id}/consistency-check（项目级一致性检查）",
+        "返回结构化的矛盾列表，标明涉及的章节",
+        "cd backend && pytest passes",
+        "类型检查通过"
+      ],
+      "priority": 5,
+      "passes": true,
+      "notes": "",
+      "dependsOn": [
+        "US-017"
+      ],
+      "completionNotes": "Completed by agent"
+    },
+    {
+      "id": "US-019",
+      "title": "实现操作日志中间件和审计 API",
+      "description": "As an admin, I want all significant actions to be logged so that I can audit usage.",
+      "acceptanceCriteria": [
+        "创建 FastAPI 中间件，自动记录所有非 GET 请求到 operation_logs（用户、端点、耗时、IP）",
+        "关键业务操作（创建项目、AI 生成、导出文档、配置变更）额外记录详细信息",
+        "GET /api/admin/logs（操作日志查询，支持按用户/时间/操作类型筛选，分页）",
+        "仅 admin 可访问日志查询接口",
+        "日志不记录 request body 中的敏感信息（如密码）",
+        "cd backend && pytest passes",
+        "类型检查通过"
+      ],
+      "priority": 6,
+      "passes": true,
+      "notes": "",
+      "dependsOn": [
+        "US-008",
+        "US-006"
+      ],
+      "completionNotes": "Completed by agent"
+    },
+    {
+      "id": "US-020",
+      "title": "实现后台管理 API：用户管理和使用统计",
+      "description": "As an admin, I want to manage users and view usage statistics from a management API.",
+      "acceptanceCriteria": [
+        "GET /api/admin/users（用户列表，分页）",
+        "POST /api/admin/users（创建用户）",
+        "PUT /api/admin/users/{id}（修改角色、启用/禁用）",
+        "POST /api/admin/users/{id}/reset-password（重置密码）",
+        "GET /api/admin/stats（使用统计：总项目数、总用户数、本月生成次数、Token 消耗估算）",
+        "所有接口仅 admin 可访问",
+        "cd backend && pytest passes",
+        "类型检查通过"
+      ],
+      "priority": 6,
+      "passes": true,
+      "notes": "",
+      "dependsOn": [
+        "US-009"
+      ],
+      "completionNotes": "Completed by agent"
+    },
+    {
+      "id": "US-021",
+      "title": "前端：登录注册页面和认证状态管理",
+      "description": "As a user, I want a login page so that I can access the application securely.",
+      "acceptanceCriteria": [
+        "创建 frontend/src/pages/Login.tsx 登录页（用户名+密码表单）",
+        "创建 frontend/src/pages/Register.tsx 注册页（用户名+邮箱+密码）",
+        "创建 frontend/src/contexts/AuthContext.tsx 管理认证状态（token 存储、用户信息、登录/登出方法）",
+        "Token 存储在 httpOnly cookie 或 localStorage（配合 axios interceptor 自动附加 Authorization header）",
+        "未登录访问任何页面自动跳转到登录页",
+        "登录后根据角色显示/隐藏功能入口",
+        "cd frontend && npm test passes",
+        "cd frontend && npx tsc --noEmit passes"
+      ],
+      "priority": 7,
+      "passes": true,
+      "notes": "",
+      "dependsOn": [
+        "US-007"
+      ],
+      "completionNotes": "Completed by agent"
+    },
+    {
+      "id": "US-022",
+      "title": "前端：项目列表和项目管理页面",
+      "description": "As an editor, I want a project dashboard so that I can manage my bid proposals.",
+      "acceptanceCriteria": [
+        "创建 frontend/src/pages/ProjectList.tsx 显示我的项目列表（名称、状态、创建时间、成员数）",
+        "支持创建新项目（弹窗表单：项目名称、描述）",
+        "点击项目进入项目工作区（替代当前的单项目流程）",
+        "项目卡片显示进度（已定稿/总章节数）",
+        "修改 App.tsx 路由结构：/ -> ProjectList, /project/:id -> 项目工作区",
+        "移除 ConfigPanel.tsx 中的 API Key 输入（普通用户不再需要）",
+        "cd frontend && npm test passes",
+        "cd frontend && npx tsc --noEmit passes"
+      ],
+      "priority": 7,
+      "passes": true,
+      "notes": "",
+      "dependsOn": [
+        "US-021",
+        "US-010"
+      ],
+      "completionNotes": "Completed by agent"
+    },
+    {
+      "id": "US-023",
+      "title": "前端：版本历史和 Diff 对比页面",
+      "description": "As an editor, I want to view version history and compare changes so that I can track content evolution.",
+      "acceptanceCriteria": [
+        "创建 frontend/src/components/VersionHistory.tsx 侧边栏/抽屉组件",
+        "显示版本列表（版本号、操作者、变更类型、时间）",
+        "点击版本可预览该版本的章节内容",
+        "选择两个版本可查看 Diff 对比（使用 diff 库高亮增删改）",
+        "支持一键回滚到指定版本（确认弹窗）",
+        "cd frontend && npm test passes",
+        "cd frontend && npx tsc --noEmit passes"
+      ],
+      "priority": 7,
+      "passes": true,
+      "notes": "",
+      "dependsOn": [
+        "US-022",
+        "US-013"
+      ],
+      "completionNotes": "Completed by agent"
+    },
+    {
+      "id": "US-024",
+      "title": "前端：章节状态流转和协作 UI",
+      "description": "As a user, I want to see chapter status and collaborate with team members through comments.",
+      "acceptanceCriteria": [
+        "在 OutlineEdit/ContentEdit 页面为每个章节显示状态标签（待生成/已生成/校对中/已定稿）",
+        "显示章节锁定状态（谁在编辑，带头像或用户名）",
+        "编辑章节时自动调用锁定 API，离开时解锁",
+        "在章节内容旁显示批注列表，支持添加新批注和标记已解决",
+        "项目成员列表显示在项目工作区侧边栏",
+        "cd frontend && npm test passes",
+        "cd frontend && npx tsc --noEmit passes"
+      ],
+      "priority": 8,
+      "passes": true,
+      "notes": "",
+      "dependsOn": [
+        "US-022",
+        "US-014",
+        "US-015",
+        "US-016"
+      ],
+      "completionNotes": "Completed by agent"
+    },
+    {
+      "id": "US-025",
+      "title": "前端：AI 校对结果展示和审阅交互",
+      "description": "As a reviewer, I want to see AI proofreading results and act on suggestions.",
+      "acceptanceCriteria": [
+        "在 ContentEdit 页面为每个章节增加「校对」按钮",
+        "校对结果以侧边栏展示问题列表（严重程度颜色标记：红/黄/蓝）",
+        "每个问题项显示：类别、位置、问题描述、建议修改",
+        "支持一键接受 AI 建议（自动替换内容）或手动编辑",
+        "校对完成后章节状态自动变为「校对中」",
+        "项目级一致性检查入口和结果展示",
+        "cd frontend && npm test passes",
+        "cd frontend && npx tsc --noEmit passes"
+      ],
+      "priority": 8,
+      "passes": true,
+      "notes": "",
+      "dependsOn": [
+        "US-017",
+        "US-018",
+        "US-024"
+      ],
+      "completionNotes": "Completed by agent"
+    },
+    {
+      "id": "US-026",
+      "title": "前端：后台管理页面",
+      "description": "As an admin, I want a management dashboard to manage users, API keys, and view system stats.",
+      "acceptanceCriteria": [
+        "创建 frontend/src/pages/Admin.tsx 后台管理页面（仅 admin 角色可见）",
+        "用户管理 Tab：用户列表、创建用户、修改角色、禁用/启用、重置密码",
+        "密钥管理 Tab：API Key 列表（脱敏显示）、新增/删除 Key、设置默认 Key",
+        "统计面板：项目总数、用户数、本月生成次数、Token 消耗估算",
+        "操作日志 Tab：日志列表，支持按用户/时间/操作类型筛选",
+        "cd frontend && npm test passes",
+        "cd frontend && npx tsc --noEmit passes"
+      ],
+      "priority": 9,
+      "passes": true,
+      "notes": "",
+      "dependsOn": [
+        "US-020",
+        "US-019",
+        "US-021"
+      ],
+      "completionNotes": "Completed by agent"
+    },
+    {
+      "id": "US-027",
+      "title": "Docker Compose 部署配置",
+      "description": "As a DevOps engineer, I want a one-command deployment so that the app is easy to set up.",
+      "acceptanceCriteria": [
+        "创建 Dockerfile（多阶段构建：前端 build + 后端运行）",
+        "创建 docker-compose.yml 包含：app (FastAPI), db (PostgreSQL), nginx (反向代理+静态文件)",
+        "所有配置通过 .env 文件或环境变量注入（DATABASE_URL, SECRET_KEY, ENCRYPTION_KEY 等）",
+        "创建 .env.docker.example 模板文件",
+        "docker compose up -d 一键启动成功",
+        "包含数据卷持久化（PostgreSQL data, uploads）",
+        "nginx 配置包含基本安全头（HSTS, X-Frame-Options 等）",
+        "cd backend && pytest passes",
+        "类型检查通过"
+      ],
+      "priority": 10,
+      "passes": true,
+      "notes": "",
+      "dependsOn": [
+        "US-009"
+      ],
+      "completionNotes": "Completed by agent"
+    },
+    {
+      "id": "US-028",
+      "title": "实现模板库：保存和复用历史标书",
+      "description": "As an editor, I want to save completed proposals as templates so that new projects can start faster.",
+      "acceptanceCriteria": [
+        "创建 backend/app/models/template.py 定义 Template ORM 模型（id, name, description, outline_data JSONB, source_project_id, created_by, created_at）",
+        "POST /api/templates（从已完成项目创建模板）",
+        "GET /api/templates（模板列表）",
+        "POST /api/projects/from-template/{template_id}（基于模板创建新项目，复制目录结构）",
+        "cd backend && pytest passes",
+        "类型检查通过"
+      ],
+      "priority": 10,
+      "passes": true,
+      "notes": "",
+      "dependsOn": [
+        "US-012"
+      ],
+      "completionNotes": "Completed by agent"
+    },
+    {
+      "id": "US-029",
+      "title": "实现知识库：企业文档上传和 RAG 检索",
+      "description": "As an editor, I want to upload company documents so that AI can reference them when generating content.",
+      "acceptanceCriteria": [
+        "创建 backend/app/models/knowledge.py 定义 KnowledgeDoc ORM 模型（id, name, doc_type, content_text, embedding_status, uploaded_by, created_at）",
+        "POST /api/knowledge/upload（上传企业资质/案例/技术方案文档，提取文本并分块）",
+        "GET /api/knowledge（知识库文档列表）",
+        "DELETE /api/knowledge/{id}（删除文档）",
+        "修改内容生成 Prompt，支持注入知识库中的相关文档片段作为参考",
+        "使用简单的关键词匹配或 TF-IDF 进行检索（MVP 阶段不引入向量数据库）",
+        "cd backend && pytest passes",
+        "类型检查通过"
+      ],
+      "priority": 10,
+      "passes": true,
+      "notes": "MVP 阶段用关键词检索，后续可升级为向量检索",
+      "dependsOn": [
+        "US-012"
+      ],
+      "completionNotes": "Completed by agent"
+    }
+  ],
+  "metadata": {
+    "updatedAt": "2026-02-13T06:30:08.925Z"
+  }
+}

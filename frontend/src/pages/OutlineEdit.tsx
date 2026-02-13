@@ -5,6 +5,8 @@ import React, { useState } from 'react';
 import { OutlineData, OutlineItem } from '../types';
 import { outlineApi, expandApi } from '../services/api';
 import { ChevronRightIcon, ChevronDownIcon, DocumentTextIcon, PencilIcon, TrashIcon, PlusIcon } from '@heroicons/react/24/outline';
+import ChapterStatusBadge from '../components/ChapterStatusBadge';
+import type { ChapterStatus } from '../types/chapter';
 
 interface OutlineEditProps {
   projectOverview: string;
@@ -428,13 +430,12 @@ const OutlineEdit: React.FC<OutlineEditProps> = ({
                     }`}>
                       {item.id} {item.title}
                     </span>
-                    {item.content && (
-                      <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-green-100 text-green-800">
-                        已生成内容
-                      </span>
-                    )}
+                    <ChapterStatusBadge
+                      status={(item.content ? 'generated' : 'pending') as ChapterStatus}
+                      size="sm"
+                    />
                   </div>
-                  
+
                   {/* 操作按钮组 */}
                   <div className="flex items-center space-x-1 opacity-0 group-hover:opacity-100 transition-opacity">
                     <button
