@@ -200,63 +200,96 @@ class OpenAIService:
             print(f"{prefix}check_json 校验失败，进行第 {attempt}/{max_retries} 次重试：{last_error_msg}")
             await asyncio.sleep(0.5)
 
-    async def generate_content_for_outline(self, outline: Dict[str, Any], project_overview: str = "") -> Dict[str, Any]:
-        """为目录结构生成内容"""
+    async def generate_content_for_outline(
+        self,
+        outline: Dict[str, Any],
+        project_overview: str = "",
+        knowledge_context: str = "",
+    ) -> Dict[str, Any]:
+        """
+        为目录结构生成内容
+
+        Args:
+            outline: 目录结构数据
+            project_overview: 项目概述信息
+            knowledge_context: 知识库检索结果（可选）
+
+        Returns:
+            生成内容后的目录结构
+        """
         try:
             if not isinstance(outline, dict) or 'outline' not in outline:
                 raise Exception("无效的outline数据格式")
-            
+
             # 深拷贝outline数据
             import copy
             result_outline = copy.deepcopy(outline)
-            
+
             # 递归处理目录
-            await self._process_outline_recursive(result_outline['outline'], [], project_overview)
-            
+            await self._process_outline_recursive(
+                result_outline['outline'], [], project_overview, knowledge_context
+            )
+
             return result_outline
-            
+
         except Exception as e:
             raise Exception(f"处理过程中发生错误: {str(e)}")
-    
-    async def _process_outline_recursive(self, chapters: list, parent_chapters: list = None, project_overview: str = ""):
+
+    async def _process_outline_recursive(
+        self,
+        chapters: list,
+        parent_chapters: list = None,
+        project_overview: str = "",
+        knowledge_context: str = "",
+    ):
         """递归处理章节列表"""
         for chapter in chapters:
             chapter_id = chapter.get('id', 'unknown')
             chapter_title = chapter.get('title', '未命名章节')
-            
+
             # 检查是否为叶子节点
             is_leaf = 'children' not in chapter or not chapter.get('children', [])
-            
+
             # 准备当前章节信息
             current_chapter_info = {
                 'id': chapter_id,
                 'title': chapter_title,
                 'description': chapter.get('description', '')
             }
-            
+
             # 构建完整的上级章节列表
             current_parent_chapters = []
             if parent_chapters:
                 current_parent_chapters.extend(parent_chapters)
             current_parent_chapters.append(current_chapter_info)
-            
+
             if is_leaf:
                 # 为叶子节点生成内容，传递同级章节信息
                 content = ""
                 async for chunk in self._generate_chapter_content(
-                    chapter, 
+                    chapter,
                     current_parent_chapters[:-1],  # 上级章节列表（排除当前章节）
                     chapters,  # 同级章节列表
-                    project_overview
+                    project_overview,
+                    knowledge_context,
                 ):
                     content += chunk
                 if content:
                     chapter['content'] = content
             else:
                 # 递归处理子章节
-                await self._process_outline_recursive(chapter['children'], current_parent_chapters, project_overview)
+                await self._process_outline_recursive(
+                    chapter['children'], current_parent_chapters, project_overview, knowledge_context
+                )
     
-    async def _generate_chapter_content(self, chapter: dict, parent_chapters: list = None, sibling_chapters: list = None, project_overview: str = "") -> AsyncGenerator[str, None]:
+    async def _generate_chapter_content(
+        self,
+        chapter: dict,
+        parent_chapters: list = None,
+        sibling_chapters: list = None,
+        project_overview: str = "",
+        knowledge_context: str = "",
+    ) -> AsyncGenerator[str, None]:
         """
         为单个章节流式生成内容
 
@@ -265,6 +298,7 @@ class OpenAIService:
             parent_chapters: 上级章节列表，每个元素包含章节id、标题和描述
             sibling_chapters: 同级章节列表，避免内容重复
             project_overview: 项目概述信息，提供项目背景和要求
+            knowledge_context: 知识库检索结果，提供参考资料
 
         Yields:
             生成的内容流
@@ -284,17 +318,18 @@ class OpenAIService:
 4. 内容要详细具体，避免空泛的描述
 5. 注意避免与同级章节内容重复，保持内容的独特性和互补性
 6. 直接返回章节内容，不生成标题，不要任何额外说明或格式标记
+7. 如果提供了参考资料，请在相关部分合理引用，但要自然融入你的行文，不要直接大段复制
 """
 
             # 构建上下文信息
             context_info = ""
-            
+
             # 上级章节信息
             if parent_chapters:
                 context_info += "上级章节信息：\n"
                 for parent in parent_chapters:
                     context_info += f"- {parent['id']} {parent['title']}\n  {parent['description']}\n"
-            
+
             # 同级章节信息（排除当前章节）
             if sibling_chapters:
                 context_info += "同级章节信息（请避免内容重复）：\n"
@@ -306,15 +341,25 @@ class OpenAIService:
             project_info = ""
             if project_overview.strip():
                 project_info = f"项目概述信息：\n{project_overview}\n\n"
-            
+
+            # 知识库参考资料
+            knowledge_info = ""
+            if knowledge_context.strip():
+                knowledge_info = f"""参考资料（来自企业知识库）：
+{knowledge_context}
+
+请参考以上资料中与当前章节相关的内容，在生成时自然融入，展示企业的技术实力和项目经验。
+
+"""
+
             user_prompt = f"""请为以下标书章节生成具体内容：
 
-{project_info}{context_info if context_info else ''}当前章节信息：
+{project_info}{knowledge_info}{context_info if context_info else ''}当前章节信息：
 章节ID: {chapter_id}
 章节标题: {chapter_title}
 章节描述: {chapter_description}
 
-请根据项目概述信息和上述章节层级关系，生成详细的专业内容，确保与上级章节的内容逻辑相承，同时避免与同级章节内容重复，突出本章节的独特性和技术方案的优势。"""
+请根据项目概述信息、参考资料和上述章节层级关系，生成详细的专业内容，确保与上级章节的内容逻辑相承，同时避免与同级章节内容重复，突出本章节的独特性和技术方案的优势。"""
 
             # 调用AI流式生成内容
             messages = [

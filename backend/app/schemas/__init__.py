@@ -14,6 +14,18 @@ from .template import (
     TemplateSummary,
     ProjectFromTemplateCreate,
 )
+from .knowledge import (
+    KnowledgeDocBase,
+    KnowledgeDocCreate,
+    KnowledgeDocUpdate,
+    KnowledgeDocResponse,
+    KnowledgeDocDetail,
+    KnowledgeDocSummary,
+    SearchRequest,
+    SearchResponse,
+    SearchResult,
+    ContentChunk,
+)
 
 __all__ = [
     "UserBase",
@@ -31,4 +43,14 @@ __all__ = [
     "TemplateResponse",
     "TemplateSummary",
     "ProjectFromTemplateCreate",
+    "KnowledgeDocBase",
+    "KnowledgeDocCreate",
+    "KnowledgeDocUpdate",
+    "KnowledgeDocResponse",
+    "KnowledgeDocDetail",
+    "KnowledgeDocSummary",
+    "SearchRequest",
+    "SearchResponse",
+    "SearchResult",
+    "ContentChunk",
 ]
