@@ -1,4 +1,5 @@
 """模板 CRUD API 路由"""
+
 import uuid
 from typing import Annotated
 
@@ -8,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from ..db.database import get_db
-from ..models.user import User
+from ..models.user import User, UserRole
 from ..models.project import Project, ProjectStatus, ProjectMemberRole, project_members
 from ..models.chapter import Chapter
 from ..models.template import Template
@@ -44,7 +45,10 @@ def build_chapter_tree(chapters: list[Chapter]) -> list[dict]:
         }
         children = children_by_parent.get(chapter.id, [])
         if children:
-            node["children"] = [build_node(child) for child in sorted(children, key=lambda x: x.order_index)]
+            node["children"] = [
+                build_node(child)
+                for child in sorted(children, key=lambda x: x.order_index)
+            ]
         return node
 
     # 获取根章节
@@ -112,10 +116,7 @@ async def list_templates(
 ):
     """获取模板列表"""
     result = await db.execute(
-        select(Template)
-        .order_by(Template.created_at.desc())
-        .offset(skip)
-        .limit(limit)
+        select(Template).order_by(Template.created_at.desc()).offset(skip).limit(limit)
     )
     templates = result.scalars().all()
     return templates
@@ -128,9 +129,7 @@ async def get_template(
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
     """获取模板详情"""
-    result = await db.execute(
-        select(Template).where(Template.id == template_id)
-    )
+    result = await db.execute(select(Template).where(Template.id == template_id))
     template = result.scalar_one_or_none()
     if not template:
         raise HTTPException(
@@ -147,10 +146,8 @@ async def update_template(
     current_user: Annotated[User, Depends(get_current_active_user)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
-    """更新模板"""
-    result = await db.execute(
-        select(Template).where(Template.id == template_id)
-    )
+    """更新模板（仅创建者或管理员）"""
+    result = await db.execute(select(Template).where(Template.id == template_id))
     template = result.scalar_one_or_none()
     if not template:
         raise HTTPException(
@@ -158,7 +155,12 @@ async def update_template(
             detail="模板不存在",
         )
 
-    # 更新字段
+    if template.created_by != current_user.id and current_user.role != UserRole.ADMIN:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="只有模板创建者或管理员才能更新模板",
+        )
+
     update_data = data.model_dump(exclude_unset=True)
     for field, value in update_data.items():
         setattr(template, field, value)
@@ -174,15 +176,19 @@ async def delete_template(
     current_user: Annotated[User, Depends(get_current_active_user)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
-    """删除模板"""
-    result = await db.execute(
-        select(Template).where(Template.id == template_id)
-    )
+    """删除模板（仅创建者或管理员）"""
+    result = await db.execute(select(Template).where(Template.id == template_id))
     template = result.scalar_one_or_none()
     if not template:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="模板不存在",
+        )
+
+    if template.created_by != current_user.id and current_user.role != UserRole.ADMIN:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="只有模板创建者或管理员才能删除模板",
         )
 
     await db.delete(template)
@@ -201,9 +207,7 @@ async def create_project_from_template(
 ):
     """基于模板创建新项目（复制目录结构）"""
     # 获取模板
-    result = await db.execute(
-        select(Template).where(Template.id == template_id)
-    )
+    result = await db.execute(select(Template).where(Template.id == template_id))
     template = result.scalar_one_or_none()
     if not template:
         raise HTTPException(

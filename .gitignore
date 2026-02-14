@@ -1,6 +1,9 @@
 # 项目特定的忽略文件
 # ===================
 
+# ralph-tui 配置目录
+.ralph-tui/
+
 # 用户配置文件
 user_config.json
 config.json
