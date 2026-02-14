@@ -4,6 +4,7 @@ Revision ID: 0005_create_project_versions
 Revises: 0004_create_chapters
 Create Date: 2026-02-12
 """
+
 from typing import Sequence, Union
 
 from alembic import op
@@ -21,7 +22,10 @@ depends_on: Union[str, Sequence[str], None] = None
 def upgrade() -> None:
     # 创建变更类型枚举类型
     change_type = sa.Enum(
-        "ai_generate", "manual_edit", "proofread", "rollback",
+        "ai_generate",
+        "manual_edit",
+        "proofread",
+        "rollback",
         name="change_type",
         native_enum=False,
         length=20,
@@ -68,14 +72,21 @@ def upgrade() -> None:
     )
 
     # 创建索引
-    op.create_index(op.f("ix_project_versions_project_id"), "project_versions", ["project_id"])
-    op.create_index(op.f("ix_project_versions_chapter_id"), "project_versions", ["chapter_id"])
-    op.create_index(op.f("ix_project_versions_created_by"), "project_versions", ["created_by"])
-    # 复合索引：按项目查询版本历史（按版本号降序）
+    op.create_index(
+        op.f("ix_project_versions_project_id"), "project_versions", ["project_id"]
+    )
+    op.create_index(
+        op.f("ix_project_versions_chapter_id"), "project_versions", ["chapter_id"]
+    )
+    op.create_index(
+        op.f("ix_project_versions_created_by"), "project_versions", ["created_by"]
+    )
+    # 复合唯一索引：按项目查询版本历史（按版本号降序），确保同一项目版本号唯一
     op.create_index(
         "ix_project_versions_project_version",
         "project_versions",
         ["project_id", "version_number"],
+        unique=True,
     )
 
 
@@ -88,7 +99,10 @@ def downgrade() -> None:
 
     # 删除枚举类型
     change_type = sa.Enum(
-        "ai_generate", "manual_edit", "proofread", "rollback",
+        "ai_generate",
+        "manual_edit",
+        "proofread",
+        "rollback",
         name="change_type",
         native_enum=False,
         length=20,

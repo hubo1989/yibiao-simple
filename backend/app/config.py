@@ -1,4 +1,5 @@
 """应用配置管理"""
+
 try:
     from pydantic_settings import BaseSettings
 except ImportError:
@@ -34,6 +35,7 @@ def parse_cors_origins(value: Union[str, List[str], None]) -> List[str]:
 
 class Settings(BaseSettings):
     """应用设置"""
+
     app_name: str = "AI写标书助手"
     app_version: str = "2.0.0"
     debug: bool = False
@@ -65,22 +67,33 @@ class Settings(BaseSettings):
     default_model: str = "gpt-3.5-turbo"
 
     # JWT 认证设置 - 支持环境变量注入
-    secret_key: str = secrets.token_urlsafe(32)
+    secret_key: Optional[str] = None
     algorithm: str = "HS256"
     access_token_expire_minutes: int = 30
     refresh_token_expire_days: int = 7
 
-    class Config:
-        env_file = ".env"
-        # 支持从环境变量读取复杂类型
-        env_parse_none_str = ""
-
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
-        # 处理 CORS_ORIGINS 环境变量
+        if self.secret_key is None:
+            env_secret = os.getenv("SECRET_KEY")
+            if env_secret:
+                self.secret_key = env_secret
+            else:
+                import warnings
+
+                warnings.warn(
+                    "SECRET_KEY 环境变量未设置，使用开发默认值。"
+                    "生产环境必须设置 SECRET_KEY 环境变量！",
+                    UserWarning,
+                )
+                self.secret_key = "dev-secret-key-do-not-use-in-production-12345"
         cors_env = os.getenv("CORS_ORIGINS")
         if cors_env:
             self.cors_origins = parse_cors_origins(cors_env)
+
+    class Config:
+        env_file = ".env"
+        env_parse_none_str = ""
 
 
 # 全局设置实例

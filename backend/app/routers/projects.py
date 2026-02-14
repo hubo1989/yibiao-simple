@@ -1,4 +1,5 @@
 """项目 CRUD API 路由"""
+
 import uuid
 import json
 from datetime import datetime, timezone
@@ -13,7 +14,11 @@ from ..db.database import get_db
 from ..models.user import User
 from ..models.project import Project, ProjectStatus, ProjectMemberRole, project_members
 from ..models.chapter import Chapter, ChapterStatus
-from ..models.consistency_result import ConsistencyResult, ConsistencySeverity, ConsistencyCategory
+from ..models.consistency_result import (
+    ConsistencyResult,
+    ConsistencySeverity,
+    ConsistencyCategory,
+)
 from ..models.operation_log import OperationLog, ActionType
 from ..services.openai_service import OpenAIService
 from ..schemas.project import (
@@ -42,12 +47,14 @@ async def get_project_for_user(
     """获取项目并验证用户是否是项目成员"""
     # 检查用户是否是项目成员
     member_exists = await db.execute(
-        select(exists().where(
-            and_(
-                project_members.c.project_id == project_id,
-                project_members.c.user_id == user_id,
+        select(
+            exists().where(
+                and_(
+                    project_members.c.project_id == project_id,
+                    project_members.c.user_id == user_id,
+                )
             )
-        ))
+        )
     )
     if not member_exists.scalar():
         raise HTTPException(
@@ -118,8 +125,12 @@ async def create_project(
 async def list_projects(
     current_user: Annotated[User, Depends(get_current_active_user)],
     db: Annotated[AsyncSession, Depends(get_db)],
-    status_filter: ProjectStatus | None = Query(None, alias="status", description="按状态筛选"),
-    sort_by: str = Query("updated_at", description="排序字段：created_at, updated_at, status"),
+    status_filter: ProjectStatus | None = Query(
+        None, alias="status", description="按状态筛选"
+    ),
+    sort_by: str = Query(
+        "updated_at", description="排序字段：created_at, updated_at, status"
+    ),
     sort_order: str = Query("desc", description="排序方向：asc, desc"),
     skip: int = Query(0, ge=0),
     limit: int = Query(20, ge=1, le=100),
@@ -252,9 +263,17 @@ async def add_project_member(
     current_user: Annotated[User, Depends(get_current_active_user)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
-    """邀请项目成员（需要项目成员身份）"""
+    """邀请项目成员（需要 OWNER 或 EDITOR 角色）"""
     # 验证项目存在且当前用户是成员
     project = await get_project_for_user(project_id, current_user.id, db)
+
+    # 检查当前用户是否有权限添加成员（仅 OWNER 或 EDITOR）
+    current_user_role = await get_project_member_role(project_id, current_user.id, db)
+    if current_user_role not in (ProjectMemberRole.OWNER, ProjectMemberRole.EDITOR):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="只有项目负责人或编辑才能添加成员",
+        )
 
     # 检查被邀请用户是否存在
     user_result = await db.execute(select(User).where(User.id == data.user_id))
@@ -267,12 +286,14 @@ async def add_project_member(
 
     # 检查是否已经是项目成员
     existing = await db.execute(
-        select(exists().where(
-            and_(
-                project_members.c.project_id == project_id,
-                project_members.c.user_id == data.user_id,
+        select(
+            exists().where(
+                and_(
+                    project_members.c.project_id == project_id,
+                    project_members.c.user_id == data.user_id,
+                )
             )
-        ))
+        )
     )
     if existing.scalar():
         raise HTTPException(
@@ -299,16 +320,26 @@ async def add_project_member(
     )
 
 
-@router.delete("/{project_id}/members/{user_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete(
+    "/{project_id}/members/{user_id}", status_code=status.HTTP_204_NO_CONTENT
+)
 async def remove_project_member(
     project_id: uuid.UUID,
     user_id: uuid.UUID,
     current_user: Annotated[User, Depends(get_current_active_user)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
-    """移除项目成员（需要项目成员身份）"""
+    """移除项目成员（需要 OWNER 或 EDITOR 角色）"""
     # 验证项目存在且当前用户是成员
     await get_project_for_user(project_id, current_user.id, db)
+
+    # 检查当前用户是否有权限移除成员（仅 OWNER 或 EDITOR）
+    current_user_role = await get_project_member_role(project_id, current_user.id, db)
+    if current_user_role not in (ProjectMemberRole.OWNER, ProjectMemberRole.EDITOR):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="只有项目负责人或编辑才能移除成员",
+        )
 
     # 不能移除创建者
     project_result = await db.execute(select(Project).where(Project.id == project_id))
@@ -321,12 +352,14 @@ async def remove_project_member(
 
     # 检查要移除的成员是否存在
     member_exists = await db.execute(
-        select(exists().where(
-            and_(
-                project_members.c.project_id == project_id,
-                project_members.c.user_id == user_id,
+        select(
+            exists().where(
+                and_(
+                    project_members.c.project_id == project_id,
+                    project_members.c.user_id == user_id,
+                )
             )
-        ))
+        )
     )
     if not member_exists.scalar():
         raise HTTPException(
@@ -377,7 +410,9 @@ async def get_project_progress(
     # 计算完成百分比 (finalized / total)
     completion_percentage = 0.0
     if total > 0:
-        completion_percentage = round(status_counts[ChapterStatus.FINALIZED] / total * 100, 2)
+        completion_percentage = round(
+            status_counts[ChapterStatus.FINALIZED] / total * 100, 2
+        )
 
     return ProjectProgress(
         total_chapters=total,
@@ -435,7 +470,12 @@ async def check_project_consistency(
         {
             "chapter_number": ch.chapter_number,
             "title": ch.title,
-            "summary": (ch.content[:2000] if ch.content and len(ch.content) > 2000 else ch.content) or "",
+            "summary": (
+                ch.content[:2000]
+                if ch.content and len(ch.content) > 2000
+                else ch.content
+            )
+            or "",
         }
         for ch in chapters
     ]
@@ -463,10 +503,7 @@ async def check_project_consistency(
     # 统计矛盾数量
     contradictions = result_data.get("contradictions", [])
     contradiction_count = len(contradictions)
-    critical_count = sum(
-        1 for c in contradictions
-        if c.get("severity") == "critical"
-    )
+    critical_count = sum(1 for c in contradictions if c.get("severity") == "critical")
 
     # 保存检查结果到数据库
     consistency_result = ConsistencyResult(

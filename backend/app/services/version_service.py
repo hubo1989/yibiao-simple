@@ -1,4 +1,5 @@
 """版本快照服务"""
+
 import uuid
 from typing import Any
 
@@ -40,6 +41,12 @@ class VersionService:
         Returns:
             新创建的版本快照对象
         """
+        # 使用 SELECT FOR UPDATE 锁定项目行，防止并发创建重复版本号
+        project_result = await self.db.execute(
+            select(Project).where(Project.id == project_id).with_for_update()
+        )
+        project_result.scalar_one_or_none()
+
         # 获取当前项目的最大版本号
         max_version_result = await self.db.execute(
             select(func.max(ProjectVersion.version_number)).where(
@@ -114,9 +121,13 @@ class VersionService:
         # 基础查询条件
         base_condition = ProjectVersion.project_id == project_id
         if chapter_id is not None:
-            base_condition = and_(base_condition, ProjectVersion.chapter_id == chapter_id)
+            base_condition = and_(
+                base_condition, ProjectVersion.chapter_id == chapter_id
+            )
         if change_type is not None:
-            base_condition = and_(base_condition, ProjectVersion.change_type == change_type)
+            base_condition = and_(
+                base_condition, ProjectVersion.change_type == change_type
+            )
 
         # 查询总数
         count_result = await self.db.execute(
@@ -169,7 +180,9 @@ class VersionService:
         data2 = v2.snapshot_data
 
         # 计算差异
-        diff_result = self._compute_diff(data1, data2, v1.version_number, v2.version_number)
+        diff_result = self._compute_diff(
+            data1, data2, v1.version_number, v2.version_number
+        )
 
         return {
             "v1": {
@@ -230,23 +243,27 @@ class VersionService:
             ch2 = ch_dict2.get(key)
 
             if ch1 and not ch2:
-                changes.append({
-                    "type": "deleted",
-                    "chapter_id": key,
-                    "chapter_number": ch1.get("chapter_number"),
-                    "title": ch1.get("title"),
-                    "old_content": ch1.get("content"),
-                    "new_content": None,
-                })
+                changes.append(
+                    {
+                        "type": "deleted",
+                        "chapter_id": key,
+                        "chapter_number": ch1.get("chapter_number"),
+                        "title": ch1.get("title"),
+                        "old_content": ch1.get("content"),
+                        "new_content": None,
+                    }
+                )
             elif not ch1 and ch2:
-                changes.append({
-                    "type": "added",
-                    "chapter_id": key,
-                    "chapter_number": ch2.get("chapter_number"),
-                    "title": ch2.get("title"),
-                    "old_content": None,
-                    "new_content": ch2.get("content"),
-                })
+                changes.append(
+                    {
+                        "type": "added",
+                        "chapter_id": key,
+                        "chapter_number": ch2.get("chapter_number"),
+                        "title": ch2.get("title"),
+                        "old_content": None,
+                        "new_content": ch2.get("content"),
+                    }
+                )
             elif ch1 and ch2:
                 # 检查内容变化
                 content1 = ch1.get("content")
@@ -255,18 +272,20 @@ class VersionService:
                 title2 = ch2.get("title")
 
                 if content1 != content2 or title1 != title2:
-                    changes.append({
-                        "type": "modified",
-                        "chapter_id": key,
-                        "chapter_number": ch2.get("chapter_number"),
-                        "title": title2,
-                        "old_title": title1 if title1 != title2 else None,
-                        "new_title": title2 if title1 != title2 else None,
-                        "old_content": content1,
-                        "new_content": content2,
-                        "content_changed": content1 != content2,
-                        "title_changed": title1 != title2,
-                    })
+                    changes.append(
+                        {
+                            "type": "modified",
+                            "chapter_id": key,
+                            "chapter_number": ch2.get("chapter_number"),
+                            "title": title2,
+                            "old_title": title1 if title1 != title2 else None,
+                            "new_title": title2 if title1 != title2 else None,
+                            "old_content": content1,
+                            "new_content": content2,
+                            "content_changed": content1 != content2,
+                            "title_changed": title1 != title2,
+                        }
+                    )
 
         return {
             "total_changes": len(changes),
@@ -352,20 +371,20 @@ class VersionService:
                 continue
 
             # 查找现有章节
-            result = await self.db.execute(
-                select(Chapter).where(Chapter.id == ch_id)
-            )
+            result = await self.db.execute(select(Chapter).where(Chapter.id == ch_id))
             chapter = result.scalar_one_or_none()
 
             if chapter:
                 # 更新现有章节
                 chapter.title = ch_data.get("title", chapter.title)
                 chapter.content = ch_data.get("content")
-                restored_chapters.append({
-                    "id": str(chapter.id),
-                    "chapter_number": chapter.chapter_number,
-                    "action": "updated",
-                })
+                restored_chapters.append(
+                    {
+                        "id": str(chapter.id),
+                        "chapter_number": chapter.chapter_number,
+                        "action": "updated",
+                    }
+                )
 
         # 创建回滚后的新版本记录
         rollback_version = await self.create_version(
