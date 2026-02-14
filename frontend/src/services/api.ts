@@ -267,24 +267,30 @@ export const documentApi = {
 
 
   // 流式分析文档
-  analyzeDocumentStream: (data: AnalysisRequest) =>
-    fetch(`${API_BASE_URL}/api/document/analyze-stream`, {
+  analyzeDocumentStream: (data: AnalysisRequest) => {
+    const token = getStoredToken();
+    return fetch(`${API_BASE_URL}/api/document/analyze-stream`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
+        ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
       },
       body: JSON.stringify(data),
-    }),
+    });
+  },
 
   // 导出Word文档
-  exportWord: (data: any) =>
-    fetch(`${API_BASE_URL}/api/document/export-word`, {
+  exportWord: (data: any) => {
+    const token = getStoredToken();
+    return fetch(`${API_BASE_URL}/api/document/export-word`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
+        ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
       },
       body: JSON.stringify(data),
-    }),
+    });
+  },
 };
 
 // 目录相关API
@@ -294,14 +300,17 @@ export const outlineApi = {
     api.post('/api/outline/generate', data),
 
   // 流式生成目录
-  generateOutlineStream: (data: OutlineRequest) =>
-    fetch(`${API_BASE_URL}/api/outline/generate-stream`, {
+  generateOutlineStream: (data: OutlineRequest) => {
+    const token = getStoredToken();
+    return fetch(`${API_BASE_URL}/api/outline/generate-stream`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
+        ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
       },
       body: JSON.stringify(data),
-    }),
+    });
+  },
 
 };
 
@@ -312,27 +321,15 @@ export const contentApi = {
     api.post('/api/content/generate-chapter', data),
 
   // 流式生成单章节内容
-  generateChapterContentStream: (data: ChapterContentRequest) =>
-    fetch(`${API_BASE_URL}/api/content/generate-chapter-stream`, {
+  generateChapterContentStream: (data: ChapterContentRequest) => {
+    const token = getStoredToken();
+    return fetch(`${API_BASE_URL}/api/content/generate-chapter-stream`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
+        ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
       },
       body: JSON.stringify(data),
-    }),
-};
-
-// 方案扩写相关API
-export const expandApi = {
-  // 上传方案扩写文件
-  uploadExpandFile: (file: File) => {
-    const formData = new FormData();
-    formData.append('file', file);
-    return api.post<FileUploadResponse>('/api/expand/upload', formData, {
-      headers: {
-        'Content-Type': 'multipart/form-data',
-      },
-      timeout: 300000, // 文件上传专用超时设置：5分钟
     });
   },
 };
