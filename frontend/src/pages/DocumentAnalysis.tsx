@@ -4,6 +4,7 @@
 import React, { useState, useRef } from 'react';
 import ReactMarkdown from 'react-markdown';
 import { documentApi } from '../services/api';
+import { useAuth } from '../contexts/AuthContext';
 import { CloudArrowUpIcon, DocumentIcon } from '@heroicons/react/24/outline';
 import { draftStorage } from '../utils/draftStorage';
 
@@ -22,6 +23,7 @@ const DocumentAnalysis: React.FC<DocumentAnalysisProps> = ({
   onFileUpload,
   onAnalysisComplete,
 }) => {
+  const { token } = useAuth();
   const [uploadedFile, setUploadedFile] = useState<File | null>(null);
   const [uploading, setUploading] = useState(false);
   const [analyzing, setAnalyzing] = useState(false);
@@ -126,6 +128,11 @@ const DocumentAnalysis: React.FC<DocumentAnalysisProps> = ({
       return;
     }
 
+    if (!token) {
+      setMessage({ type: 'error', text: '请先登录' });
+      return;
+    }
+
     try {
       setAnalyzing(true);
       setMessage(null);
@@ -139,6 +146,12 @@ const DocumentAnalysis: React.FC<DocumentAnalysisProps> = ({
 
       // 处理流式响应的通用函数
       const processStream = async (response: Response, onChunk: (chunk: string) => void) => {
+        // 检查响应状态
+        if (!response.ok) {
+          const errorData = await response.json().catch(() => ({}));
+          throw new Error(errorData.detail || `请求失败: ${response.status}`);
+        }
+
         const reader = response.body?.getReader();
         if (!reader) {
           throw new Error('无法读取响应流');
@@ -175,7 +188,7 @@ const DocumentAnalysis: React.FC<DocumentAnalysisProps> = ({
       const overviewResponse = await documentApi.analyzeDocumentStream({
         file_content: fileContent,
         analysis_type: 'overview',
-      });
+      }, token || undefined);
 
       await processStream(overviewResponse, (chunk) => {
         overviewResult += chunk;
@@ -191,7 +204,7 @@ const DocumentAnalysis: React.FC<DocumentAnalysisProps> = ({
       const requirementsResponse = await documentApi.analyzeDocumentStream({
         file_content: fileContent,
         analysis_type: 'requirements',
-      });
+      }, token || undefined);
 
       await processStream(requirementsResponse, (chunk) => {
         requirementsResult += chunk;
@@ -212,7 +225,14 @@ const DocumentAnalysis: React.FC<DocumentAnalysisProps> = ({
       setCurrentAnalysisStep(null);
 
     } catch (error: any) {
-      setMessage({ type: 'error', text: error.message || '标书解析失败' });
+      // 如果是认证错误，提示用户重新登录
+      if (error.message?.includes('401') || error.message?.includes('认证') || error.message?.includes('Unauthorized')) {
+        setMessage({ type: 'error', text: '登录已过期，请重新登录' });
+        // 可选：跳转到登录页
+        // window.location.href = '/login';
+      } else {
+        setMessage({ type: 'error', text: error.message || '标书解析失败' });
+      }
       setStreamingOverview('');
       setStreamingRequirements('');
       setCurrentAnalysisStep(null);

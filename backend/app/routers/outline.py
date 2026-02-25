@@ -22,7 +22,6 @@ from ..models.chapter import Chapter, ChapterStatus
 from ..models.version import ProjectVersion, ChangeType
 from ..db.database import get_db
 from ..services.openai_service import OpenAIService
-from ..utils.config_manager import config_manager
 from ..utils import prompt_manager
 from ..utils.sse import sse_response
 from ..auth.dependencies import require_editor
@@ -36,17 +35,16 @@ router = APIRouter(prefix="/api/outline", tags=["目录管理"])
 async def generate_outline(
     request: OutlineRequest,
     current_user: Annotated[User, Depends(require_editor)] = None,
+    db: AsyncSession = Depends(get_db),
 ):
     """生成标书目录结构（以SSE流式返回）"""
     try:
-        # 加载配置
-        config = config_manager.load_config()
+        # 创建OpenAI服务实例，从数据库加载配置
+        openai_service = OpenAIService(db=db)
+        await openai_service._ensure_initialized()
 
-        if not config.get('api_key'):
+        if not openai_service.api_key:
             raise HTTPException(status_code=400, detail="请先配置OpenAI API密钥")
-
-        # 创建OpenAI服务实例
-        openai_service = OpenAIService()
 
         async def generate():
             try:
@@ -100,17 +98,16 @@ async def generate_outline(
 async def generate_outline_stream(
     request: OutlineRequest,
     current_user: Annotated[User, Depends(require_editor)] = None,
+    db: AsyncSession = Depends(get_db),
 ):
     """流式生成标书目录结构"""
     try:
-        # 加载配置
-        config = config_manager.load_config()
+        # 创建OpenAI服务实例，从数据库加载配置
+        openai_service = OpenAIService(db=db)
+        await openai_service._ensure_initialized()
 
-        if not config.get('api_key'):
+        if not openai_service.api_key:
             raise HTTPException(status_code=400, detail="请先配置OpenAI API密钥")
-
-        # 创建OpenAI服务实例
-        openai_service = OpenAIService()
 
         async def generate():
             if request.uploaded_expand:
@@ -279,14 +276,12 @@ async def generate_project_outline_stream(
                 detail="项目尚未完成文档分析，请先分析招标文件",
             )
 
-        # 加载配置
-        config = config_manager.load_config()
+        # 创建OpenAI服务实例，从数据库加载配置
+        openai_service = OpenAIService(db=db)
+        await openai_service._ensure_initialized()
 
-        if not config.get('api_key'):
+        if not openai_service.api_key:
             raise HTTPException(status_code=400, detail="请先配置OpenAI API密钥")
-
-        # 创建OpenAI服务实例
-        openai_service = OpenAIService()
 
         # 用于收集完整结果的变量
         collected_result: list[str] = []
@@ -444,10 +439,11 @@ async def generate_project_content_stream(
                 detail="章节不存在",
             )
 
-        # 加载配置
-        config = config_manager.load_config()
+        # 创建OpenAI服务实例，从数据库加载配置
+        openai_service = OpenAIService(db=db)
+        await openai_service._ensure_initialized()
 
-        if not config.get('api_key'):
+        if not openai_service.api_key:
             raise HTTPException(status_code=400, detail="请先配置OpenAI API密钥")
 
         # 获取父章节列表（用于上下文）
@@ -485,9 +481,6 @@ async def generate_project_content_stream(
             }
             for s in siblings_result.scalars().all()
         ]
-
-        # 创建OpenAI服务实例
-        openai_service = OpenAIService()
 
         # 用于收集完整结果的变量
         collected_result: list[str] = []

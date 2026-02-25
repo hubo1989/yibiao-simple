@@ -111,10 +111,16 @@ class OpenAIService:
             chat_models = []
             for model in models.data:
                 model_id = model.id.lower()
-                if any(keyword in model_id for keyword in ['gpt', 'claude', 'chat', 'llama', 'qwen', 'deepseek']):
+                if any(keyword in model_id for keyword in ['gpt', 'claude', 'chat', 'llama', 'qwen', 'deepseek', 'glm', 'kimi', 'minimax', 'gemini']):
                     chat_models.append(model.id)
+            # 如果没有匹配的模型，返回当前配置的模型
+            if not chat_models and self.model_name:
+                return [self.model_name]
             return sorted(list(set(chat_models)))
         except Exception as e:
+            # 如果获取模型列表失败，返回当前配置的模型作为备选
+            if self.model_name:
+                return [self.model_name]
             raise Exception(f"获取模型列表失败: {str(e)}")
     
     async def stream_chat_completion(

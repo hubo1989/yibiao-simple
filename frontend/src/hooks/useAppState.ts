@@ -8,8 +8,6 @@ import { draftStorage } from '../utils/draftStorage';
 const initialState: AppState = {
   currentStep: 0,
   config: {
-    api_key: '',
-    base_url: '',
     model_name: 'gpt-3.5-turbo',
   },
   fileContent: '',
