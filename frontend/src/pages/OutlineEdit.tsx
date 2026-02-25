@@ -4,6 +4,7 @@
 import React, { useState } from 'react';
 import { OutlineData, OutlineItem } from '../types';
 import { outlineApi, expandApi } from '../services/api';
+import { useAuth } from '../contexts/AuthContext';
 import { ChevronRightIcon, ChevronDownIcon, DocumentTextIcon, PencilIcon, TrashIcon, PlusIcon } from '@heroicons/react/24/outline';
 import ChapterStatusBadge from '../components/ChapterStatusBadge';
 import type { ChapterStatus } from '../types/chapter';
@@ -21,6 +22,7 @@ const OutlineEdit: React.FC<OutlineEditProps> = ({
   outlineData,
   onOutlineGenerated,
 }) => {
+  const { token } = useAuth();
   const [generating, setGenerating] = useState(false);
   const [expandedItems, setExpandedItems] = useState<Set<string>>(new Set());
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
@@ -42,15 +44,16 @@ const OutlineEdit: React.FC<OutlineEditProps> = ({
       setuploadedExpand(true);
       setMessage(null);
 
-      const response = await expandApi.uploadExpandFile(file);
+      const response = await expandApi.uploadExpandFile(file, token || undefined);
+      const data = await response.json();
 
-      if (response.data.success) {
+      if (data.success) {
         setExpandFile(file);
-        setOldOutline(response.data.old_outline || null);
-        setOldDocument(response.data.file_content || null);
+        setOldOutline(data.old_outline || null);
+        setOldDocument(data.file_content || null);
         setMessage({ type: 'success', text: `方案扩写文件上传成功：${file.name}` });
       } else {
-        throw new Error(response.data.message || '文件上传失败');
+        throw new Error(data.message || '文件上传失败');
       }
     } catch (error: any) {
       setMessage({ type: 'error', text: error.response?.data?.message || error.message || '文件上传失败' });
@@ -76,7 +79,7 @@ const OutlineEdit: React.FC<OutlineEditProps> = ({
         uploaded_expand: uploadedExpand,
         old_outline: oldOutline || undefined,
         old_document: oldDocument || undefined,
-      });
+      }, token || undefined);
 
       const reader = response.body?.getReader();
       if (!reader) {

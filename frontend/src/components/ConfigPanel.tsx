@@ -1,73 +1,25 @@
 /**
  * 配置面板组件
- * 注：API Key 配置已移至后端管理，普通用户无需配置
+ * 注：API Key 和模型配置已移至后台管理，普通用户无需配置
  */
 import React, { useState, useEffect } from 'react';
-import { ConfigData } from '../types';
 import { configApi } from '../services/api';
 
-interface ConfigPanelProps {
-  config: ConfigData;
-  onConfigChange: (config: ConfigData) => void;
-}
-
-const ConfigPanel: React.FC<ConfigPanelProps> = ({ config, onConfigChange }) => {
-  const [localConfig, setLocalConfig] = useState<ConfigData>(config);
+const ConfigPanel: React.FC = () => {
   const [models, setModels] = useState<string[]>([]);
+  const [currentModel, setCurrentModel] = useState<string>('');
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
-  useEffect(() => {
-    loadConfig();
-  }, []);
-
-  const loadConfig = async () => {
-    try {
-      const response = await configApi.loadConfig();
-      if (response.data) {
-        setLocalConfig(response.data);
-        onConfigChange(response.data);
-      }
-    } catch (error) {
-      console.error('加载配置失败:', error);
-    }
-  };
-
-  const handleSave = async () => {
-    try {
-      setLoading(true);
-      const response = await configApi.saveConfig(localConfig);
-
-      if (response.data.success) {
-        onConfigChange(localConfig);
-        setMessage({ type: 'success', text: '配置保存成功！' });
-        setTimeout(() => setMessage(null), 3000);
-      } else {
-        setMessage({ type: 'error', text: response.data.message || '配置保存失败' });
-      }
-    } catch (error) {
-      console.error('保存配置错误:', error);
-      setMessage({ type: 'error', text: '配置保存失败' });
-    } finally {
-      setLoading(false);
-    }
-  };
-
   const handleGetModels = async () => {
-    if (!localConfig.api_key) {
-      setMessage({ type: 'error', text: '请先输入API Key' });
-      return;
-    }
-
     try {
       setLoading(true);
-      const response = await configApi.getModels(localConfig);
+      const response = await configApi.getModels();
 
       if (response.data.success) {
         setModels(response.data.models);
-        // 如果当前选中的模型不在新的模型列表中，则选择第一个可用模型
-        if (response.data.models.length > 0 && !response.data.models.includes(localConfig.model_name)) {
-          setLocalConfig({ ...localConfig, model_name: response.data.models[0] });
+        if (response.data.models.length > 0) {
+          setCurrentModel(response.data.models[0]);
         }
         setMessage({ type: 'success', text: `获取到 ${response.data.models.length} 个模型` });
         setTimeout(() => setMessage(null), 3000);
@@ -90,9 +42,9 @@ const ConfigPanel: React.FC<ConfigPanelProps> = ({ config, onConfigChange }) => 
           <hr className="mt-4 border-gray-200" />
         </div>
 
-        {/* 模型配置 */}
+        {/* 模型信息 */}
         <div>
-          <h3 className="text-base font-medium text-gray-900 mb-3">🤖 模型配置</h3>
+          <h3 className="text-base font-medium text-gray-900 mb-3">🤖 模型信息</h3>
 
           <button
             onClick={handleGetModels}
@@ -102,18 +54,15 @@ const ConfigPanel: React.FC<ConfigPanelProps> = ({ config, onConfigChange }) => 
             {loading ? '获取中...' : '🔄 获取可用模型'}
           </button>
 
-          <div>
-            <label htmlFor="model_name" className="block text-sm font-medium text-gray-700">
-              模型名称
-            </label>
-            {models.length > 0 ? (
+          {models.length > 0 && (
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                可用模型
+              </label>
               <select
-                id="model_name"
-                value={localConfig.model_name}
-                onChange={(e) => {
-                  setLocalConfig({ ...localConfig, model_name: e.target.value });
-                }}
-                className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm"
+                value={currentModel}
+                onChange={(e) => setCurrentModel(e.target.value)}
+                className="w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm"
               >
                 {models.map((model) => (
                   <option key={model} value={model}>
@@ -121,27 +70,12 @@ const ConfigPanel: React.FC<ConfigPanelProps> = ({ config, onConfigChange }) => 
                   </option>
                 ))}
               </select>
-            ) : (
-              <input
-                type="text"
-                id="model_name"
-                value={localConfig.model_name}
-                onChange={(e) => setLocalConfig({ ...localConfig, model_name: e.target.value })}
-                className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm"
-                placeholder="输入要使用的模型名称"
-              />
-            )}
-          </div>
+              <p className="mt-2 text-xs text-gray-500">
+                模型配置请在后台管理中修改
+              </p>
+            </div>
+          )}
         </div>
-
-        {/* 保存按钮 */}
-        <button
-          onClick={handleSave}
-          disabled={loading}
-          className="w-full inline-flex justify-center items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-green-600 hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500 disabled:bg-gray-400"
-        >
-          {loading ? '保存中...' : '💾 保存配置'}
-        </button>
 
         {/* 消息提示 */}
         {message && (
@@ -158,7 +92,7 @@ const ConfigPanel: React.FC<ConfigPanelProps> = ({ config, onConfigChange }) => 
         <div className="border-t border-gray-200 pt-4">
           <h3 className="text-sm font-medium text-gray-900 mb-2">📋 使用说明</h3>
           <div className="text-sm text-gray-600 space-y-1">
-            <p>1. 选择或输入模型名称</p>
+            <p>1. 管理员在后台配置 API Key</p>
             <p>2. 按步骤完成标书编写流程</p>
           </div>
         </div>

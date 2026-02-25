@@ -15,6 +15,7 @@ import {
   DocumentCheckIcon,
 } from '@heroicons/react/24/outline';
 import { contentApi, documentApi, proofreadApi, chapterApi, ChapterContentRequest } from '../services/api';
+import { useAuth } from '../contexts/AuthContext';
 import { saveAs } from 'file-saver';
 import { draftStorage } from '../utils/draftStorage';
 import ChapterStatusBadge from '../components/ChapterStatusBadge';
@@ -48,6 +49,7 @@ const ContentEdit: React.FC<ContentEditProps> = ({
   onToggleComments,
   onToggleConsistency,
 }) => {
+  const { token } = useAuth();
   const [isGenerating, setIsGenerating] = useState(false);
   const [progress, setProgress] = useState<GenerationProgress>({
     total: 0,
@@ -381,7 +383,7 @@ const ContentEdit: React.FC<ContentEditProps> = ({
         project_overview: projectOverview
       };
 
-      const response = await contentApi.generateChapterContentStream(request);
+      const response = await contentApi.generateChapterContentStream(request, token || undefined);
 
       if (!response.ok) throw new Error('生成失败');
 
@@ -560,7 +562,7 @@ const ContentEdit: React.FC<ContentEditProps> = ({
         outline: buildExportOutline(outlineData.outline),
       };
 
-      const response = await documentApi.exportWord(exportPayload);
+      const response = await documentApi.exportWord(exportPayload, token || undefined);
       if (!response.ok) {
         throw new Error('导出失败');
       }

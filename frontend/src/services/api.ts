@@ -200,8 +200,6 @@ export const projectApi = {
 };
 
 export interface ConfigData {
-  api_key: string;
-  base_url?: string;
   model_name: string;
 }
 
@@ -239,17 +237,9 @@ export interface ChapterContentRequest {
 
 // 配置相关API
 export const configApi = {
-  // 保存配置
-  saveConfig: (config: ConfigData) =>
-    api.post('/api/config/save', config),
-
-  // 加载配置
-  loadConfig: () =>
-    api.get('/api/config/load'),
-
-  // 获取可用模型
-  getModels: (config: ConfigData) =>
-    api.post('/api/config/models', config),
+  // 获取可用模型（从数据库读取配置，无需传参）
+  getModels: () =>
+    api.post('/api/config/models'),
 };
 
 // 文档相关API
@@ -267,26 +257,26 @@ export const documentApi = {
 
 
   // 流式分析文档
-  analyzeDocumentStream: (data: AnalysisRequest) => {
-    const token = getStoredToken();
+  analyzeDocumentStream: (data: AnalysisRequest, token?: string) => {
+    const authToken = token || getStoredToken();
     return fetch(`${API_BASE_URL}/api/document/analyze-stream`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
+        ...(authToken ? { 'Authorization': `Bearer ${authToken}` } : {}),
       },
       body: JSON.stringify(data),
     });
   },
 
   // 导出Word文档
-  exportWord: (data: any) => {
-    const token = getStoredToken();
+  exportWord: (data: any, token?: string) => {
+    const authToken = token || getStoredToken();
     return fetch(`${API_BASE_URL}/api/document/export-word`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
+        ...(authToken ? { 'Authorization': `Bearer ${authToken}` } : {}),
       },
       body: JSON.stringify(data),
     });
@@ -300,18 +290,35 @@ export const outlineApi = {
     api.post('/api/outline/generate', data),
 
   // 流式生成目录
-  generateOutlineStream: (data: OutlineRequest) => {
-    const token = getStoredToken();
+  generateOutlineStream: (data: OutlineRequest, token?: string) => {
+    const authToken = token || getStoredToken();
     return fetch(`${API_BASE_URL}/api/outline/generate-stream`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
+        ...(authToken ? { 'Authorization': `Bearer ${authToken}` } : {}),
       },
       body: JSON.stringify(data),
     });
   },
 
+};
+
+// 方案扩写相关API
+export const expandApi = {
+  // 上传扩写文件
+  uploadExpandFile: (file: File, token?: string) => {
+    const formData = new FormData();
+    formData.append('file', file);
+    const authToken = token || getStoredToken();
+    return fetch(`${API_BASE_URL}/api/expand/upload`, {
+      method: 'POST',
+      headers: {
+        ...(authToken ? { 'Authorization': `Bearer ${authToken}` } : {}),
+      },
+      body: formData,
+    });
+  },
 };
 
 // 内容相关API
@@ -321,13 +328,13 @@ export const contentApi = {
     api.post('/api/content/generate-chapter', data),
 
   // 流式生成单章节内容
-  generateChapterContentStream: (data: ChapterContentRequest) => {
-    const token = getStoredToken();
+  generateChapterContentStream: (data: ChapterContentRequest, token?: string) => {
+    const authToken = token || getStoredToken();
     return fetch(`${API_BASE_URL}/api/content/generate-chapter-stream`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
+        ...(authToken ? { 'Authorization': `Bearer ${authToken}` } : {}),
       },
       body: JSON.stringify(data),
     });

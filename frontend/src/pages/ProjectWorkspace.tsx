@@ -170,10 +170,7 @@ const ProjectWorkspace: React.FC = () => {
   return (
     <div className="h-screen overflow-hidden bg-gray-50 flex">
       {/* 左侧配置面板 */}
-      <ConfigPanel
-        config={state.config}
-        onConfigChange={updateConfig}
-      />
+      <ConfigPanel />
 
       {/* 主内容区域 */}
       <div className="flex-1 flex flex-col min-w-0">

@@ -250,6 +250,7 @@ const Admin: React.FC = () => {
   };
 
   const handleDeleteApiKey = async (id: string) => {
+    // eslint-disable-next-line no-restricted-globals
     if (!confirm('确定要删除这个 API Key 吗？')) return;
     try {
       await adminApi.deleteApiKey(id);
