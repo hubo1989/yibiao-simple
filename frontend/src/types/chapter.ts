@@ -2,7 +2,7 @@
  * 章节相关类型定义
  */
 
-export type ChapterStatus = 'pending' | 'generated' | 'reviewing' | 'finalized';
+export type ChapterStatus = 'pending' | 'generated' | 'reviewing' | 'finalized' | 'error';
 
 export interface ChapterContentResponse {
   id: string;
@@ -40,6 +40,7 @@ export const CHAPTER_STATUS_LABELS: Record<ChapterStatus, string> = {
   generated: '已生成',
   reviewing: '校对中',
   finalized: '已定稿',
+  error: '生成失败',
 };
 
 export const CHAPTER_STATUS_COLORS: Record<ChapterStatus, string> = {
@@ -47,4 +48,5 @@ export const CHAPTER_STATUS_COLORS: Record<ChapterStatus, string> = {
   generated: 'bg-green-100 text-green-800',
   reviewing: 'bg-yellow-100 text-yellow-800',
   finalized: 'bg-blue-100 text-blue-800',
+  error: 'bg-red-100 text-red-800',
 };

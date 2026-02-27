@@ -1,7 +1,7 @@
 /**
  * 应用状态管理Hook
  */
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import { AppState, ConfigData, OutlineData } from '../types';
 import { draftStorage } from '../utils/draftStorage';
 
@@ -17,8 +17,17 @@ const initialState: AppState = {
   selectedChapter: '',
 };
 
-export const useAppState = () => {
+export const useAppState = (projectId?: string) => {
+  // 设置项目ID，确保草稿按项目隔离
+  useEffect(() => {
+    draftStorage.setProjectId(projectId || null);
+  }, [projectId]);
+
   const [state, setState] = useState<AppState>(() => {
+    // 初始化时设置项目ID
+    if (projectId) {
+      draftStorage.setProjectId(projectId);
+    }
     const draft = draftStorage.loadDraft();
     return {
       ...initialState,

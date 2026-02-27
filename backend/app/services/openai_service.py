@@ -3,6 +3,7 @@ import openai
 from typing import Dict, Any, List, AsyncGenerator
 import json
 import asyncio
+import uuid
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -13,6 +14,7 @@ from ..utils.config_manager import config_manager
 from ..utils.encryption import encryption_service
 from ..models.api_key_config import ApiKeyConfig
 from ..db.database import async_session_factory
+from ..services.prompt_service import PromptService
 
 
 # 校对结果类型定义
@@ -40,19 +42,22 @@ CONSISTENCY_CONTRADICTION_SCHEMA = {
 class OpenAIService:
     """OpenAI服务类"""
 
-    def __init__(self, db: AsyncSession | None = None):
+    def __init__(self, db: AsyncSession | None = None, project_id: uuid.UUID | None = None):
         """
         初始化OpenAI服务
 
         Args:
             db: 可选的数据库会话。如果提供，将从数据库读取默认配置；
                 否则使用同步方式从数据库获取配置
+            project_id: 可选的项目ID，用于获取项目级自定义提示词
         """
         self._db = db
+        self._project_id = project_id
         self.api_key = ''
         self.base_url = ''
         self.model_name = 'gpt-3.5-turbo'
         self._client = None
+        self._prompt_service = None
 
     async def _load_config_from_db(self) -> bool:
         """从数据库加载默认 API Key 配置"""
@@ -95,6 +100,10 @@ class OpenAIService:
                 base_url=self.base_url if self.base_url else None
             )
 
+            # 初始化 PromptService
+            if self._db:
+                self._prompt_service = PromptService(self._db)
+
     @property
     def client(self):
         """获取 OpenAI 客户端（向后兼容）"""
@@ -102,6 +111,10 @@ class OpenAIService:
             # 同步初始化（仅在无法使用 async 的情况下）
             raise RuntimeError("OpenAIService 需要先调用 async 方法进行初始化")
         return self._client
+
+    def set_model(self, model_name: str):
+        """覆盖默认模型"""
+        self.model_name = model_name
     
     async def get_available_models(self) -> List[str]:
         """获取可用的模型列表"""
@@ -127,7 +140,8 @@ class OpenAIService:
         self,
         messages: list,
         temperature: float = 0.7,
-        response_format: dict = None
+        response_format: dict = None,
+        max_tokens: int = 4096
     ) -> AsyncGenerator[str, None]:
         """流式聊天完成请求 - 真正的异步实现"""
         await self._ensure_initialized()
@@ -137,6 +151,7 @@ class OpenAIService:
                 messages=messages,
                 temperature=temperature,
                 stream=True,
+                max_tokens=max_tokens,
                 **({"response_format": response_format} if response_format is not None else {})
             )
 
@@ -145,7 +160,8 @@ class OpenAIService:
                     yield chunk.choices[0].delta.content
 
         except Exception as e:
-            yield f"错误: {str(e)}"
+            # 不要 yield 错误信息，而是抛出异常让调用方处理
+            raise RuntimeError(f"AI 服务调用失败: {str(e)}")
 
     async def _collect_stream_text(
         self,
@@ -314,58 +330,37 @@ class OpenAIService:
             chapter_title = chapter.get('title', '未命名章节')
             chapter_description = chapter.get('description', '')
 
-            # 构建提示词
-            system_prompt = """你是一个专业的标书编写专家，负责为投标文件的技术标部分生成具体内容。
-
-要求：
-1. 内容要专业、准确，与章节标题和描述保持一致
-2. 这是技术方案，不是宣传报告，注意朴实无华，不要假大空
-3. 语言要正式、规范，符合标书写作要求，但不要使用奇怪的连接词，不要让人觉得内容像是AI生成的
-4. 内容要详细具体，避免空泛的描述
-5. 注意避免与同级章节内容重复，保持内容的独特性和互补性
-6. 直接返回章节内容，不生成标题，不要任何额外说明或格式标记
-7. 如果提供了参考资料，请在相关部分合理引用，但要自然融入你的行文，不要直接大段复制
-"""
-
-            # 构建上下文信息
-            context_info = ""
-
-            # 上级章节信息
-            if parent_chapters:
-                context_info += "上级章节信息：\n"
-                for parent in parent_chapters:
-                    context_info += f"- {parent['id']} {parent['title']}\n  {parent['description']}\n"
-
-            # 同级章节信息（排除当前章节）
-            if sibling_chapters:
-                context_info += "同级章节信息（请避免内容重复）：\n"
-                for sibling in sibling_chapters:
-                    if sibling.get('id') != chapter_id:  # 排除当前章节
-                        context_info += f"- {sibling.get('id', 'unknown')} {sibling.get('title', '未命名')}\n  {sibling.get('description', '')}\n"
-
-            # 构建用户提示词
-            project_info = ""
-            if project_overview.strip():
-                project_info = f"项目概述信息：\n{project_overview}\n\n"
-
-            # 知识库参考资料
-            knowledge_info = ""
-            if knowledge_context.strip():
-                knowledge_info = f"""参考资料（来自企业知识库）：
-{knowledge_context}
-
-请参考以上资料中与当前章节相关的内容，在生成时自然融入，展示企业的技术实力和项目经验。
-
-"""
-
-            user_prompt = f"""请为以下标书章节生成具体内容：
-
-{project_info}{knowledge_info}{context_info if context_info else ''}当前章节信息：
-章节ID: {chapter_id}
-章节标题: {chapter_title}
-章节描述: {chapter_description}
-
-请根据项目概述信息、参考资料和上述章节层级关系，生成详细的专业内容，确保与上级章节的内容逻辑相承，同时避免与同级章节内容重复，突出本章节的独特性和技术方案的优势。"""
+            # 使用 PromptService 获取提示词
+            if self._prompt_service:
+                prompt, _ = await self._prompt_service.get_prompt(
+                    "chapter_content", self._project_id
+                )
+                from .prompt_service import PromptService
+                system_prompt, user_template = PromptService.split_prompt(prompt)
+                # 渲染用户提示词模板
+                user_prompt = self._prompt_service.render_prompt(user_template, {
+                    "project_overview": project_overview,
+                    "knowledge_context": knowledge_context,
+                    "parent_chapters": parent_chapters or [],
+                    "sibling_chapters": [s for s in (sibling_chapters or []) if s.get('id') != chapter_id],
+                    "chapter_id": chapter_id,
+                    "chapter_title": chapter_title,
+                    "chapter_description": chapter_description,
+                })
+            else:
+                # 回退到内置提示词（兼容旧代码）
+                from ..utils.builtin_prompts import get_builtin_prompt
+                from .prompt_service import PromptService
+                builtin = get_builtin_prompt("chapter_content")
+                system_prompt, user_template = PromptService.split_prompt(builtin["prompt"])
+                # 简单渲染
+                user_prompt = user_template.replace("{{chapter_id}}", chapter_id)
+                user_prompt = user_prompt.replace("{{chapter_title}}", chapter_title)
+                user_prompt = user_prompt.replace("{{chapter_description}}", chapter_description)
+                if project_overview:
+                    user_prompt = user_prompt.replace("{{project_overview}}", project_overview)
+                if knowledge_context:
+                    user_prompt = user_prompt.replace("{{knowledge_context}}", knowledge_context)
 
             # 调用AI流式生成内容
             messages = [
@@ -380,7 +375,7 @@ class OpenAIService:
         except Exception as e:
             print(f"生成章节内容时出错: {str(e)}")
             yield f"错误: {str(e)}"
-            
+
     async def generate_outline_v2(self, overview: str, requirements: str) -> Dict[str, Any]:
         schema_json = json.dumps([
             {
@@ -389,37 +384,29 @@ class OpenAIService:
             }
         ])
 
-        system_prompt = f"""
-            ### 角色
-            你是专业的标书编写专家，擅长根据项目需求编写标书。
-            
-            ### 人物
-            1. 根据得到的项目概述(overview)和评分要求(requirements)，撰写技术标部分的一级提纲
-            
-            ### 说明
-            1. 只设计一级标题，数量要和"评分要求"一一对应
-            2. 一级标题名称要进行简单修改，不能完全使用"评分要求"中的文字
+        # 使用 PromptService 获取提示词
+        if self._prompt_service:
+            prompt, _ = await self._prompt_service.get_prompt(
+                "outline_l1", self._project_id
+            )
+            from .prompt_service import PromptService
+            system_prompt, user_template = PromptService.split_prompt(prompt)
+            user_prompt = self._prompt_service.render_prompt(user_template, {
+                "overview": overview,
+                "requirements": requirements,
+            })
+        else:
+            # 回退到内置提示词
+            from ..utils.builtin_prompts import get_builtin_prompt
+            from .prompt_service import PromptService
+            builtin = get_builtin_prompt("outline_l1")
+            system_prompt, user_template = PromptService.split_prompt(builtin["prompt"])
+            system_prompt = system_prompt + f"\n\n### Output Format in JSON\n{schema_json}"
+            user_prompt = self._prompt_service.render_prompt(user_template, {
+                "overview": overview,
+                "requirements": requirements,
+            }) if self._prompt_service else user_template.replace("{{overview}}", overview).replace("{{requirements}}", requirements)
 
-            
-            ### Output Format in JSON
-            {schema_json}
-
-            """
-        user_prompt = f"""
-            ### 项目信息
-            
-            <overview>
-            {overview}
-            </overview>
-
-            <requirements>
-            {requirements}
-            </requirements>
-
-
-            直接返回json，不要任何额外说明或格式标记
-
-            """
         messages = [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt}
@@ -441,56 +428,56 @@ class OpenAIService:
 
         expected_word_count = 100000
         leaf_node_count = expected_word_count // 1500
-        
+
         # 随机重点章节
         index1, index2 = get_random_indexes(len(level_l1))
 
         nodes_distribution = calculate_nodes_distribution(len(level_l1), (index1, index2), leaf_node_count)
-        
+
         # 并发生成每个一级节点的提纲，保持结果顺序
         tasks = [
             self.process_level1_node(i, level1_node, nodes_distribution, level_l1, overview, requirements)
             for i, level1_node in enumerate(level_l1)
         ]
         outline = await asyncio.gather(*tasks)
-        
-        
-        
+
+
+
         return {"outline": outline}
-    
+
     async def process_level1_node(self, i, level1_node, nodes_distribution, level_l1, overview, requirements):
         """处理单个一级节点的函数"""
 
         # 生成json
         json_outline = generate_one_outline_json_by_level1(level1_node["new_title"], i + 1, nodes_distribution)
         print(f"正在处理第{i+1}章: {level1_node['new_title']}")
-        
+
         # 其他标题
-        other_outline = "\n".join([f"{j+1}. {node['new_title']}" 
-                            for j, node in enumerate(level_l1) 
+        other_outline = "\n".join([f"{j+1}. {node['new_title']}"
+                            for j, node in enumerate(level_l1)
                             if j!= i])
 
-        system_prompt = f"""
-    ### 角色
-    你是专业的标书编写专家，擅长根据项目需求编写标书。
-    
-    ### 任务
-    1. 根据得到项目概述(overview)、评分要求(requirements)补全标书的提纲的二三级目录
-    
-    ### 说明
-    1. 你将会得到一段json，这是提纲的其中一个章节，你需要再原结构上补全标题(title)和描述(description)
-    2. 二级标题根据一级标题撰写,三级标题根据二级标题撰写
-    3. 补全的内容要参考项目概述(overview)、评分要求(requirements)等项目信息
-    4. 你还会收到其他章节的标题(other_outline)，你需要确保本章节的内容不会包含其他章节的内容
-    
-    ### 注意事项
-    在原json上补全信息，禁止修改json结构，禁止修改一级标题
-
-    ### Output Format in JSON
-    {json_outline}
-
-    """
-        user_prompt = f"""
+        # 使用 PromptService 获取提示词
+        if self._prompt_service:
+            prompt, _ = await self._prompt_service.get_prompt(
+                "outline_l2l3", self._project_id
+            )
+            from .prompt_service import PromptService
+            system_prompt, user_template = PromptService.split_prompt(prompt)
+            user_prompt = self._prompt_service.render_prompt(user_template, {
+                "overview": overview,
+                "requirements": requirements,
+                "other_outline": other_outline,
+                "current_outline_json": json_outline,
+            })
+        else:
+            # 回退到内置提示词
+            from ..utils.builtin_prompts import get_builtin_prompt
+            from .prompt_service import PromptService
+            builtin = get_builtin_prompt("outline_l2l3")
+            system_prompt, user_template = PromptService.split_prompt(builtin["prompt"])
+            system_prompt = system_prompt + f"\n\n### Output Format in JSON\n{json_outline}"
+            user_prompt = f"""
     ### 项目信息
 
     <overview>
@@ -500,21 +487,24 @@ class OpenAIService:
     <requirements>
     {requirements}
     </requirements>
-    
+
     <other_outline>
     {other_outline}
     </other_outline>
 
+    <current_outline_json>
+    {json_outline}
+    </current_outline_json>
 
     直接返回json，不要任何额外说明或格式标记
-
     """
+
         messages = [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt}
         ]
 
-        # 使用通用方法进行 JSON 校验与重试（失败时不抛异常，保持原有“返回最后一次结果”的行为）
+        # 使用通用方法进行 JSON 校验与重试（失败时不抛异常，保持原有"返回最后一次结果"的行为）
         full_content = await self._generate_with_json_check(
             messages=messages,
             schema=json_outline,
@@ -548,74 +538,36 @@ class OpenAIService:
         Yields:
             流式返回的校对结果（JSON 格式）
         """
-        schema_json = json.dumps({
-            "issues": [
-                PROOFREAD_ISSUE_SCHEMA
-            ],
-            "summary": "整体问题摘要"
-        })
-
-        # 构建同级章节信息
-        sibling_info = ""
-        if sibling_chapter_titles:
-            sibling_info = f"""
-<同级章节标题>
-{chr(10).join(f'- {title}' for title in sibling_chapter_titles)}
-</同级章节标题>
-"""
-
-        project_info = ""
-        if project_overview:
-            project_info = f"""
-<项目概述>
-{project_overview}
-</项目概述>
-"""
-
-        system_prompt = f"""### 角色
-你是专业的标书审核专家，负责检查标书内容的质量问题。
-
-### 任务
-对提供的章节内容进行全面校对，识别以下类型的问题：
-
-1. **合规性问题 (compliance)**: 内容是否符合招标文件的评分要求和技术规范
-2. **语言质量问题 (language)**: 语法错误、表达不当、用词不准确等
-3. **一致性问题 (consistency)**: 内容前后矛盾、数据不一致、逻辑混乱
-4. **冗余问题 (redundancy)**: 与同级章节内容重复、不必要的重复表述
-
-### 严重程度定义
-- **critical**: 严重问题，可能导致失分或被废标
-- **warning**: 一般问题，建议修改以提高质量
-- **info**: 轻微问题或优化建议
-
-### 输出格式
-返回 JSON 格式，包含 issues 数组和 summary 摘要：
-{schema_json}
-
-### 注意事项
-- 问题定位要准确，position 描述应能让用户快速定位
-- 修改建议要具体可操作
-- 如果没有发现问题，返回空数组
-"""
-
-        user_prompt = f"""### 项目信息
-{project_info}
-<招标文件评分要求>
-{tech_requirements}
-</招标文件评分要求>
-{sibling_info}
-
-### 待校对章节
-<章节标题>
-{chapter_title}
-</章节标题>
-
-<章节内容>
-{chapter_content}
-</章节内容>
-
-请根据招标文件的评分要求对上述内容进行全面校对，输出 JSON 格式的校对结果。
-"""
+        # 使用 PromptService 获取提示词
+        if self._prompt_service:
+            prompt, _ = await self._prompt_service.get_prompt(
+                "proofread", self._project_id
+            )
+            from .prompt_service import PromptService
+            system_prompt, user_template = PromptService.split_prompt(prompt)
+            user_prompt = self._prompt_service.render_prompt(user_template, {
+                "chapter_title": chapter_title,
+                "chapter_content": chapter_content,
+                "tech_requirements": tech_requirements,
+                "sibling_chapter_titles": sibling_chapter_titles or [],
+                "project_overview": project_overview or "",
+            })
+        else:
+            # 回退到内置提示词
+            from ..utils.builtin_prompts import get_builtin_prompt
+            from .prompt_service import PromptService
+            builtin = get_builtin_prompt("proofread")
+            system_prompt, user_template = PromptService.split_prompt(builtin["prompt"])
+            # 构建章节摘要
+            chapters_text = "\n\n".join([
+                f"【{ch.get('chapter_number', '')} {ch.get('title', '')}】\n{ch.get('summary', '')}"
+                for ch in []
+            ])
+            user_prompt = user_template.replace("{{chapter_title}}", chapter_title)
+            user_prompt = user_prompt.replace("{{chapter_content}}", chapter_content)
+            user_prompt = user_prompt.replace("{{tech_requirements}}", tech_requirements)
+            if project_overview:
+                user_prompt = user_prompt.replace("{{project_overview}}", project_overview)
 
         messages = [
             {"role": "system", "content": system_prompt},
@@ -650,13 +602,8 @@ class OpenAIService:
         Yields:
             流式返回的一致性检查结果（JSON 格式）
         """
-        schema_json = json.dumps({
-            "contradictions": [
-                CONSISTENCY_CONTRADICTION_SCHEMA
-            ],
-            "summary": "整体一致性评估摘要",
-            "overall_consistency": "consistent|minor_issues|major_issues"
-        })
+        import logging
+        logger = logging.getLogger(__name__)
 
         # 构建章节摘要信息
         chapters_info = []
@@ -667,80 +614,194 @@ class OpenAIService:
             )
         chapters_text = "\n\n".join(chapters_info)
 
-        project_info = ""
-        if project_overview:
-            project_info = f"""
-<项目概述>
-{project_overview}
-</项目概述>
-"""
-
-        requirements_info = ""
-        if tech_requirements:
-            requirements_info = f"""
-<招标文件技术要求>
-{tech_requirements}
-</招标文件技术要求>
-"""
-
-        system_prompt = f"""### 角色
-你是专业的标书审核专家，负责检查标书中跨章节的一致性问题。
-
-### 任务
-分析提供的章节摘要，检测以下类型的跨章节矛盾：
-
-1. **数据矛盾 (data)**: 同一数据在不同章节中数值不一致
-   - 例：A章节承诺"10名工程师"，B章节写"15名工程师"
-   - 例：A章节预算"500万"，B章节预算"600万"
-
-2. **术语矛盾 (terminology)**: 同一概念使用不同术语或定义不一致
-   - 例：A章节称"项目经理"，B章节称"项目负责人"
-   - 例：同一产品名称在不同章节拼写不同
-
-3. **时间线矛盾 (timeline)**: 项目计划时间节点冲突
-   - 例：A章节说"第一阶段1个月"，B章节说"第一阶段2周"
-   - 例：交付日期不一致
-
-4. **承诺矛盾 (commitment)**: 服务承诺或保证不一致
-   - 例：A章节承诺"7×24小时服务"，B章节写"工作日服务"
-   - 例：质保期年限不一致
-
-5. **范围矛盾 (scope)**: 工作范围描述不一致
-   - 例：A章节说"包含系统A"，B章节说"不包含系统A"
-
-### 严重程度定义
-- **critical**: 严重矛盾，可能导致失分或废标，必须修改
-- **warning**: 一般不一致，建议统一以提高专业度
-- **info**: 轻微差异，可以优化
-
-### 输出格式
-返回 JSON 格式，包含 contradictions 数组、summary 摘要和 overall_consistency 评估：
-{schema_json}
-
-### 注意事项
-- 只报告真实的矛盾，不要过度解读
-- 如果没有发现矛盾，返回空数组，overall_consistency 为 "consistent"
-- 每个矛盾必须涉及至少两个不同章节
-"""
-
-        user_prompt = f"""### 项目信息
-{project_info}{requirements_info}
-### 章节摘要汇总
-
-{chapters_text}
-
-请分析以上章节摘要，检测跨章节的一致性问题，输出 JSON 格式的检查结果。
-"""
+        # 使用 PromptService 获取提示词
+        if self._prompt_service:
+            prompt, _ = await self._prompt_service.get_prompt(
+                "consistency_check", self._project_id
+            )
+            from .prompt_service import PromptService
+            system_prompt, user_template = PromptService.split_prompt(prompt)
+            user_prompt = self._prompt_service.render_prompt(user_template, {
+                "chapter_summaries": chapters_text,
+                "project_overview": project_overview or "",
+                "tech_requirements": tech_requirements or "",
+            })
+        else:
+            # 回退到内置提示词
+            from ..utils.builtin_prompts import get_builtin_prompt
+            from .prompt_service import PromptService
+            builtin = get_builtin_prompt("consistency_check")
+            system_prompt, user_template = PromptService.split_prompt(builtin["prompt"])
+            user_prompt = user_template.replace("{{chapter_summaries}}", chapters_text)
+            if project_overview:
+                user_prompt = user_prompt.replace("{{project_overview}}", project_overview)
+            if tech_requirements:
+                user_prompt = user_prompt.replace("{{tech_requirements}}", tech_requirements)
 
         messages = [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt}
         ]
 
+        logger.info(f"一致性检查 - system_prompt 长度: {len(system_prompt)}")
+        logger.info(f"一致性检查 - user_prompt 长度: {len(user_prompt)}")
+        logger.info(f"一致性检查 - user_prompt 前500字符: {user_prompt[:500]}")
+
         # 流式返回一致性检查结果
+        # 注意：不使用 response_format 参数，因为某些 API 提供商（如智谱）不支持
         async for chunk in self.stream_chat_completion(
             messages,
             temperature=0.3,
-            response_format={"type": "json_object"}
+            max_tokens=4096
+        ):
+            yield chunk
+
+    async def rewrite_chapter_with_suggestions(
+        self,
+        chapter_title: str,
+        chapter_content: str,
+        suggestions: List[str],
+    ) -> str:
+        """
+        根据修改建议重写或生成章节内容
+
+        Args:
+            chapter_title: 章节标题
+            chapter_content: 原始章节内容（可为空）
+            suggestions: 修改建议列表
+
+        Returns:
+            重写/生成后的章节内容
+        """
+        import logging
+        logger = logging.getLogger(__name__)
+
+        # 构建修改建议文本
+        suggestions_text = "\n".join([f"- {s}" for s in suggestions])
+
+        # 判断是重写还是生成
+        has_content = chapter_content and chapter_content.strip()
+
+        if has_content:
+            system_prompt = """你是一位专业的标书编辑专家。你的任务是根据修改建议重写章节内容。
+
+### 要求
+1. 仔细阅读原始内容和修改建议
+2. 根据建议修改内容，保持专业性和连贯性
+3. 保留原有的结构和格式
+4. 只修改与建议相关的部分，不要改动其他内容
+5. 修改后的内容应该更加准确、一致、专业
+
+### 输出格式
+直接输出修改后的完整章节内容，不要添加任何解释或说明。"""
+
+            user_prompt = f"""### 章节标题
+{chapter_title}
+
+### 原始内容
+{chapter_content}
+
+### 修改建议
+{suggestions_text}
+
+请根据以上修改建议重写章节内容。"""
+        else:
+            system_prompt = """你是一位专业的标书编辑专家。你的任务是根据章节标题和修改建议生成章节内容。
+
+### 要求
+1. 根据章节标题和修改建议，撰写专业、完整的标书章节内容
+2. 内容要针对招标文件的要求，具有说服力
+3. 确保内容与修改建议完全一致
+4. 内容要详实、专业，符合标书规范
+
+### 输出格式
+直接输出生成的章节内容，不要添加章节标题或任何解释说明。"""
+
+            user_prompt = f"""### 章节标题
+{chapter_title}
+
+### 修改建议（必须遵守）
+{suggestions_text}
+
+请根据以上章节标题和修改建议生成章节内容。"""
+
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt}
+        ]
+
+        logger.info(f"重写章节 - 章节标题: {chapter_title}")
+        logger.info(f"重写章节 - 修改建议数: {len(suggestions)}")
+
+        # 调用 LLM 生成重写内容（使用流式并收集结果）
+        full_content = ""
+        async for chunk in self.stream_chat_completion(
+            messages,
+            temperature=0.3,
+            max_tokens=8192
+        ):
+            full_content += chunk
+
+        return full_content
+
+    async def rewrite_chapter_with_suggestions_stream(
+        self,
+        chapter_title: str,
+        chapter_content: str,
+        suggestions: List[str],
+    ) -> AsyncGenerator[str, None]:
+        """
+        根据修改建议重写章节内容（流式返回）
+
+        Args:
+            chapter_title: 章节标题
+            chapter_content: 原始章节内容
+            suggestions: 修改建议列表
+
+        Yields:
+            流式返回的重写内容
+        """
+        import logging
+        logger = logging.getLogger(__name__)
+
+        # 构建修改建议文本
+        suggestions_text = "\n".join([f"- {s}" for s in suggestions])
+
+        system_prompt = """你是一位专业的标书编辑专家。你的任务是根据修改建议重写章节内容。
+
+### 要求
+1. 仔细阅读原始内容和修改建议
+2. 根据建议修改内容，保持专业性和连贯性
+3. 保留原有的结构和格式
+4. 只修改与建议相关的部分，不要改动其他内容
+5. 修改后的内容应该更加准确、一致、专业
+
+### 输出格式
+直接输出修改后的完整章节内容，不要添加任何解释或说明。"""
+
+        user_prompt = f"""### 章节标题
+{chapter_title}
+
+### 原始内容
+{chapter_content}
+
+### 修改建议
+{suggestions_text}
+
+请根据以上修改建议重写章节内容。"""
+
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt}
+        ]
+
+        logger.info(f"重写章节(流式) - 章节标题: {chapter_title}")
+        logger.info(f"重写章节(流式) - 修改建议数: {len(suggestions)}")
+
+        # 流式返回重写内容
+        async for chunk in self.stream_chat_completion(
+            messages,
+            temperature=0.3,
+            max_tokens=8192
         ):
             yield chunk

@@ -2,11 +2,14 @@
 
 import uuid
 import json
+import logging
+import re
 from datetime import datetime, timezone
 from typing import Annotated
 
 from fastapi import APIRouter, HTTPException, Depends, status, Query
 from fastapi.responses import StreamingResponse
+from pydantic import BaseModel, Field
 from sqlalchemy import select, and_, exists, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -14,6 +17,8 @@ from ..db.database import get_db
 from ..models.user import User
 from ..models.project import Project, ProjectStatus, ProjectMemberRole, project_members
 from ..models.chapter import Chapter, ChapterStatus
+
+logger = logging.getLogger(__name__)
 from ..models.consistency_result import (
     ConsistencyResult,
     ConsistencySeverity,
@@ -34,6 +39,12 @@ from ..schemas.project import (
     ConsistencyCheckResponse,
     ContradictionItem,
 )
+from ..schemas.prompt import (
+    ProjectPromptConfig,
+    ProjectPromptConfigListResponse,
+    ProjectPromptOverride,
+)
+from ..services.prompt_service import PromptService
 from ..auth.dependencies import get_current_active_user, require_editor
 
 router = APIRouter(prefix="/api/projects", tags=["项目"])
@@ -433,11 +444,12 @@ async def check_project_consistency(
     project_id: uuid.UUID,
     current_user: Annotated[User, Depends(get_current_active_user)],
     db: Annotated[AsyncSession, Depends(get_db)],
+    request: ConsistencyCheckRequest | None = None,
 ):
     """
     检查项目跨章节一致性
 
-    自动提取项目中所有已生成内容的章节摘要，进行跨章节一致性检查，
+    如果前端传递了章节摘要，使用前端数据；否则从数据库读取。
     检测数据、术语、时间线、承诺和范围等方面的矛盾。
     """
     from datetime import datetime
@@ -445,43 +457,67 @@ async def check_project_consistency(
     # 验证项目存在且用户是成员
     project = await get_project_for_user(project_id, current_user.id, db)
 
-    # 获取项目中所有有内容的章节
-    result = await db.execute(
-        select(Chapter)
-        .where(
-            and_(
-                Chapter.project_id == project_id,
-                Chapter.content.isnot(None),
-                Chapter.content != "",
-            )
-        )
-        .order_by(Chapter.chapter_number)
-    )
-    chapters = result.scalars().all()
+    logger.info(f"一致性检查请求: request={request}, chapter_summaries_count={len(request.chapter_summaries) if request else 0}")
 
-    if len(chapters) < 2:
+    # 如果前端传递了章节摘要，直接使用
+    if request and request.chapter_summaries:
+        chapter_summaries = [
+            {
+                "chapter_number": ch.chapter_number,
+                "title": ch.title,
+                "summary": ch.summary[:2000] if len(ch.summary) > 2000 else ch.summary,
+                "chapter_id": ch.chapter_id or ch.chapter_number,
+            }
+            for ch in request.chapter_summaries
+            if ch.summary and ch.summary.strip()  # 过滤掉空内容
+        ]
+        logger.info(f"使用前端传递的章节摘要: {len(chapter_summaries)} 个")
+    else:
+        # 从数据库获取项目中所有有内容的章节
+        result = await db.execute(
+            select(Chapter)
+            .where(
+                and_(
+                    Chapter.project_id == project_id,
+                    Chapter.content.isnot(None),
+                    Chapter.content != "",
+                )
+            )
+            .order_by(Chapter.chapter_number)
+        )
+        chapters = result.scalars().all()
+
+        # 准备章节摘要（截取内容前2000字符作为摘要）
+        chapter_summaries = [
+            {
+                "chapter_number": ch.chapter_number,
+                "title": ch.title,
+                "summary": (
+                    ch.content[:2000]
+                    if ch.content and len(ch.content) > 2000
+                    else ch.content
+                )
+                or "",
+                "chapter_id": str(ch.id),
+            }
+            for ch in chapters
+        ]
+
+    if len(chapter_summaries) < 2:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="至少需要2个有内容的章节才能进行跨章节一致性检查",
         )
 
-    # 准备章节摘要（截取内容前2000字符作为摘要）
-    chapter_summaries = [
-        {
-            "chapter_number": ch.chapter_number,
-            "title": ch.title,
-            "summary": (
-                ch.content[:2000]
-                if ch.content and len(ch.content) > 2000
-                else ch.content
-            )
-            or "",
-        }
-        for ch in chapters
-    ]
+    # 构建 chapter_number -> chapter_id 的映射
+    chapter_id_map = {ch["chapter_number"]: ch.get("chapter_id", ch["chapter_number"]) for ch in chapter_summaries}
 
     # 调用 AI 服务进行一致性检查
     openai_service = OpenAIService(db=db)
+
+    logger.info(f"开始调用 AI 一致性检查，章节数: {len(chapter_summaries)}")
+    for i, ch in enumerate(chapter_summaries):
+        logger.info(f"  章节 {i+1}: {ch.get('chapter_number')} {ch.get('title')}, 内容长度: {len(ch.get('summary', ''))}")
 
     full_content = ""
     async for chunk in openai_service.check_consistency(
@@ -491,13 +527,53 @@ async def check_project_consistency(
     ):
         full_content += chunk
 
-    # 解析 AI 返回的 JSON
-    try:
-        result_data = json.loads(full_content)
-    except json.JSONDecodeError:
+    logger.info(f"一致性检查 AI 返回内容长度: {len(full_content)}")
+
+    # 检查是否返回了空内容
+    if not full_content or not full_content.strip():
+        logger.error("一致性检查 AI 返回空内容")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="AI 返回的结果格式无效",
+            detail="AI 返回了空内容，请重试",
+        )
+
+    # 解析 AI 返回的 JSON
+    # 先尝试清理可能存在的 markdown 代码块标记
+    json_content = full_content.strip()
+    if json_content.startswith("```"):
+        # 移除 markdown 代码块标记
+        json_content = re.sub(r'^```(?:json)?\s*\n?', '', json_content)
+        json_content = re.sub(r'\n?```\s*$', '', json_content)
+        json_content = json_content.strip()
+
+    # 如果不是有效的 JSON，尝试从文本中提取 JSON 对象
+    if not json_content.startswith('{'):
+        # 尝试找到第一个 { 和最后一个 }
+        start = json_content.find('{')
+        end = json_content.rfind('}')
+        if start != -1 and end != -1 and end > start:
+            json_content = json_content[start:end+1]
+
+    # 修复中文引号问题：将中文引号替换为英文引号
+    json_content = json_content.replace('"', '"').replace('"', '"')
+    # 修复中文冒号
+    json_content = json_content.replace('：', ':')
+
+    try:
+        result_data = json.loads(json_content)
+    except json.JSONDecodeError as e:
+        logger.error(f"一致性检查 JSON 解析失败: {e}")
+        logger.error(f"AI 返回内容长度: {len(full_content)}")
+        logger.error(f"清理后内容长度: {len(json_content)}")
+        # 打印出错位置附近的内容
+        error_pos = e.pos if hasattr(e, 'pos') else 0
+        start_pos = max(0, error_pos - 100)
+        end_pos = min(len(json_content), error_pos + 100)
+        logger.error(f"出错位置附近的内容 (pos={error_pos}): {json_content[start_pos:end_pos]}")
+        logger.error(f"清理后内容: {json_content}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="AI 返回的结果格式无效，请重试",
         )
 
     # 统计矛盾数量
@@ -530,6 +606,13 @@ async def check_project_consistency(
     await db.commit()
 
     # 构建响应
+    def get_chapter_id(chapter_ref: str) -> str | None:
+        """从 'chapter_number title' 格式中提取 chapter_id"""
+        # chapter_ref 格式可能是 "1.2.3 标题" 或直接是 ID
+        parts = chapter_ref.split(" ", 1)
+        chapter_number = parts[0] if parts else chapter_ref
+        return chapter_id_map.get(chapter_number, chapter_number if chapter_number else None)
+
     return ConsistencyCheckResponse(
         contradictions=[
             ContradictionItem(
@@ -538,6 +621,8 @@ async def check_project_consistency(
                 description=c.get("description", ""),
                 chapter_a=c.get("chapter_a", ""),
                 chapter_b=c.get("chapter_b", ""),
+                chapter_id_a=get_chapter_id(c.get("chapter_a", "")),
+                chapter_id_b=get_chapter_id(c.get("chapter_b", "")),
                 detail_a=c.get("detail_a", ""),
                 detail_b=c.get("detail_b", ""),
                 suggestion=c.get("suggestion", ""),
@@ -550,3 +635,210 @@ async def check_project_consistency(
         critical_count=critical_count,
         created_at=consistency_result.created_at,
     )
+
+
+# ==================== 章节重写接口 ====================
+
+class RewriteChapterRequest(BaseModel):
+    """重写章节请求"""
+    chapter_title: str = Field(..., description="章节标题")
+    chapter_content: str = Field(..., description="原始章节内容")
+    suggestions: list[str] = Field(..., description="修改建议列表")
+
+
+class RewriteChapterResponse(BaseModel):
+    """重写章节响应"""
+    rewritten_content: str = Field(..., description="重写后的章节内容")
+
+
+@router.post(
+    "/{project_id}/chapters/rewrite",
+    response_model=RewriteChapterResponse,
+    status_code=status.HTTP_200_OK,
+)
+async def rewrite_chapter(
+    project_id: uuid.UUID,
+    current_user: Annotated[User, Depends(get_current_active_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+    request: RewriteChapterRequest,
+):
+    """
+    使用 LLM 根据修改建议重写章节内容
+
+    将章节内容和修改建议发送给 LLM，让它根据建议重写内容。
+    """
+    from ..services.openai_service import OpenAIService
+
+    # 验证项目存在且用户是成员
+    await get_project_for_user(project_id, current_user.id, db)
+
+    logger.info(f"重写章节请求: project_id={project_id}, chapter_title={request.chapter_title}")
+    logger.info(f"修改建议: {request.suggestions}")
+
+    # 检查参数
+    if not request.suggestions or len(request.suggestions) == 0:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="修改建议不能为空",
+        )
+
+    # 调用 LLM 重写/生成章节（内容可以为空，空时生成新内容）
+    openai_service = OpenAIService(db=db, project_id=project_id)
+
+    try:
+        rewritten_content = await openai_service.rewrite_chapter_with_suggestions(
+            chapter_title=request.chapter_title,
+            chapter_content=request.chapter_content,
+            suggestions=request.suggestions,
+        )
+    except Exception as e:
+        logger.error(f"重写章节失败: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"重写章节失败: {str(e)}",
+        )
+
+    logger.info(f"重写章节成功: 原长度={len(request.chapter_content)}, 新长度={len(rewritten_content)}")
+
+    return RewriteChapterResponse(rewritten_content=rewritten_content)
+
+
+# ==================== 项目提示词配置接口 ====================
+
+@router.get("/{project_id}/prompts", response_model=ProjectPromptConfigListResponse)
+async def list_project_prompts(
+    project_id: uuid.UUID,
+    current_user: Annotated[User, Depends(get_current_active_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+    category: str | None = Query(None, description="按类别筛选：analysis/generation/check"),
+):
+    """
+    获取项目的所有提示词配置
+
+    显示每个场景的最终配置及继承状态（项目级 > 全局 > 内置）
+    """
+    # 验证项目存在且用户是成员
+    await get_project_for_user(project_id, current_user.id, db)
+
+    prompt_service = PromptService(db)
+    prompts = await prompt_service.list_project_prompts(project_id)
+
+    # 按类别筛选
+    if category:
+        prompts = [p for p in prompts if p["category"] == category]
+
+    return ProjectPromptConfigListResponse(
+        items=[ProjectPromptConfig(**p) for p in prompts],
+        total=len(prompts),
+    )
+
+
+@router.get("/{project_id}/prompts/{scene_key}", response_model=ProjectPromptConfig)
+async def get_project_prompt(
+    project_id: uuid.UUID,
+    scene_key: str,
+    current_user: Annotated[User, Depends(get_current_active_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """获取项目中特定场景的提示词配置"""
+    # 验证项目存在且用户是成员
+    await get_project_for_user(project_id, current_user.id, db)
+
+    prompt_service = PromptService(db)
+    prompts = await prompt_service.list_project_prompts(project_id)
+
+    for p in prompts:
+        if p["scene_key"] == scene_key:
+            return ProjectPromptConfig(**p)
+
+    raise HTTPException(
+        status_code=status.HTTP_404_NOT_FOUND,
+        detail=f"场景 {scene_key} 不存在",
+    )
+
+
+@router.put("/{project_id}/prompts/{scene_key}", response_model=ProjectPromptConfig)
+async def set_project_prompt(
+    project_id: uuid.UUID,
+    scene_key: str,
+    data: ProjectPromptOverride,
+    current_user: Annotated[User, Depends(get_current_active_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """
+    设置项目级提示词覆盖（需要 EDITOR 或更高角色）
+
+    项目级配置优先于全局配置和内置默认
+    """
+    # 验证项目存在和权限
+    await get_project_for_user(project_id, current_user.id, db)
+
+    # 检查是否有编辑权限（仅 OWNER 或 EDITOR）
+    current_user_role = await get_project_member_role(project_id, current_user.id, db)
+    if current_user_role not in (ProjectMemberRole.OWNER, ProjectMemberRole.EDITOR):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="只有项目负责人或编辑才能设置提示词",
+        )
+
+    prompt_service = PromptService(db)
+
+    try:
+        await prompt_service.set_project_prompt(
+            project_id=project_id,
+            scene_key=scene_key,
+            system_prompt=data.system_prompt,
+            user_prompt_template=data.user_prompt_template,
+        )
+
+        # 返回更新后的配置
+        prompts = await prompt_service.list_project_prompts(project_id)
+        for p in prompts:
+            if p["scene_key"] == scene_key:
+                return ProjectPromptConfig(**p)
+
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e),
+        )
+
+
+@router.delete("/{project_id}/prompts/{scene_key}", response_model=ProjectPromptConfig)
+async def delete_project_prompt(
+    project_id: uuid.UUID,
+    scene_key: str,
+    current_user: Annotated[User, Depends(get_current_active_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """
+    删除项目级提示词覆盖（需要 EDITOR 或更高角色）
+
+    删除后将回退到全局配置或内置默认
+    """
+    # 验证项目存在和权限
+    await get_project_for_user(project_id, current_user.id, db)
+
+    # 检查是否有编辑权限（仅 OWNER 或 EDITOR）
+    current_user_role = await get_project_member_role(project_id, current_user.id, db)
+    if current_user_role not in (ProjectMemberRole.OWNER, ProjectMemberRole.EDITOR):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="只有项目负责人或编辑才能删除提示词",
+        )
+
+    prompt_service = PromptService(db)
+
+    deleted = await prompt_service.delete_project_prompt(project_id, scene_key)
+
+    if not deleted:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"场景 {scene_key} 没有项目级覆盖",
+        )
+
+    # 返回删除后的配置（回退到全局或内置）
+    prompts = await prompt_service.list_project_prompts(project_id)
+    for p in prompts:
+        if p["scene_key"] == scene_key:
+            return ProjectPromptConfig(**p)

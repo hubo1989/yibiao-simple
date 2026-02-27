@@ -7,6 +7,7 @@ import { documentApi } from '../services/api';
 import { useAuth } from '../contexts/AuthContext';
 import { CloudArrowUpIcon, DocumentIcon } from '@heroicons/react/24/outline';
 import { draftStorage } from '../utils/draftStorage';
+import { getCurrentModel } from '../utils/modelCache';
 
 interface DocumentAnalysisProps {
   fileContent: string;
@@ -14,6 +15,7 @@ interface DocumentAnalysisProps {
   techRequirements: string;
   onFileUpload: (content: string) => void;
   onAnalysisComplete: (overview: string, requirements: string) => void;
+  projectId?: string;
 }
 
 const DocumentAnalysis: React.FC<DocumentAnalysisProps> = ({
@@ -22,6 +24,7 @@ const DocumentAnalysis: React.FC<DocumentAnalysisProps> = ({
   techRequirements,
   onFileUpload,
   onAnalysisComplete,
+  projectId,
 }) => {
   const { token } = useAuth();
   const [uploadedFile, setUploadedFile] = useState<File | null>(null);
@@ -157,69 +160,85 @@ const DocumentAnalysis: React.FC<DocumentAnalysisProps> = ({
           throw new Error('无法读取响应流');
         }
 
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
+        try {
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
 
-          const chunk = decoder.decode(value, { stream: true });
-          const lines = chunk.split('\n');
+            const chunk = decoder.decode(value, { stream: true });
+            const lines = chunk.split('\n');
 
-          for (const line of lines) {
-            if (line.startsWith('data: ')) {
-              const data = line.slice(6);
-              if (data === '[DONE]') {
-                break;
-              }
-              try {
-                const parsed = JSON.parse(data);
-                if (parsed.chunk) {
-                  onChunk(parsed.chunk);
+            for (const line of lines) {
+              if (line.startsWith('data: ')) {
+                const data = line.slice(6);
+                if (data === '[DONE]') {
+                  return; // 收到结束信号，直接返回
                 }
-              } catch (e) {
-                // 忽略JSON解析错误
+                try {
+                  const parsed = JSON.parse(data);
+                  if (parsed.chunk) {
+                    onChunk(parsed.chunk);
+                  }
+                } catch (e) {
+                  // 忽略JSON解析错误
+                }
               }
             }
           }
+        } catch (e: any) {
+          throw new Error(e.message || '连接错误，请检查网络');
         }
       };
 
-      // 第一步：分析项目概述
-      setCurrentAnalysisStep('overview');
-      const overviewResponse = await documentApi.analyzeDocumentStream({
-        file_content: fileContent,
-        analysis_type: 'overview',
-      }, token || undefined);
+      const currentModel = getCurrentModel();
 
-      await processStream(overviewResponse, (chunk) => {
-        overviewResult += chunk;
-        const normalizedContent = normalizeLineBreaks(overviewResult);
-        setStreamingOverview(normalizedContent);
-      });
+      if (projectId) {
+        if (!uploadedFile) {
+          setMessage({ type: 'error', text: '请先上传招标文件' });
+          setAnalyzing(false);
+          return;
+        }
+        await documentApi.uploadToProject(projectId, uploadedFile, token || undefined);
 
-      const finalOverview = normalizeLineBreaks(overviewResult);
-      setLocalOverview(finalOverview);
+        setCurrentAnalysisStep('overview');
+        const overviewResponse = await documentApi.analyzeProjectStream({
+          project_id: projectId,
+          analysis_type: 'overview',
+          model_name: currentModel || undefined,
+        }, token || undefined);
 
-      // 第二步：分析技术评分要求
-      setCurrentAnalysisStep('requirements');
-      const requirementsResponse = await documentApi.analyzeDocumentStream({
-        file_content: fileContent,
-        analysis_type: 'requirements',
-      }, token || undefined);
+        await processStream(overviewResponse, (chunk) => {
+          overviewResult += chunk;
+          setStreamingOverview(normalizeLineBreaks(overviewResult));
+        });
 
-      await processStream(requirementsResponse, (chunk) => {
-        requirementsResult += chunk;
-        const normalizedContent = normalizeLineBreaks(requirementsResult);
-        setStreamingRequirements(normalizedContent);
-      });
+        setLocalOverview(normalizeLineBreaks(overviewResult));
 
-      const finalRequirements = normalizeLineBreaks(requirementsResult);
-      setLocalRequirements(finalRequirements);
+        setCurrentAnalysisStep('requirements');
+        const requirementsResponse = await documentApi.analyzeProjectStream({
+          project_id: projectId,
+          analysis_type: 'requirements',
+          model_name: currentModel || undefined,
+        }, token || undefined);
 
-      // 完成后更新父组件状态
+        await processStream(requirementsResponse, (chunk) => {
+          requirementsResult += chunk;
+          setStreamingRequirements(normalizeLineBreaks(requirementsResult));
+        });
+
+        setLocalRequirements(normalizeLineBreaks(requirementsResult));
+      } else {
+        throw new Error('缺少项目ID，请从项目列表进入');
+      }
+
+      // 检查分析结果是否有效
+      if (!overviewResult || !requirementsResult) {
+        throw new Error('分析结果为空，请重试');
+      }
+
       onAnalysisComplete(overviewResult, requirementsResult);
       setMessage({ type: 'success', text: '标书解析完成' });
-      
-      // 清空流式内容
+
       setStreamingOverview('');
       setStreamingRequirements('');
       setCurrentAnalysisStep(null);
@@ -286,16 +305,15 @@ const DocumentAnalysis: React.FC<DocumentAnalysisProps> = ({
       </div>
 
       {/* 文档分析区域 */}
-      {fileContent && (
-        <div className="bg-white rounded-lg shadow p-6">
-          <h2 className="text-xl font-semibold text-gray-900 mb-4">🔍 文档分析</h2>
-          
-          <div className="flex justify-center mb-6">
-            <button
-              onClick={handleAnalysis}
-              disabled={analyzing}
-              className="inline-flex items-center justify-center px-6 py-3 border border-transparent text-base font-medium rounded-md text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:bg-gray-400 disabled:cursor-not-allowed"
-            >
+      <div className="bg-white rounded-lg shadow p-6">
+        <h2 className="text-xl font-semibold text-gray-900 mb-4">🔍 文档分析</h2>
+
+        <div className="flex justify-center mb-6">
+          <button
+            onClick={handleAnalysis}
+            disabled={analyzing || !uploadedFile}
+            className="inline-flex items-center justify-center px-6 py-3 border border-transparent text-base font-medium rounded-md text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:bg-gray-400 disabled:cursor-not-allowed"
+          >
               {analyzing ? (
                 <>
                   <div className="animate-spin -ml-1 mr-3 h-5 w-5 text-white">
@@ -364,7 +382,6 @@ const DocumentAnalysis: React.FC<DocumentAnalysisProps> = ({
             </div>
           </div>
         </div>
-      )}
 
       {/* 消息提示 */}
       {message && (

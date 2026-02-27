@@ -33,6 +33,15 @@ from ..schemas.user import (
     ResetPasswordRequest,
     UsageStatsResponse,
 )
+from ..schemas.prompt import (
+    PromptResponse,
+    PromptListResponse,
+    PromptUpdate,
+    PromptVersionResponse,
+    PromptVersionListResponse,
+    PromptRollbackRequest,
+)
+from ..services.prompt_service import PromptService
 from ..auth.dependencies import require_admin
 from ..auth.security import get_password_hash
 from ..utils.encryption import encryption_service
@@ -598,4 +607,178 @@ async def get_usage_stats(
         active_users=active_users,
         monthly_generations=monthly_generations,
         estimated_tokens=estimated_tokens,
+    )
+
+
+# ==================== 提示词配置接口 ====================
+
+@router.get("/prompts", response_model=PromptListResponse)
+async def list_prompts(
+    current_user: Annotated[User, Depends(require_admin)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+    category: str | None = Query(None, description="按类别筛选：analysis/generation/check"),
+):
+    """
+    获取所有提示词配置（仅管理员）
+
+    返回内置定义和全局配置的合并列表
+    """
+    prompt_service = PromptService(db)
+    prompts = await prompt_service.list_all_prompts_for_admin()
+
+    # 按类别筛选
+    if category:
+        prompts = [p for p in prompts if p["category"] == category]
+
+    return PromptListResponse(
+        items=[PromptResponse(**p) for p in prompts],
+        total=len(prompts),
+    )
+
+
+@router.get("/prompts/{scene_key}", response_model=PromptResponse)
+async def get_prompt(
+    scene_key: str,
+    current_user: Annotated[User, Depends(require_admin)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """获取单个提示词配置（仅管理员）"""
+    prompt_service = PromptService(db)
+    prompts = await prompt_service.list_all_prompts_for_admin()
+
+    for p in prompts:
+        if p["scene_key"] == scene_key:
+            return PromptResponse(**p)
+
+    raise HTTPException(
+        status_code=status.HTTP_404_NOT_FOUND,
+        detail=f"场景 {scene_key} 不存在",
+    )
+
+
+@router.put("/prompts/{scene_key}", response_model=PromptResponse)
+async def update_prompt(
+    scene_key: str,
+    data: PromptUpdate,
+    current_user: Annotated[User, Depends(require_admin)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """
+    更新全局提示词配置（仅管理员）
+
+    自动创建版本历史，支持回滚
+    """
+    prompt_service = PromptService(db)
+
+    try:
+        global_prompt = await prompt_service.update_global_prompt(
+            scene_key=scene_key,
+            prompt=data.prompt,
+            user_id=current_user.id,
+        )
+
+        # 获取更新后的完整配置
+        prompts = await prompt_service.list_all_prompts_for_admin()
+        for p in prompts:
+            if p["scene_key"] == scene_key:
+                return PromptResponse(**p)
+
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e),
+        )
+
+
+@router.get("/prompts/{scene_key}/versions", response_model=PromptVersionListResponse)
+async def list_prompt_versions(
+    scene_key: str,
+    current_user: Annotated[User, Depends(require_admin)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+    limit: int = Query(20, ge=1, le=100, description="返回数量限制"),
+):
+    """获取提示词版本历史（仅管理员）"""
+    prompt_service = PromptService(db)
+    versions = await prompt_service.get_global_prompt_versions(scene_key, limit)
+
+    return PromptVersionListResponse(
+        items=[PromptVersionResponse.model_validate(v) for v in versions],
+        total=len(versions),
+    )
+
+
+@router.post("/prompts/{scene_key}/rollback", response_model=PromptResponse)
+async def rollback_prompt(
+    scene_key: str,
+    data: PromptRollbackRequest,
+    current_user: Annotated[User, Depends(require_admin)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """回滚提示词到指定版本（仅管理员）"""
+    prompt_service = PromptService(db)
+
+    try:
+        await prompt_service.rollback_global_prompt(
+            scene_key=scene_key,
+            target_version=data.version,
+            user_id=current_user.id,
+        )
+
+        # 获取更新后的完整配置
+        prompts = await prompt_service.list_all_prompts_for_admin()
+        for p in prompts:
+            if p["scene_key"] == scene_key:
+                return PromptResponse(**p)
+
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e),
+        )
+
+
+@router.post("/prompts/{scene_key}/reset", response_model=PromptResponse)
+async def reset_prompt_to_builtin(
+    scene_key: str,
+    current_user: Annotated[User, Depends(require_admin)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """重置提示词为内置默认值（仅管理员）"""
+    from ..utils.builtin_prompts import get_builtin_prompt
+
+    builtin = get_builtin_prompt(scene_key)
+    if not builtin:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"场景 {scene_key} 不存在",
+        )
+
+    prompt_service = PromptService(db)
+
+    # 检查是否有全局配置
+    result = await db.execute(
+        select(ApiKeyConfig.__table__.__class__)  # 使用任意表获取连接
+    )
+
+    # 直接删除全局配置，回退到内置
+    from ..models.global_prompt import GlobalPrompt
+    delete_result = await db.execute(
+        select(GlobalPrompt).where(GlobalPrompt.scene_key == scene_key)
+    )
+    global_prompt = delete_result.scalar_one_or_none()
+
+    if global_prompt:
+        await db.delete(global_prompt)
+        await db.flush()
+
+    # 返回内置配置
+    return PromptResponse(
+        scene_key=scene_key,
+        scene_name=builtin["scene_name"],
+        category=builtin["category"],
+        prompt=builtin["prompt"],
+        available_vars=builtin.get("available_vars"),
+        version=1,
+        is_customized=False,
+        updated_at=None,
     )

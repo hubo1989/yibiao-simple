@@ -1,9 +1,42 @@
 /**
  * 配置面板组件
  * 注：API Key 和模型配置已移至后台管理，普通用户无需配置
+ * 模型列表会缓存到本地，只有用户主动点击才重新获取
  */
 import React, { useState, useEffect } from 'react';
 import { configApi } from '../services/api';
+
+// 缓存 key
+const MODEL_CACHE_KEY = 'yibiao:model_cache';
+
+interface ModelCache {
+  models: string[];
+  currentModel: string;
+  timestamp: number;
+}
+
+// 从缓存加载模型配置
+const loadModelCache = (): ModelCache | null => {
+  try {
+    const raw = localStorage.getItem(MODEL_CACHE_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch {
+    return null;
+  }
+};
+
+// 保存模型配置到缓存
+const saveModelCache = (models: string[], currentModel: string) => {
+  try {
+    localStorage.setItem(MODEL_CACHE_KEY, JSON.stringify({
+      models,
+      currentModel,
+      timestamp: Date.now(),
+    }));
+  } catch (e) {
+    console.warn('保存模型缓存失败:', e);
+  }
+};
 
 const ConfigPanel: React.FC = () => {
   const [models, setModels] = useState<string[]>([]);
@@ -11,17 +44,39 @@ const ConfigPanel: React.FC = () => {
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
+  // 组件加载时从缓存读取模型配置
+  useEffect(() => {
+    const cache = loadModelCache();
+    if (cache) {
+      setModels(cache.models);
+      setCurrentModel(cache.currentModel);
+    }
+  }, []);
+
+  // 当模型选择变化时保存到缓存
+  useEffect(() => {
+    if (models.length > 0 && currentModel) {
+      saveModelCache(models, currentModel);
+    }
+  }, [models, currentModel]);
+
   const handleGetModels = async () => {
     try {
       setLoading(true);
       const response = await configApi.getModels();
 
       if (response.data.success) {
-        setModels(response.data.models);
-        if (response.data.models.length > 0) {
-          setCurrentModel(response.data.models[0]);
+        const newModels = response.data.models;
+        setModels(newModels);
+        // 保留之前选择的模型（如果仍在列表中），否则选择第一个
+        if (newModels.length > 0) {
+          if (currentModel && newModels.includes(currentModel)) {
+            // 保持当前选择
+          } else {
+            setCurrentModel(newModels[0]);
+          }
         }
-        setMessage({ type: 'success', text: `获取到 ${response.data.models.length} 个模型` });
+        setMessage({ type: 'success', text: `获取到 ${newModels.length} 个模型` });
         setTimeout(() => setMessage(null), 3000);
       } else {
         setMessage({ type: 'error', text: response.data.message });
@@ -49,9 +104,9 @@ const ConfigPanel: React.FC = () => {
           <button
             onClick={handleGetModels}
             disabled={loading}
-            className="w-full mb-3 inline-flex justify-center items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-primary-600 hover:bg-primary-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500 disabled:bg-gray-400"
+            className="w-full mb-3 inline-flex justify-center items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500 disabled:bg-gray-100"
           >
-            {loading ? '获取中...' : '🔄 获取可用模型'}
+            {loading ? '获取中...' : '🔄 重新获取模型列表'}
           </button>
 
           {models.length > 0 && (
@@ -71,7 +126,7 @@ const ConfigPanel: React.FC = () => {
                 ))}
               </select>
               <p className="mt-2 text-xs text-gray-500">
-                模型配置请在后台管理中修改
+                模型列表已缓存。如需更新，请点击上方按钮重新获取。
               </p>
             </div>
           )}

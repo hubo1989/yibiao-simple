@@ -12,6 +12,8 @@ export interface ContradictionItem {
   description: string;
   chapter_a: string;
   chapter_b: string;
+  chapter_id_a?: string;
+  chapter_id_b?: string;
   detail_a: string;
   detail_b: string;
   suggestion: string;

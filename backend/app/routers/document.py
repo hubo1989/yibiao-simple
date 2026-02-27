@@ -1,4 +1,5 @@
 """文档处理相关API路由"""
+
 import uuid
 from typing import Annotated
 
@@ -21,6 +22,7 @@ from ..models.project import Project, project_members
 from ..db.database import get_db
 from ..services.file_service import FileService
 from ..services.openai_service import OpenAIService
+from ..services.prompt_service import PromptService
 from ..utils.sse import sse_response
 from ..auth.dependencies import require_editor
 
@@ -60,40 +62,35 @@ async def upload_file(
         # 检查文件类型（Content-Type + magic bytes 双重校验）
         allowed_types = [
             "application/pdf",
-            "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         ]
 
         if file.content_type not in allowed_types:
             return FileUploadResponse(
-                success=False,
-                message="不支持的文件类型，请上传PDF或Word文档"
+                success=False, message="不支持的文件类型，请上传PDF或Word文档"
             )
 
         # Magic bytes 校验：防止伪造 Content-Type
         header = await file.read(8)
         await file.seek(0)
-        is_pdf = header[:5] == b'%PDF-'
-        is_docx = header[:4] == b'PK\x03\x04'  # docx 本质是 ZIP
+        is_pdf = header[:5] == b"%PDF-"
+        is_docx = header[:4] == b"PK\x03\x04"  # docx 本质是 ZIP
         if not (is_pdf or is_docx):
             return FileUploadResponse(
-                success=False,
-                message="文件内容与类型不匹配，请上传有效的PDF或Word文档"
+                success=False, message="文件内容与类型不匹配，请上传有效的PDF或Word文档"
             )
-        
+
         # 处理文件并提取文本
         file_content = await FileService.process_uploaded_file(file)
-        
+
         return FileUploadResponse(
             success=True,
             message=f"文件 {file.filename} 上传成功",
-            file_content=file_content
+            file_content=file_content,
         )
-        
+
     except Exception as e:
-        return FileUploadResponse(
-            success=False,
-            message=f"文件处理失败: {str(e)}"
-        )
+        return FileUploadResponse(success=False, message=f"文件处理失败: {str(e)}")
 
 
 @router.post("/analyze-stream")
@@ -111,73 +108,33 @@ async def analyze_document_stream(
         if not openai_service.api_key:
             raise HTTPException(status_code=400, detail="请先配置OpenAI API密钥")
 
+        # 如果前端传了模型名称，覆盖默认模型
+        if request.model_name:
+            openai_service.set_model(request.model_name)
+
         async def generate():
-            # 构建分析提示词
-            if request.analysis_type == AnalysisType.OVERVIEW:
-                system_prompt = """你是一个专业的标书撰写专家。请分析用户发来的招标文件，提取并总结项目概述信息。
-
-请重点关注以下方面：
-1. 项目名称和基本信息
-2. 项目背景和目的
-3. 项目规模和预算
-4. 项目时间安排
-5. 项目要实施的具体内容
-6. 主要技术特点
-7. 其他关键要求
-
-工作要求：
-1. 保持提取信息的全面性和准确性，尽量使用原文内容，不要自己编写
-2. 只关注与项目实施有关的内容，不提取商务信息
-3. 直接返回整理好的项目概述，除此之外不返回任何其他内容
-"""
-            else:  # requirements
-                system_prompt = """你是一名专业的招标文件分析师，擅长从复杂的招标文档中高效提取"技术评分项"相关内容。请严格按照以下步骤和规则执行任务：
-### 1. 目标定位
-- 重点识别文档中与"技术评分"、"评标方法"、"评分标准"、"技术参数"、"技术要求"、"技术方案"、"技术部分"或"评审要素"相关的章节（如"第X章 评标方法"或"附件X：技术评分表"）。
-- 一定不要提取商务、价格、资质等于技术类评分项无关的条目。
-### 2. 提取内容要求
-对每一项技术评分项，按以下结构化格式输出（若信息缺失，标注"未提及"），如果评分项不够明确，你需要根据上下文分析并也整理成如下格式：
-【评分项名称】：<原文描述，保留专业术语>
-【权重/分值】：<具体分值或占比，如"30分"或"40%">
-【评分标准】：<详细规则，如"≥95%得满分，每低1%扣0.5分">
-【数据来源】：<文档中的位置，如"第5.2.3条"或"附件3-表2">
-
-### 3. 处理规则
-- **模糊表述**：有些招标文件格式不是很标准，没有明确的"技术评分表"，但一定都会有"技术评分"相关内容，请根据上下文判断评分项。
-- **表格处理**：若评分项以表格形式呈现，按行提取，并标注"[表格数据]"。
-- **分层结构**：若存在二级评分项（如"技术方案→子项1、子项2"），用缩进或编号体现层级关系。
-- **单位统一**：将所有分值统一为"分"或"%"，并注明原文单位（如原文为"20点"则标注"[原文：20点]"）。
-
-### 4. 输出示例
-【评分项名称】：系统可用性
-【权重/分值】：25分
-【评分标准】：年平均故障时间≤1小时得满分；每增加1小时扣2分，最高扣10分。
-【数据来源】：附件4-技术评分细则（第3页）
-
-【评分项名称】：响应时间
-【权重/分分】：15分 [原文：15%]
-【评分标准】：≤50ms得满分；每增加10ms扣1分。
-【数据来源】：第6.1.2条
-
-### 5. 验证步骤
-提取完成后，执行以下自检：
-- [ ] 所有技术评分项是否覆盖（无遗漏）？
-- [ ] 是否错误提取商务、价格、资质等于技术类评分项无关的条目？
-- [ ] 权重总和是否与文档声明的技术分总分一致（如"技术部分共60分"）？
-
-直接返回提取结果，除此之外不输出任何其他内容
-"""
-
-            analysis_type_cn = "项目概述" if request.analysis_type == AnalysisType.OVERVIEW else "技术评分要求"
-            user_prompt = f"请分析以下招标文件内容，提取{analysis_type_cn}信息：\n\n{request.file_content}"
+            # 使用 PromptService 获取提示词（无项目上下文，使用全局/内置）
+            prompt_service = PromptService(db)
+            scene_key = (
+                "doc_analysis_overview"
+                if request.analysis_type == AnalysisType.OVERVIEW
+                else "doc_analysis_requirements"
+            )
+            prompt, _ = await prompt_service.get_prompt(scene_key)
+            system_prompt, user_template = PromptService.split_prompt(prompt)
+            user_prompt = prompt_service.render_prompt(
+                user_template, {"file_content": request.file_content}
+            )
 
             messages = [
                 {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt}
+                {"role": "user", "content": user_prompt},
             ]
 
             # 流式返回分析结果
-            async for chunk in openai_service.stream_chat_completion(messages, temperature=0.3):
+            async for chunk in openai_service.stream_chat_completion(
+                messages, temperature=0.3
+            ):
                 yield f"data: {json.dumps({'chunk': chunk}, ensure_ascii=False)}\n\n"
 
             # 发送结束信号
@@ -294,7 +251,11 @@ async def export_word(
                     continue
 
                 # 列表项（有序/无序）
-                if line.startswith("- ") or line.startswith("* ") or re.match(r"^\d+\.\s", line):
+                if (
+                    line.startswith("- ")
+                    or line.startswith("* ")
+                    or re.match(r"^\d+\.\s", line)
+                ):
                     # items: (kind, number, text)
                     items = []
                     while i < len(lines):
@@ -455,17 +416,16 @@ async def export_word(
         # 使用 RFC 5987 格式对文件名进行 URL 编码，避免非 ASCII 字符导致的编码错误
         encoded_filename = quote(filename)
         content_disposition = f"attachment; filename*=UTF-8''{encoded_filename}"
-        headers = {
-            "Content-Disposition": content_disposition
-        }
+        headers = {"Content-Disposition": content_disposition}
 
         return StreamingResponse(
             buffer,
             media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-            headers=headers
+            headers=headers,
         )
     except Exception as e:
         import traceback
+
         logger_msg = f"导出Word失败: {str(e)}"
         print(logger_msg)
         traceback.print_exc()
@@ -473,6 +433,7 @@ async def export_word(
 
 
 # ============ 项目上下文版本的接口 ============
+
 
 async def _verify_project_member(
     project_id: uuid.UUID,
@@ -482,12 +443,14 @@ async def _verify_project_member(
     """验证用户是项目成员并返回项目"""
     # 检查用户是否是项目成员
     member_exists = await db.execute(
-        select(exists().where(
-            and_(
-                project_members.c.project_id == project_id,
-                project_members.c.user_id == user_id,
+        select(
+            exists().where(
+                and_(
+                    project_members.c.project_id == project_id,
+                    project_members.c.user_id == user_id,
+                )
             )
-        ))
+        )
     )
     if not member_exists.scalar():
         raise HTTPException(
@@ -530,7 +493,7 @@ async def upload_file_to_project(
         # 检查文件类型（Content-Type + magic bytes 双重校验）
         allowed_types = [
             "application/pdf",
-            "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         ]
 
         if file.content_type not in allowed_types:
@@ -542,8 +505,8 @@ async def upload_file_to_project(
         # Magic bytes 校验：防止伪造 Content-Type
         header = await file.read(8)
         await file.seek(0)
-        is_pdf = header[:5] == b'%PDF-'
-        is_docx = header[:4] == b'PK\x03\x04'  # docx 本质是 ZIP
+        is_pdf = header[:5] == b"%PDF-"
+        is_docx = header[:4] == b"PK\x03\x04"  # docx 本质是 ZIP
         if not (is_pdf or is_docx):
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -581,6 +544,8 @@ async def analyze_project_document_stream(
     db: Annotated[AsyncSession, Depends(get_db)] = None,
 ):
     """流式分析项目文档内容，并将分析结果保存到项目记录"""
+    from ..db.database import async_session_factory
+
     try:
         # 验证 project_id 格式
         try:
@@ -602,97 +567,68 @@ async def analyze_project_document_stream(
             )
 
         # 创建OpenAI服务实例，从数据库加载配置
-        openai_service = OpenAIService(db=db)
+        openai_service = OpenAIService(db=db, project_id=project_uuid)
         await openai_service._ensure_initialized()
 
         if not openai_service.api_key:
             raise HTTPException(status_code=400, detail="请先配置OpenAI API密钥")
 
+        # 如果前端传了模型名称，覆盖默认模型
+        if request.model_name:
+            openai_service.set_model(request.model_name)
+
         # 用于收集分析结果的变量
         collected_result = []
+
+        # 保存分析结果的变量
+        analysis_type = request.analysis_type
+        project_id = project_uuid
 
         async def generate():
             nonlocal collected_result
 
-            # 构建分析提示词
-            if request.analysis_type == AnalysisType.OVERVIEW:
-                system_prompt = """你是一个专业的标书撰写专家。请分析用户发来的招标文件，提取并总结项目概述信息。
-
-请重点关注以下方面：
-1. 项目名称和基本信息
-2. 项目背景和目的
-3. 项目规模和预算
-4. 项目时间安排
-5. 项目要实施的具体内容
-6. 主要技术特点
-7. 其他关键要求
-
-工作要求：
-1. 保持提取信息的全面性和准确性，尽量使用原文内容，不要自己编写
-2. 只关注与项目实施有关的内容，不提取商务信息
-3. 直接返回整理好的项目概述，除此之外不返回任何其他内容
-"""
-            else:  # requirements
-                system_prompt = """你是一名专业的招标文件分析师，擅长从复杂的招标文档中高效提取"技术评分项"相关内容。请严格按照以下步骤和规则执行任务：
-### 1. 目标定位
-- 重点识别文档中与"技术评分"、"评标方法"、"评分标准"、"技术参数"、"技术要求"、"技术方案"、"技术部分"或"评审要素"相关的章节（如"第X章 评标方法"或"附件X：技术评分表"）。
-- 一定不要提取商务、价格、资质等于技术类评分项无关的条目。
-### 2. 提取内容要求
-对每一项技术评分项，按以下结构化格式输出（若信息缺失，标注"未提及"），如果评分项不够明确，你需要根据上下文分析并也整理成如下格式：
-【评分项名称】：<原文描述，保留专业术语>
-【权重/分值】：<具体分值或占比，如"30分"或"40%">
-【评分标准】：<详细规则，如"≥95%得满分，每低1%扣0.5分">
-【数据来源】：<文档中的位置，如"第5.2.3条"或"附件3-表2">
-
-### 3. 处理规则
-- **模糊表述**：有些招标文件格式不是很标准，没有明确的"技术评分表"，但一定都会有"技术评分"相关内容，请根据上下文判断评分项。
-- **表格处理**：若评分项以表格形式呈现，按行提取，并标注"[表格数据]"。
-- **分层结构**：若存在二级评分项（如"技术方案→子项1、子项2"），用缩进或编号体现层级关系。
-- **单位统一**：将所有分值统一为"分"或"%"，并注明原文单位（如原文为"20点"则标注"[原文：20点]"）。
-
-### 4. 输出示例
-【评分项名称】：系统可用性
-【权重/分值】：25分
-【评分标准】：年平均故障时间≤1小时得满分；每增加1小时扣2分，最高扣10分。
-【数据来源】：附件4-技术评分细则（第3页）
-
-【评分项名称】：响应时间
-【权重/分值】：15分 [原文：15%]
-【评分标准】：≤50ms得满分；每增加10ms扣1分。
-【数据来源】：第6.1.2条
-
-### 5. 验证步骤
-提取完成后，执行以下自检：
-- [ ] 所有技术评分项是否覆盖（无遗漏）？
-- [ ] 是否错误提取商务、价格、资质等于技术类评分项无关的条目？
-- [ ] 权重总和是否与文档声明的技术分总分一致（如"技术部分共60分"）？
-
-直接返回提取结果，除此之外不输出任何其他内容
-"""
-
-            analysis_type_cn = "项目概述" if request.analysis_type == AnalysisType.OVERVIEW else "技术评分要求"
-            user_prompt = f"请分析以下招标文件内容，提取{analysis_type_cn}信息：\n\n{project.file_content}"
+            # 使用 PromptService 获取提示词
+            prompt_service = PromptService(db)
+            scene_key = (
+                "doc_analysis_overview"
+                if analysis_type == AnalysisType.OVERVIEW
+                else "doc_analysis_requirements"
+            )
+            prompt, _ = await prompt_service.get_prompt(scene_key, project_id)
+            system_prompt, user_template = PromptService.split_prompt(prompt)
+            user_prompt = prompt_service.render_prompt(
+                user_template, {"file_content": project.file_content}
+            )
 
             messages = [
                 {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt}
+                {"role": "user", "content": user_prompt},
             ]
 
             # 流式返回分析结果，同时收集完整结果
-            async for chunk in openai_service.stream_chat_completion(messages, temperature=0.3):
+            async for chunk in openai_service.stream_chat_completion(
+                messages, temperature=0.3
+            ):
                 collected_result.append(chunk)
                 yield f"data: {json.dumps({'chunk': chunk}, ensure_ascii=False)}\n\n"
 
+            # 在生成器内部创建新的数据库会话保存结果
+            full_result = "".join(collected_result)
+            async with async_session_factory() as save_db:
+                try:
+                    # 重新查询项目
+                    save_project = await save_db.get(Project, project_id)
+                    if save_project:
+                        if analysis_type == AnalysisType.OVERVIEW:
+                            save_project.project_overview = full_result
+                        else:
+                            save_project.tech_requirements = full_result
+                        await save_db.commit()
+                except Exception as e:
+                    print(f"保存分析结果失败: {e}")
+
             # 发送结束信号
             yield "data: [DONE]\n\n"
-
-            # 将分析结果保存到项目记录
-            full_result = "".join(collected_result)
-            if request.analysis_type == AnalysisType.OVERVIEW:
-                project.project_overview = full_result
-            else:
-                project.tech_requirements = full_result
-            await db.flush()
 
         return sse_response(generate())
 
@@ -707,6 +643,7 @@ async def analyze_project_document_stream(
 
 class ProjectAnalysisResult(BaseModel):
     """项目分析结果响应"""
+
     project_id: str
     file_content: str | None = None
     project_overview: str | None = None
@@ -731,3 +668,31 @@ async def get_project_analysis(
         tech_requirements=project.tech_requirements,
         file_content_length=len(project.file_content) if project.file_content else 0,
     )
+
+
+class SaveAnalysisRequest(BaseModel):
+    """保存分析结果请求"""
+    project_overview: str | None = None
+    tech_requirements: str | None = None
+
+
+@router.post("/save-analysis/{project_id}")
+async def save_project_analysis(
+    project_id: uuid.UUID,
+    request: SaveAnalysisRequest,
+    current_user: Annotated[User, Depends(require_editor)] = None,
+    db: Annotated[AsyncSession, Depends(get_db)] = None,
+):
+    """手动保存项目的文档分析结果（用于下一步前的备份保存）"""
+    # 验证用户是项目成员并获取项目
+    project = await _verify_project_member(project_id, current_user.id, db)
+
+    # 保存分析结果
+    if request.project_overview is not None:
+        project.project_overview = request.project_overview
+    if request.tech_requirements is not None:
+        project.tech_requirements = request.tech_requirements
+
+    await db.commit()
+
+    return {"success": True, "message": "分析结果已保存"}

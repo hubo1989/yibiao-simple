@@ -8,12 +8,14 @@ import { useAuth } from '../contexts/AuthContext';
 import { ChevronRightIcon, ChevronDownIcon, DocumentTextIcon, PencilIcon, TrashIcon, PlusIcon } from '@heroicons/react/24/outline';
 import ChapterStatusBadge from '../components/ChapterStatusBadge';
 import type { ChapterStatus } from '../types/chapter';
+import { getCurrentModel } from '../utils/modelCache';
 
 interface OutlineEditProps {
   projectOverview: string;
   techRequirements: string;
   outlineData: OutlineData | null;
   onOutlineGenerated: (outline: OutlineData) => void;
+  projectId: string;
 }
 
 const OutlineEdit: React.FC<OutlineEditProps> = ({
@@ -21,6 +23,7 @@ const OutlineEdit: React.FC<OutlineEditProps> = ({
   techRequirements,
   outlineData,
   onOutlineGenerated,
+  projectId,
 }) => {
   const { token } = useAuth();
   const [generating, setGenerating] = useState(false);
@@ -73,13 +76,20 @@ const OutlineEdit: React.FC<OutlineEditProps> = ({
       setMessage(null);
       setStreamingContent('');
 
-      const response = await outlineApi.generateOutlineStream({
-        overview: projectOverview,
-        requirements: techRequirements,
-        uploaded_expand: uploadedExpand,
-        old_outline: oldOutline || undefined,
-        old_document: oldDocument || undefined,
+      if (!projectId) {
+        throw new Error('缺少项目ID，请从项目列表进入');
+      }
+
+      const currentModel = getCurrentModel();
+      const response = await outlineApi.generateProjectOutlineStream({
+        project_id: projectId,
+        model_name: currentModel || undefined,
       }, token || undefined);
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.detail || `请求失败: ${response.status}`);
+      }
 
       const reader = response.body?.getReader();
       if (!reader) {
@@ -119,10 +129,36 @@ const OutlineEdit: React.FC<OutlineEditProps> = ({
       // 解析最终结果
       try {
         const outlineJson = JSON.parse(result);
+
+        // 兼容 glm-5 模型返回的 {"answer": "..."} 格式
+        if (outlineJson.answer && !outlineJson.outline) {
+          const answerValue = outlineJson.answer;
+          let items: string[];
+
+          if (Array.isArray(answerValue)) {
+            items = answerValue.filter((item): item is string => typeof item === 'string');
+          } else if (typeof answerValue === 'string') {
+            items = answerValue.split('\n').filter((line: string) => line.trim());
+          } else {
+            items = [];
+          }
+
+          const outlineItems: OutlineItem[] = items.map((text: string, index: number) => {
+            const match = text.match(/^(\d+)[.、\s]+(.+)$/);
+            return {
+              id: match ? match[1] : String(index + 1),
+              title: match ? match[2].trim() : text.trim(),
+              description: '',
+              children: []
+            };
+          });
+          outlineJson.outline = outlineItems;
+        }
+
         onOutlineGenerated(outlineJson);
         setMessage({ type: 'success', text: '目录结构生成完成' });
         setStreamingContent(''); // 清空流式内容
-        
+
         // 默认展开所有项目
         const allIds = new Set<string>();
         const collectIds = (items: OutlineItem[]) => {
@@ -133,9 +169,9 @@ const OutlineEdit: React.FC<OutlineEditProps> = ({
             }
           });
         };
-        collectIds(outlineJson.outline);
+        collectIds(outlineJson.outline || []);
         setExpandedItems(allIds);
-        
+
       } catch (parseError) {
         throw new Error('解析目录结构失败');
       }
@@ -596,7 +632,7 @@ const OutlineEdit: React.FC<OutlineEditProps> = ({
             </button>
           </div>
           <div className="border rounded-lg p-4 max-h-96 overflow-y-auto">
-            {outlineData.outline.map(item => renderOutlineItem(item))}
+            {(outlineData.outline || []).map(item => renderOutlineItem(item))}
           </div>
         </div>
       )}

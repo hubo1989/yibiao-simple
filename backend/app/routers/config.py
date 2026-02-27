@@ -11,17 +11,17 @@ from ..models.api_key_config import ApiKeyConfig
 from ..services.openai_service import OpenAIService
 from ..utils.encryption import encryption_service
 from ..db.database import get_db
-from ..auth.dependencies import require_admin
+from ..auth.dependencies import require_editor
 
 router = APIRouter(prefix="/api/config", tags=["配置管理"])
 
 
 @router.post("/models", response_model=ModelListResponse)
 async def get_available_models(
-    current_user: Annotated[User, Depends(require_admin)],
+    current_user: Annotated[User, Depends(require_editor)],
     db: Annotated[AsyncSession, Depends(get_db)],
 ):
-    """获取可用的模型列表（仅管理员，使用数据库中的默认配置）"""
+    """获取可用的模型列表（使用数据库中的默认配置）"""
     try:
         # 从数据库获取默认配置
         result = await db.execute(

@@ -5,7 +5,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
-import { projectApi, consistencyApi } from '../services/api';
+import { projectApi, consistencyApi, documentApi } from '../services/api';
 import { useAppState } from '../hooks/useAppState';
 import type { Project, ProjectProgress } from '../types/project';
 import type { ConsistencyCheckResponse } from '../types/consistency';
@@ -14,6 +14,7 @@ import StepBar from '../components/StepBar';
 import VersionHistory from '../components/VersionHistory';
 import MemberSidebar from '../components/MemberSidebar';
 import ConsistencyPanel from '../components/ConsistencyPanel';
+import CommentPanel from '../components/CommentPanel';
 import DocumentAnalysis from './DocumentAnalysis';
 import OutlineEdit from './OutlineEdit';
 import ContentEdit from './ContentEdit';
@@ -21,7 +22,7 @@ import ContentEdit from './ContentEdit';
 const ProjectWorkspace: React.FC = () => {
   const { projectId } = useParams<{ projectId: string }>();
   const navigate = useNavigate();
-  const { user, logout } = useAuth();
+  const { user, logout, token } = useAuth();
   const [project, setProject] = useState<Project | null>(null);
   const [progress, setProgress] = useState<ProjectProgress | null>(null);
   const [loading, setLoading] = useState(true);
@@ -32,6 +33,8 @@ const ProjectWorkspace: React.FC = () => {
   const [consistencyResult, setConsistencyResult] = useState<ConsistencyCheckResponse | null>(null);
   const [isCheckingConsistency, setIsCheckingConsistency] = useState(false);
   const [activeCommentChapter, setActiveCommentChapter] = useState<string | null>(null);
+  const [lastChapterSummaries, setLastChapterSummaries] = useState<{ chapter_number: string; title: string; summary: string }[]>([]);
+  const [highlightedChapters, setHighlightedChapters] = useState<Set<string>>(new Set());
 
   const {
     state,
@@ -43,7 +46,7 @@ const ProjectWorkspace: React.FC = () => {
     updateSelectedChapter,
     nextStep,
     prevStep,
-  } = useAppState();
+  } = useAppState(projectId);
 
   const steps = ['标书解析', '目录编辑', '正文编辑'];
 
@@ -54,6 +57,29 @@ const ProjectWorkspace: React.FC = () => {
       setLoading(true);
       setError(null);
       const projectData = await projectApi.get(projectId);
+
+      // 权限检查：只有项目创建者、项目成员或管理员可以访问
+      const isOwner = projectData.creator_id === user?.id;
+      const isAdmin = user?.role === 'admin';
+
+      let isMember = false;
+      if (!isOwner && !isAdmin) {
+        // 检查用户是否是项目成员
+        try {
+          const members = await projectApi.getMembers(projectId);
+          isMember = members.some(m => m.user_id === user?.id);
+        } catch {
+          // 获取成员列表失败，默认不是成员
+          isMember = false;
+        }
+      }
+
+      if (!isOwner && !isAdmin && !isMember) {
+        setError('您没有权限访问此项目');
+        setLoading(false);
+        return;
+      }
+
       setProject(projectData);
 
       // 如果项目有已保存的数据，加载到状态中
@@ -77,7 +103,7 @@ const ProjectWorkspace: React.FC = () => {
     } finally {
       setLoading(false);
     }
-  }, [projectId, updateFileContent, updateAnalysisResults]);
+  }, [projectId, user, updateFileContent, updateAnalysisResults]);
 
   useEffect(() => {
     loadProject();
@@ -92,20 +118,74 @@ const ProjectWorkspace: React.FC = () => {
     navigate('/');
   };
 
+  // 处理下一步，保存分析结果后再跳转
+  const handleNextStep = async () => {
+    // 如果当前在标书解析页面（步骤0），先保存分析结果
+    if (state.currentStep === 0 && projectId) {
+      try {
+        // 保存分析结果到数据库
+        if (state.projectOverview || state.techRequirements) {
+          await documentApi.saveProjectAnalysis(
+            projectId,
+            {
+              project_overview: state.projectOverview,
+              tech_requirements: state.techRequirements,
+            },
+            token || undefined
+          );
+        }
+      } catch (error) {
+        console.error('保存分析结果失败:', error);
+        // 即使保存失败也继续下一步，用户可以在下一步重新尝试
+      }
+    }
+    nextStep();
+  };
+
   // 一致性检查
-  const handleCheckConsistency = async () => {
+  const handleCheckConsistency = async (chapterSummaries?: { chapter_number: string; title: string; summary: string }[]) => {
     if (!projectId) return;
+
+    // 如果传入了新的章节数据且有效，保存它；否则使用上次的数据
+    const hasValidSummaries = chapterSummaries && chapterSummaries.length >= 2;
+    const summariesToUse = hasValidSummaries ? chapterSummaries : lastChapterSummaries;
+    if (hasValidSummaries) {
+      setLastChapterSummaries(chapterSummaries!);
+    }
+
+    console.log('一致性检查数据:', {
+      hasValidSummaries,
+      summariesToUseLength: summariesToUse?.length,
+      lastChapterSummariesLength: lastChapterSummaries.length,
+    });
+
+    // 检查是否有有效的章节数据
+    if (!summariesToUse || summariesToUse.length < 2) {
+      alert('至少需要2个有内容的章节才能进行一致性检查。请先生成章节内容。');
+      return;
+    }
 
     setIsCheckingConsistency(true);
     try {
-      const result = await consistencyApi.checkConsistency(projectId);
+      const result = await consistencyApi.checkConsistency(projectId, summariesToUse);
       setConsistencyResult(result);
     } catch (error: any) {
       console.error('一致性检查失败:', error);
-      alert(error.response?.data?.detail || '一致性检查失败，请重试');
+      const errorMessage = error.response?.data?.detail || '一致性检查失败，请重试';
+      alert(errorMessage);
     } finally {
       setIsCheckingConsistency(false);
     }
+  };
+
+  // 打开一致性检查面板（如果有结果直接显示，不重新检查）
+  const handleOpenConsistencyPanel = (chapterSummaries?: { chapter_number: string; title: string; summary: string }[]) => {
+    // 只有传入有效的章节数据才保存
+    if (chapterSummaries && chapterSummaries.length >= 2) {
+      setLastChapterSummaries(chapterSummaries);
+    }
+    // 直接打开面板，显示已有结果
+    setShowConsistencyPanel(true);
   };
 
   const renderCurrentPage = () => {
@@ -118,6 +198,7 @@ const ProjectWorkspace: React.FC = () => {
             techRequirements={state.techRequirements}
             onFileUpload={updateFileContent}
             onAnalysisComplete={updateAnalysisResults}
+            projectId={projectId}
           />
         );
       case 1:
@@ -127,6 +208,7 @@ const ProjectWorkspace: React.FC = () => {
             techRequirements={state.techRequirements}
             outlineData={state.outlineData}
             onOutlineGenerated={updateOutline}
+            projectId={projectId || ''}
           />
         );
       case 2:
@@ -137,7 +219,8 @@ const ProjectWorkspace: React.FC = () => {
             onChapterSelect={updateSelectedChapter}
             projectId={projectId}
             onToggleComments={(chapterId) => setActiveCommentChapter(chapterId)}
-            onToggleConsistency={() => setShowConsistencyPanel(true)}
+            onToggleConsistency={handleOpenConsistencyPanel}
+            highlightedChapters={highlightedChapters}
           />
         );
       default:
@@ -257,7 +340,7 @@ const ProjectWorkspace: React.FC = () => {
             </div>
 
             <button
-              onClick={nextStep}
+              onClick={handleNextStep}
               disabled={state.currentStep === steps.length - 1}
               className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:bg-gray-400 disabled:cursor-not-allowed"
             >
@@ -291,8 +374,129 @@ const ProjectWorkspace: React.FC = () => {
         onClose={() => setShowConsistencyPanel(false)}
         result={consistencyResult}
         isLoading={isCheckingConsistency}
-        onCheck={handleCheckConsistency}
+        onCheck={() => handleCheckConsistency()}
+        onApplyFixes={async (selectedFixes) => {
+          // 应用一致性修改到章节内容 - 使用 LLM 重写
+          if (!state.outlineData || !projectId) return [];
+
+          // 辅助函数：收集所有章节（id, title）
+          const collectChapters = (items: typeof state.outlineData.outline): { id: string; title: string }[] => {
+            const result: { id: string; title: string }[] = [];
+            for (const item of items) {
+              result.push({ id: item.id, title: item.title });
+              if (item.children) {
+                result.push(...collectChapters(item.children));
+              }
+            }
+            return result;
+          };
+
+          const allChapters = collectChapters(state.outlineData.outline);
+
+          // 辅助函数：根据章节引用查找章节ID
+          const findChapterId = (chapterRef: string): string | null => {
+            // 匹配章节编号
+            const chapterNumMatch = chapterRef.match(/章节?(\d+)(?:\.(\d+))?/);
+            if (chapterNumMatch) {
+              const mainNum = chapterNumMatch[1];
+              const subNum = chapterNumMatch[2];
+              const targetId = subNum ? `${mainNum}.${subNum}` : mainNum;
+              const found = allChapters.find(c => c.id === targetId);
+              if (found) return found.id;
+            }
+            // 尝试精确匹配ID
+            const exactMatch = allChapters.find(c => c.id === chapterRef);
+            if (exactMatch) return exactMatch.id;
+            return null;
+          };
+
+          // 按章节ID收集修改建议
+          const chapterFixes = new Map<string, { title: string; suggestions: string[] }>();
+
+          for (const fix of selectedFixes) {
+            const chapterIdA = findChapterId(fix.chapter_a);
+            const chapterIdB = findChapterId(fix.chapter_b);
+
+            if (chapterIdA) {
+              const chapter = allChapters.find(c => c.id === chapterIdA);
+              if (chapter) {
+                const existing = chapterFixes.get(chapterIdA) || { title: chapter.title, suggestions: [] };
+                existing.suggestions.push(fix.suggestion);
+                chapterFixes.set(chapterIdA, existing);
+              }
+            }
+            if (chapterIdB) {
+              const chapter = allChapters.find(c => c.id === chapterIdB);
+              if (chapter) {
+                const existing = chapterFixes.get(chapterIdB) || { title: chapter.title, suggestions: [] };
+                existing.suggestions.push(fix.suggestion);
+                chapterFixes.set(chapterIdB, existing);
+              }
+            }
+          }
+
+          console.log('需要生成的章节:', Array.from(chapterFixes.entries()));
+
+          // 对每个章节调用 LLM 生成内容
+          const generatedChapters = new Map<string, string>();
+          const modifiedChapterIds = new Set<string>();
+
+          for (const [chapterId, { title, suggestions }] of Array.from(chapterFixes.entries())) {
+            console.log('🔄 正在生成章节:', chapterId, title);
+            try {
+              const result = await consistencyApi.rewriteChapter(
+                projectId,
+                title,
+                '', // 没有现有内容，让 LLM 根据标题和建议生成
+                suggestions
+              );
+              generatedChapters.set(chapterId, result.rewritten_content);
+              modifiedChapterIds.add(chapterId);
+              console.log('✅ 章节', chapterId, '生成完成');
+            } catch (error) {
+              console.error('❌ 章节', chapterId, '生成失败:', error);
+            }
+          }
+
+          // 更新大纲数据
+          const updateChapterContent = (items: typeof state.outlineData.outline): typeof state.outlineData.outline => {
+            return items.map((item) => {
+              const generatedContent = generatedChapters.get(item.id);
+              return {
+                ...item,
+                content: generatedContent !== undefined ? generatedContent : item.content,
+                children: item.children ? updateChapterContent(item.children) : undefined,
+              };
+            });
+          };
+
+          const updatedOutline = updateChapterContent(state.outlineData.outline);
+          updateOutline({
+            ...state.outlineData,
+            outline: updatedOutline,
+          });
+
+          // 设置高亮章节
+          console.log('高亮章节:', Array.from(modifiedChapterIds));
+          setHighlightedChapters(new Set(modifiedChapterIds));
+
+          // 5秒后自动清除高亮
+          setTimeout(() => {
+            setHighlightedChapters(new Set());
+          }, 5000);
+
+          return Array.from(modifiedChapterIds);
+        }}
       />
+
+      {/* 批注面板 */}
+      {activeCommentChapter && (
+        <CommentPanel
+          chapterId={activeCommentChapter}
+          isOpen={!!activeCommentChapter}
+          onClose={() => setActiveCommentChapter(null)}
+        />
+      )}
     </div>
   );
 };
