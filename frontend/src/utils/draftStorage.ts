@@ -8,8 +8,10 @@
 
 import type { AppState, OutlineItem } from '../types';
 
-const DRAFT_KEY = 'yibiao:draft:v1';
-const CONTENT_BY_ID_KEY = 'yibiao:contentById:v1';
+const DRAFT_KEY_PREFIX = 'yibiao:draft:v2:';
+const CONTENT_BY_ID_KEY_PREFIX = 'yibiao:contentById:v2:';
+
+let currentProjectId: string | null = null;
 
 export type DraftState = Pick<
   AppState,
@@ -27,37 +29,45 @@ const safeJsonParse = <T,>(raw: string | null): T | null => {
   }
 };
 
+const getDraftKey = () => `${DRAFT_KEY_PREFIX}${currentProjectId || 'default'}`;
+const getContentKey = () => `${CONTENT_BY_ID_KEY_PREFIX}${currentProjectId || 'default'}`;
+
 export const draftStorage = {
+  setProjectId(projectId: string | null) {
+    currentProjectId = projectId;
+  },
+
   loadDraft(): Partial<DraftState> | null {
-    return safeJsonParse<Partial<DraftState>>(localStorage.getItem(DRAFT_KEY));
+    return safeJsonParse<Partial<DraftState>>(localStorage.getItem(getDraftKey()));
   },
 
   saveDraft(partial: Partial<DraftState>) {
     try {
-      const prev = safeJsonParse<Partial<DraftState>>(localStorage.getItem(DRAFT_KEY)) || {};
+      const prev = safeJsonParse<Partial<DraftState>>(localStorage.getItem(getDraftKey())) || {};
       const next = { ...prev, ...partial };
-      localStorage.setItem(DRAFT_KEY, JSON.stringify(next));
+      localStorage.setItem(getDraftKey(), JSON.stringify(next));
     } catch (e) {
       console.warn('保存草稿失败（可能是 localStorage 空间不足）:', e);
     }
   },
 
   clearAll() {
-    // 按用户要求：上传新招标文件时清空之前的 localStorage
+    // 只清空当前项目的 localStorage
     try {
-      localStorage.clear();
+      localStorage.removeItem(getDraftKey());
+      localStorage.removeItem(getContentKey());
     } catch (e) {
       console.warn('清空 localStorage 失败:', e);
     }
   },
 
   loadContentById(): ContentById {
-    return safeJsonParse<ContentById>(localStorage.getItem(CONTENT_BY_ID_KEY)) || {};
+    return safeJsonParse<ContentById>(localStorage.getItem(getContentKey())) || {};
   },
 
   saveContentById(contentById: ContentById) {
     try {
-      localStorage.setItem(CONTENT_BY_ID_KEY, JSON.stringify(contentById));
+      localStorage.setItem(getContentKey(), JSON.stringify(contentById));
     } catch (e) {
       console.warn('保存正文内容失败（可能是 localStorage 空间不足）:', e);
     }
@@ -70,6 +80,16 @@ export const draftStorage = {
       draftStorage.saveContentById(map);
     } catch (e) {
       console.warn('保存章节内容失败:', e);
+    }
+  },
+
+  clearChapterContent(chapterId: string) {
+    try {
+      const map = draftStorage.loadContentById();
+      delete map[chapterId];
+      draftStorage.saveContentById(map);
+    } catch (e) {
+      console.warn('清除章节内容失败:', e);
     }
   },
 

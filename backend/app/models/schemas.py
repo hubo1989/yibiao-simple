@@ -44,6 +44,7 @@ class AnalysisRequest(BaseModel):
     """文档分析请求"""
     file_content: str = Field(..., description="文档内容")
     analysis_type: AnalysisType = Field(..., description="分析类型")
+    model_name: Optional[str] = Field(None, description="可选的模型名称，覆盖默认配置")
 
 
 class OutlineItem(BaseModel):
@@ -71,6 +72,7 @@ class OutlineRequest(BaseModel):
     uploaded_expand: Optional[bool] = Field(False, description="是否已上传方案扩写文件")
     old_outline: Optional[str] = Field(None, description="上传的方案扩写文件解析出的旧目录JSON")
     old_document: Optional[str] = Field(None, description="上传的方案扩写文件解析出的旧文档")
+    model_name: Optional[str] = Field(None, description="可选的模型名称，覆盖默认配置")
 
 class ContentGenerationRequest(BaseModel):
     """内容生成请求"""
@@ -84,6 +86,7 @@ class ChapterContentRequest(BaseModel):
     parent_chapters: Optional[List[Dict[str, Any]]] = Field(None, description="上级章节列表")
     sibling_chapters: Optional[List[Dict[str, Any]]] = Field(None, description="同级章节列表")
     project_overview: str = Field("", description="项目概述")
+    model_name: Optional[str] = Field(None, description="可选的模型名称，覆盖默认配置")
 
 
 class ErrorResponse(BaseModel):
@@ -113,6 +116,7 @@ class ProjectAnalysisRequest(BaseModel):
     """基于项目的文档分析请求"""
     project_id: str = Field(..., description="项目ID")
     analysis_type: AnalysisType = Field(..., description="分析类型")
+    model_name: Optional[str] = Field(None, description="可选的模型名称，覆盖默认配置")
 
 
 # ============ 项目上下文版本的目录和内容生成 Schema ============
@@ -120,12 +124,14 @@ class ProjectAnalysisRequest(BaseModel):
 class ProjectOutlineRequest(BaseModel):
     """基于项目的目录生成请求"""
     project_id: str = Field(..., description="项目ID")
+    model_name: Optional[str] = Field(None, description="可选的模型名称，覆盖默认配置")
 
 
 class ProjectContentGenerateRequest(BaseModel):
     """基于项目的章节内容生成请求"""
     project_id: str = Field(..., description="项目ID")
     chapter_id: str = Field(..., description="章节ID")
+    model_name: Optional[str] = Field(None, description="可选的模型名称，覆盖默认配置")
 
 
 class ChapterCreatedResponse(BaseModel):

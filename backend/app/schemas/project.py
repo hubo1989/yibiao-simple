@@ -104,6 +104,7 @@ class ChapterSummaryForConsistency(BaseModel):
     chapter_number: str = Field(..., description="章节编号，如 1.2.3")
     title: str = Field(..., description="章节标题")
     summary: str = Field(..., description="章节内容摘要（包含关键承诺、数据、时间线等）")
+    chapter_id: str | None = Field(None, description="章节ID，用于定位修改")
 
 
 class ContradictionItem(BaseModel):
@@ -113,6 +114,8 @@ class ContradictionItem(BaseModel):
     description: str = Field(..., description="矛盾描述")
     chapter_a: str = Field(..., description="涉及章节A的编号和标题")
     chapter_b: str = Field(..., description="涉及章节B的编号和标题")
+    chapter_id_a: str | None = Field(None, description="章节A的ID")
+    chapter_id_b: str | None = Field(None, description="章节B的ID")
     detail_a: str = Field(..., description="章节A中的相关内容")
     detail_b: str = Field(..., description="章节B中的相关内容")
     suggestion: str = Field(..., description="统一的建议")

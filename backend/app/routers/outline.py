@@ -1,4 +1,5 @@
 """目录相关API路由"""
+
 import uuid
 import json
 import asyncio
@@ -22,6 +23,7 @@ from ..models.chapter import Chapter, ChapterStatus
 from ..models.version import ProjectVersion, ChangeType
 from ..db.database import get_db
 from ..services.openai_service import OpenAIService
+from ..services.prompt_service import PromptService
 from ..utils import prompt_manager
 from ..utils.sse import sse_response
 from ..auth.dependencies import require_editor
@@ -30,6 +32,7 @@ router = APIRouter(prefix="/api/outline", tags=["目录管理"])
 
 
 # ============ 旧版接口（保持向后兼容） ============
+
 
 @router.post("/generate")
 async def generate_outline(
@@ -46,13 +49,18 @@ async def generate_outline(
         if not openai_service.api_key:
             raise HTTPException(status_code=400, detail="请先配置OpenAI API密钥")
 
+        # 如果前端传了模型名称，覆盖默认模型
+        if request.model_name:
+            openai_service.set_model(request.model_name)
+
         async def generate():
             try:
                 # 后台计算主任务
-                compute_task = asyncio.create_task(openai_service.generate_outline_v2(
-                    overview=request.overview,
-                    requirements=request.requirements
-                ))
+                compute_task = asyncio.create_task(
+                    openai_service.generate_outline_v2(
+                        overview=request.overview, requirements=request.requirements
+                    )
+                )
 
                 # 在等待计算完成期间发送心跳，保持连接（发送空字符串chunk）
                 while not compute_task.done():
@@ -72,7 +80,7 @@ async def generate_outline(
                 chunk_size = 128
                 chunk_delay = 0.1  # 每个分片之间增加一点点延迟，增强SSE逐步展示效果
                 for i in range(0, len(result_str), chunk_size):
-                    piece = result_str[i:i+chunk_size]
+                    piece = result_str[i : i + chunk_size]
                     yield f"data: {json.dumps({'chunk': piece}, ensure_ascii=False)}\n\n"
                     await asyncio.sleep(chunk_delay)
                 # 发送结束信号
@@ -109,14 +117,20 @@ async def generate_outline_stream(
         if not openai_service.api_key:
             raise HTTPException(status_code=400, detail="请先配置OpenAI API密钥")
 
+        # 如果前端传了模型名称，覆盖默认模型
+        if request.model_name:
+            openai_service.set_model(request.model_name)
+
         async def generate():
             if request.uploaded_expand:
-                system_prompt, user_prompt = prompt_manager.generate_outline_with_old_prompt(
-                    request.overview, request.requirements, request.old_outline
+                system_prompt, user_prompt = (
+                    prompt_manager.generate_outline_with_old_prompt(
+                        request.overview, request.requirements, request.old_outline
+                    )
                 )
                 messages = [
                     {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt}
+                    {"role": "user", "content": user_prompt},
                 ]
 
                 full_content = ""
@@ -132,7 +146,7 @@ async def generate_outline_stream(
 
                 messages = [
                     {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt}
+                    {"role": "user", "content": user_prompt},
                 ]
 
                 # 流式返回目录生成结果
@@ -151,6 +165,7 @@ async def generate_outline_stream(
 
 
 # ============ 项目上下文版本的接口 ============
+
 
 async def _verify_project_editor(
     project_id: uuid.UUID,
@@ -225,7 +240,9 @@ async def _create_chapters_from_outline(
             parent_id=parent_id,
             chapter_number=item.get("id", str(order_start + idx + 1)),
             title=item.get("title", ""),
-            content=item.get("description"),  # 描述暂时存到 content，后续生成内容时会覆盖
+            content=item.get(
+                "description"
+            ),  # 描述暂时存到 content，后续生成内容时会覆盖
             status=ChapterStatus.PENDING,
             order_index=order_start + idx,
         )
@@ -283,6 +300,10 @@ async def generate_project_outline_stream(
         if not openai_service.api_key:
             raise HTTPException(status_code=400, detail="请先配置OpenAI API密钥")
 
+        # 如果前端传了模型名称，覆盖默认模型
+        if request.model_name:
+            openai_service.set_model(request.model_name)
+
         # 用于收集完整结果的变量
         collected_result: list[str] = []
 
@@ -296,7 +317,7 @@ async def generate_project_outline_stream(
 
             messages = [
                 {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt}
+                {"role": "user", "content": user_prompt},
             ]
 
             # 流式返回目录生成结果，同时收集完整结果
@@ -314,6 +335,33 @@ async def generate_project_outline_stream(
                 full_content = "".join(collected_result)
                 outline_data = json.loads(full_content)
                 outline_items = outline_data.get("outline", [])
+
+                if not outline_items and "answer" in outline_data:
+                    answer = outline_data["answer"]
+                    if isinstance(answer, list):
+                        outline_items = [
+                            {
+                                "id": str(i + 1),
+                                "title": item,
+                                "description": "",
+                                "children": [],
+                            }
+                            for i, item in enumerate(answer)
+                            if isinstance(item, str)
+                        ]
+                    elif isinstance(answer, str):
+                        lines = [
+                            line.strip() for line in answer.split("\n") if line.strip()
+                        ]
+                        outline_items = [
+                            {
+                                "id": str(i + 1),
+                                "title": line,
+                                "description": "",
+                                "children": [],
+                            }
+                            for i, line in enumerate(lines)
+                        ]
 
                 if outline_items:
                     # 先删除项目现有的所有章节
@@ -446,6 +494,10 @@ async def generate_project_content_stream(
         if not openai_service.api_key:
             raise HTTPException(status_code=400, detail="请先配置OpenAI API密钥")
 
+        # 如果前端传了模型名称，覆盖默认模型
+        if request.model_name:
+            openai_service.set_model(request.model_name)
+
         # 获取父章节列表（用于上下文）
         parent_chapters: list[dict[str, Any]] = []
         current_parent_id = chapter.parent_id
@@ -455,23 +507,28 @@ async def generate_project_content_stream(
             )
             parent_chapter = parent_result.scalar_one_or_none()
             if parent_chapter:
-                parent_chapters.insert(0, {
-                    "id": str(parent_chapter.id),
-                    "chapter_number": parent_chapter.chapter_number,
-                    "title": parent_chapter.title,
-                })
+                parent_chapters.insert(
+                    0,
+                    {
+                        "id": str(parent_chapter.id),
+                        "chapter_number": parent_chapter.chapter_number,
+                        "title": parent_chapter.title,
+                    },
+                )
                 current_parent_id = parent_chapter.parent_id
             else:
                 break
 
         # 获取同级章节列表
         siblings_result = await db.execute(
-            select(Chapter).where(
+            select(Chapter)
+            .where(
                 and_(
                     Chapter.project_id == project_uuid,
                     Chapter.parent_id == chapter.parent_id,
                 )
-            ).order_by(Chapter.order_index)
+            )
+            .order_by(Chapter.order_index)
         )
         sibling_chapters = [
             {
@@ -485,50 +542,37 @@ async def generate_project_content_stream(
         # 用于收集完整结果的变量
         collected_result: list[str] = []
 
-        # 构建内容生成提示词
-        system_prompt = """你是一个专业的标书撰写专家。请根据提供的章节信息和项目背景，为指定章节生成详细、专业的内容。
+        # 使用 PromptService 获取提示词
+        prompt_service = PromptService(db)
+        prompt, _ = await prompt_service.get_prompt("chapter_content", project_uuid)
+        system_prompt, user_template = PromptService.split_prompt(prompt)
 
-要求：
-1. 内容要详实、专业，符合投标文件规范
-2. 使用 Markdown 格式编写
-3. 内容要有针对性，紧扣项目概述和技术要求
-4. 适当使用表格、列表等格式增强可读性
-5. 如果章节有子章节，则只需生成概述性内容
-6. 直接输出内容，不要添加额外的说明"""
+        # 构建上级章节和同级章节信息（与模板变量匹配）
+        parent_chapters_formatted = [
+            {"id": p["chapter_number"], "title": p["title"], "description": ""}
+            for p in (parent_chapters or [])
+        ]
+        sibling_chapters_formatted = [
+            {"id": s["chapter_number"], "title": s["title"], "description": ""}
+            for s in (sibling_chapters or [])
+        ]
 
-        parent_context = ""
-        if parent_chapters:
-            parent_context = "\n上级章节：\n" + "\n".join([
-                f"- {p['chapter_number']} {p['title']}" for p in parent_chapters
-            ])
-
-        sibling_context = ""
-        if sibling_chapters:
-            sibling_context = "\n同级章节：\n" + "\n".join([
-                f"- {s['chapter_number']} {s['title']}" for s in sibling_chapters
-            ])
-
-        user_prompt = f"""请为以下章节生成内容：
-
-项目概述：
-{project.project_overview or '暂无'}
-
-技术评分要求：
-{project.tech_requirements or '暂无'}
-
-{parent_context}
-{sibling_context}
-
-当前章节：
-- 编号：{chapter.chapter_number}
-- 标题：{chapter.title}
-{f'- 描述：{chapter.content}' if chapter.content else ''}
-
-请生成该章节的详细内容。"""
+        # 渲染用户提示词模板
+        user_prompt = prompt_service.render_prompt(
+            user_template,
+            {
+                "project_overview": project.project_overview or "暂无",
+                "parent_chapters": parent_chapters_formatted,
+                "sibling_chapters": sibling_chapters_formatted,
+                "chapter_id": str(chapter.id),
+                "chapter_title": chapter.title,
+                "chapter_description": chapter.content or "",
+            },
+        )
 
         messages = [
             {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt}
+            {"role": "user", "content": user_prompt},
         ]
 
         async def generate():

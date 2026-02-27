@@ -12,6 +12,7 @@ export interface OutlineItem {
   description: string;
   children?: OutlineItem[];
   content?: string;
+  generationError?: string;
 }
 
 export interface OutlineData {

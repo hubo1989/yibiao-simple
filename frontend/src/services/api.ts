@@ -33,6 +33,17 @@ import type {
   OperationLogQuery,
   UsageStats,
 } from '../types/admin';
+import type {
+  PromptResponse,
+  PromptListResponse,
+  PromptUpdate,
+  PromptVersionResponse,
+  PromptVersionListResponse,
+  PromptRollbackRequest,
+  ProjectPromptConfig,
+  ProjectPromptConfigListResponse,
+  ProjectPromptOverride,
+} from '../types/prompt';
 
 const API_BASE_URL = process.env.REACT_APP_API_URL || 'http://localhost:8000';
 
@@ -128,6 +139,57 @@ api.interceptors.response.use(
   }
 );
 
+// 带认证的 fetch 辅助函数，处理 token 刷新
+async function authenticatedFetch(
+  url: string,
+  options: RequestInit = {},
+  token?: string
+): Promise<Response> {
+  const authToken = token || getStoredToken();
+
+  const response = await fetch(url, {
+    ...options,
+    headers: {
+      ...options.headers,
+      ...(authToken ? { 'Authorization': `Bearer ${authToken}` } : {}),
+    },
+  });
+
+  // 处理 401 错误
+  if (response.status === 401) {
+    const refreshToken = getStoredRefreshToken();
+    if (refreshToken) {
+      try {
+        const refreshResponse = await axios.post<Token>(`${API_BASE_URL}/api/auth/refresh`, {
+          refresh_token: refreshToken,
+        });
+
+        const { access_token, refresh_token } = refreshResponse.data;
+        setStoredTokens(access_token, refresh_token);
+        setAuthToken(access_token);
+
+        // 使用新 token 重试请求
+        return fetch(url, {
+          ...options,
+          headers: {
+            ...options.headers,
+            'Authorization': `Bearer ${access_token}`,
+          },
+        });
+      } catch {
+        // 刷新失败，清除认证并跳转登录页
+        clearStoredTokens();
+        clearAuthToken();
+        if (window.location.pathname !== '/login') {
+          window.location.href = '/login';
+        }
+      }
+    }
+  }
+
+  return response;
+}
+
 // 认证相关 API
 export const authApi = {
   // 用户登录
@@ -213,6 +275,7 @@ export interface FileUploadResponse {
 export interface AnalysisRequest {
   file_content: string;
   analysis_type: 'overview' | 'requirements';
+  model_name?: string;
 }
 
 export interface OutlineRequest {
@@ -221,6 +284,7 @@ export interface OutlineRequest {
   uploaded_expand?: boolean;
   old_outline?: string;
   old_document?: string;
+  model_name?: string;
 }
 
 export interface ContentGenerationRequest {
@@ -233,6 +297,7 @@ export interface ChapterContentRequest {
   parent_chapters?: any[];
   sibling_chapters?: any[];
   project_overview: string;
+  model_name?: string;
 }
 
 // 配置相关API
@@ -258,28 +323,57 @@ export const documentApi = {
 
   // 流式分析文档
   analyzeDocumentStream: (data: AnalysisRequest, token?: string) => {
-    const authToken = token || getStoredToken();
-    return fetch(`${API_BASE_URL}/api/document/analyze-stream`, {
+    return authenticatedFetch(`${API_BASE_URL}/api/document/analyze-stream`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        ...(authToken ? { 'Authorization': `Bearer ${authToken}` } : {}),
       },
       body: JSON.stringify(data),
-    });
+    }, token);
+  },
+
+  // 上传文件到项目
+  uploadToProject: (projectId: string, file: File, token?: string) => {
+    const formData = new FormData();
+    formData.append('project_id', projectId);
+    formData.append('file', file);
+    return authenticatedFetch(`${API_BASE_URL}/api/document/upload-to-project`, {
+      method: 'POST',
+      body: formData,
+    }, token);
+  },
+
+  // 流式分析项目文档（保存到数据库）
+  analyzeProjectStream: (data: { project_id: string; analysis_type: 'overview' | 'requirements'; model_name?: string }, token?: string) => {
+    return authenticatedFetch(`${API_BASE_URL}/api/document/analyze-project-stream`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(data),
+    }, token);
+  },
+
+  // 保存项目分析结果（用于下一步前的备份保存）
+  saveProjectAnalysis: (projectId: string, data: { project_overview?: string; tech_requirements?: string }, token?: string) => {
+    return authenticatedFetch(`${API_BASE_URL}/api/document/save-analysis/${projectId}`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(data),
+    }, token);
   },
 
   // 导出Word文档
   exportWord: (data: any, token?: string) => {
-    const authToken = token || getStoredToken();
-    return fetch(`${API_BASE_URL}/api/document/export-word`, {
+    return authenticatedFetch(`${API_BASE_URL}/api/document/export-word`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        ...(authToken ? { 'Authorization': `Bearer ${authToken}` } : {}),
       },
       body: JSON.stringify(data),
-    });
+    }, token);
   },
 };
 
@@ -291,15 +385,24 @@ export const outlineApi = {
 
   // 流式生成目录
   generateOutlineStream: (data: OutlineRequest, token?: string) => {
-    const authToken = token || getStoredToken();
-    return fetch(`${API_BASE_URL}/api/outline/generate-stream`, {
+    return authenticatedFetch(`${API_BASE_URL}/api/outline/generate-stream`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        ...(authToken ? { 'Authorization': `Bearer ${authToken}` } : {}),
       },
       body: JSON.stringify(data),
-    });
+    }, token);
+  },
+
+  // 流式生成项目目录（保存到数据库）
+  generateProjectOutlineStream: (data: { project_id: string; model_name?: string }, token?: string) => {
+    return authenticatedFetch(`${API_BASE_URL}/api/outline/generate-project-stream`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(data),
+    }, token);
   },
 
 };
@@ -310,14 +413,10 @@ export const expandApi = {
   uploadExpandFile: (file: File, token?: string) => {
     const formData = new FormData();
     formData.append('file', file);
-    const authToken = token || getStoredToken();
-    return fetch(`${API_BASE_URL}/api/expand/upload`, {
+    return authenticatedFetch(`${API_BASE_URL}/api/expand/upload`, {
       method: 'POST',
-      headers: {
-        ...(authToken ? { 'Authorization': `Bearer ${authToken}` } : {}),
-      },
       body: formData,
-    });
+    }, token);
   },
 };
 
@@ -329,15 +428,13 @@ export const contentApi = {
 
   // 流式生成单章节内容
   generateChapterContentStream: (data: ChapterContentRequest, token?: string) => {
-    const authToken = token || getStoredToken();
-    return fetch(`${API_BASE_URL}/api/content/generate-chapter-stream`, {
+    return authenticatedFetch(`${API_BASE_URL}/api/content/generate-chapter-stream`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        ...(authToken ? { 'Authorization': `Bearer ${authToken}` } : {}),
       },
       body: JSON.stringify(data),
-    });
+    }, token);
   },
 };
 
@@ -459,12 +556,10 @@ export const commentApi = {
 export const proofreadApi = {
   // 触发章节校对（流式返回）
   proofreadChapter: (chapterId: string) => {
-    const token = getStoredToken();
-    return fetch(`${API_BASE_URL}/api/chapters/${chapterId}/proofread`, {
+    return authenticatedFetch(`${API_BASE_URL}/api/chapters/${chapterId}/proofread`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
       },
     });
   },
@@ -473,9 +568,40 @@ export const proofreadApi = {
 // 一致性检查相关 API
 export const consistencyApi = {
   // 检查项目跨章节一致性
-  checkConsistency: async (projectId: string): Promise<ConsistencyCheckResponse> => {
-    const response = await api.post<ConsistencyCheckResponse>(
-      `/api/projects/${projectId}/consistency-check`
+  checkConsistency: async (
+    projectId: string,
+    chapterSummaries?: { chapter_number: string; title: string; summary: string; chapter_id?: string }[]
+  ): Promise<ConsistencyCheckResponse> => {
+    // 只有当 chapterSummaries 存在且长度>=2 时才发送请求体，否则不发送
+    if (chapterSummaries && chapterSummaries.length >= 2) {
+      const response = await api.post<ConsistencyCheckResponse>(
+        `/api/projects/${projectId}/consistency-check`,
+        { chapter_summaries: chapterSummaries }
+      );
+      return response.data;
+    } else {
+      // 不发送请求体，让后端从数据库读取
+      const response = await api.post<ConsistencyCheckResponse>(
+        `/api/projects/${projectId}/consistency-check`
+      );
+      return response.data;
+    }
+  },
+
+  // 使用 LLM 重写章节
+  rewriteChapter: async (
+    projectId: string,
+    chapterTitle: string,
+    chapterContent: string,
+    suggestions: string[]
+  ): Promise<{ rewritten_content: string }> => {
+    const response = await api.post<{ rewritten_content: string }>(
+      `/api/projects/${projectId}/chapters/rewrite`,
+      {
+        chapter_title: chapterTitle,
+        chapter_content: chapterContent,
+        suggestions: suggestions,
+      }
     );
     return response.data;
   },
@@ -554,6 +680,74 @@ export const adminApi = {
   // 获取使用统计
   getStats: async (): Promise<UsageStats> => {
     const response = await api.get<UsageStats>('/api/admin/stats');
+    return response.data;
+  },
+};
+
+// ==================== 提示词配置 API ====================
+
+export const promptApi = {
+  // ==================== 管理员全局提示词 ====================
+
+  // 获取所有提示词配置
+  listPrompts: async (params?: { category?: string }): Promise<PromptListResponse> => {
+    const response = await api.get<PromptListResponse>('/api/admin/prompts', { params });
+    return response.data;
+  },
+
+  // 获取单个提示词配置
+  getPrompt: async (sceneKey: string): Promise<PromptResponse> => {
+    const response = await api.get<PromptResponse>(`/api/admin/prompts/${sceneKey}`);
+    return response.data;
+  },
+
+  // 更新提示词配置
+  updatePrompt: async (sceneKey: string, data: PromptUpdate): Promise<PromptResponse> => {
+    const response = await api.put<PromptResponse>(`/api/admin/prompts/${sceneKey}`, data);
+    return response.data;
+  },
+
+  // 获取提示词版本历史
+  listPromptVersions: async (sceneKey: string, params?: { limit?: number }): Promise<PromptVersionListResponse> => {
+    const response = await api.get<PromptVersionListResponse>(`/api/admin/prompts/${sceneKey}/versions`, { params });
+    return response.data;
+  },
+
+  // 回滚提示词到指定版本
+  rollbackPrompt: async (sceneKey: string, data: PromptRollbackRequest): Promise<PromptResponse> => {
+    const response = await api.post<PromptResponse>(`/api/admin/prompts/${sceneKey}/rollback`, data);
+    return response.data;
+  },
+
+  // 重置提示词为内置默认值
+  resetPrompt: async (sceneKey: string): Promise<PromptResponse> => {
+    const response = await api.post<PromptResponse>(`/api/admin/prompts/${sceneKey}/reset`);
+    return response.data;
+  },
+
+  // ==================== 项目级提示词 ====================
+
+  // 获取项目的所有提示词配置
+  listProjectPrompts: async (projectId: string, params?: { category?: string }): Promise<ProjectPromptConfigListResponse> => {
+    const response = await api.get<ProjectPromptConfigListResponse>(`/api/projects/${projectId}/prompts`, { params });
+    return response.data;
+  },
+
+  // 获取项目中特定场景的提示词配置
+  getProjectPrompt: async (projectId: string, sceneKey: string): Promise<ProjectPromptConfig> => {
+    const response = await api.get<ProjectPromptConfig>(`/api/projects/${projectId}/prompts/${sceneKey}`);
+    return response.data;
+  },
+
+  // 设置项目级提示词覆盖
+  setProjectPrompt: async (projectId: string, sceneKey: string, data: ProjectPromptOverride): Promise<ProjectPromptConfig> => {
+    const response = await api.put<ProjectPromptConfig>(`/api/projects/${projectId}/prompts/${sceneKey}`, data);
+    return response.data;
+  },
+
+  // 删除项目级提示词覆盖
+  deleteProjectPrompt: async (projectId: string, sceneKey: string): Promise<ProjectPromptConfig> => {
+    const response = await api.delete<ProjectPromptConfig>(`/api/projects/${projectId}/prompts/${sceneKey}`);
     return response.data;
   },
 };

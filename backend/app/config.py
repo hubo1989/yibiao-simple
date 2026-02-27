@@ -52,6 +52,8 @@ class Settings(BaseSettings):
         "http://127.0.0.1:3003",
         "http://localhost:3004",
         "http://127.0.0.1:3004",
+        "http://localhost:3033",
+        "http://127.0.0.1:3033",
         "http://localhost",
         "http://127.0.0.1",
     ]

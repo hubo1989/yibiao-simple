@@ -1,7 +1,7 @@
 """create consistency_results table
 
-Revision ID: 0010
-Revises: 0009
+Revision ID: 0010_create_consistency_results
+Revises: 0009_create_proofread_results
 Create Date: 2026-02-12
 
 """
@@ -10,8 +10,8 @@ import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
 
 # revision identifiers, used by Alembic.
-revision = '0010'
-down_revision = '0009'
+revision = '0010_create_consistency_results'
+down_revision = '0009_create_proofread_results'
 branch_labels = None
 depends_on = None
 

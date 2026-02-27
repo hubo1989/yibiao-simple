@@ -4,7 +4,7 @@ from datetime import datetime
 from enum import Enum as PyEnum
 
 from sqlalchemy import String, Text, DateTime, ForeignKey, Table, Column, func, Enum
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from ..db.base import Base
@@ -65,6 +65,10 @@ class Project(Base):
     )
     tech_requirements: Mapped[str | None] = mapped_column(
         Text, nullable=True
+    )
+    custom_prompts: Mapped[dict | None] = mapped_column(
+        JSONB, nullable=True,
+        comment="项目级自定义提示词，key 为 scene_key，value 为 {system_prompt, user_prompt_template}"
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()

@@ -13,6 +13,7 @@ import {
   ArrowUpIcon,
   ChatBubbleLeftIcon,
   DocumentCheckIcon,
+  ArrowPathIcon,
 } from '@heroicons/react/24/outline';
 import { contentApi, documentApi, proofreadApi, chapterApi, ChapterContentRequest } from '../services/api';
 import { useAuth } from '../contexts/AuthContext';
@@ -29,7 +30,8 @@ interface ContentEditProps {
   onChapterSelect: (chapterId: string) => void;
   projectId?: string;
   onToggleComments?: (chapterId: string) => void;
-  onToggleConsistency?: () => void;
+  onToggleConsistency?: (chapterSummaries: { chapter_number: string; title: string; summary: string }[]) => void;
+  highlightedChapters?: Set<string>;
 }
 
 interface GenerationProgress {
@@ -48,6 +50,7 @@ const ContentEdit: React.FC<ContentEditProps> = ({
   projectId,
   onToggleComments,
   onToggleConsistency,
+  highlightedChapters,
 }) => {
   const { token } = useAuth();
   const [isGenerating, setIsGenerating] = useState(false);
@@ -68,6 +71,65 @@ const ContentEdit: React.FC<ContentEditProps> = ({
   const [proofreadResult, setProofreadResult] = useState<ProofreadResult | null>(null);
   const [isProofreading, setIsProofreading] = useState(false);
   const [proofreadStreamingText, setProofreadStreamingText] = useState('');
+
+  // 高亮修改内容的函数
+  const highlightConsistencyFixes = (content: string): React.ReactNode => {
+    if (!content) return null;
+
+    // 检查是否包含一致性修改标记
+    const marker = '【一致性修改】';
+    if (!content.includes(marker)) {
+      return <ReactMarkdown>{content}</ReactMarkdown>;
+    }
+
+    // 分割内容，找出修改部分
+    const parts: React.ReactNode[] = [];
+    let keyIndex = 0;
+    let remainingContent = content;
+
+    while (remainingContent.includes(marker)) {
+      const markerIndex = remainingContent.indexOf(marker);
+
+      // 添加修改前的普通内容
+      if (markerIndex > 0) {
+        const normalContent = remainingContent.substring(0, markerIndex);
+        parts.push(<ReactMarkdown key={`normal-${keyIndex}`}>{normalContent}</ReactMarkdown>);
+      }
+
+      // 找到修改内容的结束位置（下一个换行或内容结束）
+      const afterMarker = remainingContent.substring(markerIndex + marker.length);
+      let endIndex = afterMarker.indexOf('\n');
+      if (endIndex === -1) {
+        endIndex = afterMarker.length;
+      }
+
+      const fixContent = afterMarker.substring(0, endIndex);
+      remainingContent = afterMarker.substring(endIndex);
+
+      // 添加高亮的修改内容
+      parts.push(
+        <div key={`fix-${keyIndex}`} className="bg-yellow-100 border-l-4 border-yellow-500 p-3 my-2 rounded-r">
+          <div className="flex items-start">
+            <span className="text-yellow-700 font-medium text-sm mr-2">一致性修改:</span>
+            <span className="text-yellow-800">{fixContent}</span>
+          </div>
+        </div>
+      );
+
+      keyIndex++;
+    }
+
+    // 添加剩余的普通内容
+    if (remainingContent.trim()) {
+      // 移除开头的 --- 分隔线
+      const cleanRemaining = remainingContent.replace(/^[\s-]*/, '');
+      if (cleanRemaining.trim()) {
+        parts.push(<ReactMarkdown key={`remaining-${keyIndex}`}>{cleanRemaining}</ReactMarkdown>);
+      }
+    }
+
+    return <>{parts}</>;
+  };
 
   // 收集所有叶子节点
   const collectLeafItems = useCallback((items: OutlineItem[]): OutlineItem[] => {
@@ -174,6 +236,9 @@ const ContentEdit: React.FC<ContentEditProps> = ({
       // 非叶子节点根据子节点状态判断
       return 'pending';
     }
+    // 检查是否有生成错误
+    const leafItem = leafItems.find(leaf => leaf.id === item.id);
+    if (leafItem?.generationError) return 'error';
     const content = getLeafItemContent(item.id) || item.content;
     if (content) return 'generated';
     return 'pending';
@@ -289,20 +354,29 @@ const ContentEdit: React.FC<ContentEditProps> = ({
   const renderOutline = (items: OutlineItem[], level: number = 1): React.ReactElement[] => {
     return items.map((item) => {
       const isLeaf = isLeafNode(item);
-      const currentContent = isLeaf ? getLeafItemContent(item.id) : item.content;
+      const leafItem = isLeaf ? leafItems.find(i => i.id === item.id) : null;
+      const currentContent = isLeaf ? (leafItem?.content || getLeafItemContent(item.id)) : item.content;
+      const generationError = leafItem?.generationError;
       const isGeneratingThis = progress.generating.has(item.id);
       const chapterStatus = getChapterStatus(item, isGeneratingThis);
+      const isHighlighted = highlightedChapters?.has(item.id);
 
       return (
-        <div key={item.id} className={`mb-${level === 1 ? '8' : '4'}`}>
+        <div key={item.id} className={`mb-${level === 1 ? '8' : '4'} ${isHighlighted ? 'ring-2 ring-green-400 ring-offset-2 rounded-lg' : ''}`}>
           {/* 标题和状态 */}
-          <div className="flex items-center space-x-3 mb-2">
-            <div className={`text-${level === 1 ? 'xl' : level === 2 ? 'lg' : 'base'} font-${level === 1 ? 'bold' : 'semibold'} text-gray-900`}>
+          <div className={`flex items-center space-x-3 mb-2 ${isHighlighted ? 'bg-green-50 px-3 py-2 rounded-lg' : ''}`}>
+            <div className={`text-${level === 1 ? 'xl' : level === 2 ? 'lg' : 'base'} font-${level === 1 ? 'bold' : 'semibold'} ${isHighlighted ? 'text-green-700' : 'text-gray-900'}`}>
               {item.id} {item.title}
+              {isHighlighted && (
+                <span className="ml-2 text-xs font-normal text-green-600 bg-green-100 px-2 py-0.5 rounded">
+                  已修改
+                </span>
+              )}
             </div>
             <ChapterStatusBadge status={chapterStatus} />
-            {isLeaf && currentContent && (
+            {isLeaf && currentContent && !generationError && (
               <button
+                type="button"
                 onClick={() => handleProofreadChapter(item.id, item.title)}
                 disabled={isProofreading}
                 className="inline-flex items-center px-2 py-1 text-xs text-purple-600 hover:text-purple-800 hover:bg-purple-50 rounded disabled:opacity-50"
@@ -314,6 +388,7 @@ const ContentEdit: React.FC<ContentEditProps> = ({
             )}
             {isLeaf && onToggleComments && (
               <button
+                type="button"
                 onClick={() => onToggleComments(item.id)}
                 className="inline-flex items-center px-2 py-1 text-xs text-gray-500 hover:text-gray-700 hover:bg-gray-100 rounded"
                 title="查看批注"
@@ -331,10 +406,42 @@ const ContentEdit: React.FC<ContentEditProps> = ({
 
           {/* 内容（仅叶子节点） */}
           {isLeaf && (
-            <div className="border-l-4 border-blue-200 pl-4 mb-6">
-              {currentContent ? (
-                <div className="prose max-w-none">
-                  <ReactMarkdown>{currentContent}</ReactMarkdown>
+            <div className={`border-l-4 pl-4 mb-6 ${generationError ? 'border-red-300 bg-red-50' : 'border-blue-200'}`}>
+              {generationError ? (
+                <div className="py-4">
+                  <div className="flex items-center text-red-600 mb-2">
+                    <ExclamationCircleIcon className="w-4 h-4 mr-2" />
+                    <span className="text-sm font-medium">生成失败</span>
+                  </div>
+                  <div className="text-xs text-red-500 mb-3 bg-red-100 p-2 rounded">
+                    {generationError}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => regenerateItemContent(item)}
+                    disabled={isGeneratingThis}
+                    className="inline-flex items-center px-3 py-1.5 text-xs font-medium text-red-600 hover:bg-red-100 rounded disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    <ArrowPathIcon className="w-3 h-3 mr-1" />
+                    {isGeneratingThis ? '重新生成中...' : '重新生成'}
+                  </button>
+                </div>
+              ) : currentContent ? (
+                <div>
+                  <div className="prose max-w-none">
+                    {highlightConsistencyFixes(currentContent)}
+                  </div>
+                  <div className="mt-3 pt-3 border-t border-gray-200">
+                    <button
+                      type="button"
+                      onClick={() => regenerateItemContent(item)}
+                      disabled={isGeneratingThis}
+                      className="inline-flex items-center px-3 py-1.5 text-xs font-medium text-gray-600 bg-gray-100 hover:bg-gray-200 rounded disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      <ArrowPathIcon className="w-3 h-3 mr-1" />
+                      {isGeneratingThis ? '重新生成中...' : '重新生成'}
+                    </button>
+                  </div>
                 </div>
               ) : (
                 <div className="text-gray-400 italic py-4">
@@ -427,8 +534,10 @@ const ContentEdit: React.FC<ContentEditProps> = ({
               } else if (parsed.status === 'completed' && parsed.content) {
                 content = parsed.content;
                 updatedItem.content = content;
-                // 本地持久化（最终结果）
                 draftStorage.upsertChapterContent(item.id, content);
+                if (projectId) {
+                  chapterApi.updateContent(`${projectId}_${item.id}`, content).catch(() => {});
+                }
               } else if (parsed.status === 'error') {
                 throw new Error(parsed.message);
               }
@@ -440,14 +549,26 @@ const ContentEdit: React.FC<ContentEditProps> = ({
       }
 
       return updatedItem;
-    } catch (error) {
+    } catch (error: any) {
+      const errorMessage = error?.message || '生成失败';
+      // 清除部分生成的内容，设置错误状态
+      const updatedItem = { ...item, content: undefined, generationError: errorMessage };
+      // 同时清除本地存储
+      draftStorage.clearChapterContent(item.id);
+      setLeafItems(prevItems => {
+        const newItems = [...prevItems];
+        const index = newItems.findIndex(i => i.id === item.id);
+        if (index !== -1) {
+          newItems[index] = updatedItem;
+        }
+        return newItems;
+      });
       setProgress(prev => ({
         ...prev,
         failed: [...prev.failed, item.title]
       }));
-      throw error;
+      return updatedItem;
     } finally {
-      // 从正在生成的集合中移除当前项目
       setProgress(prev => {
         const newGenerating = new Set(Array.from(prev.generating));
         newGenerating.delete(item.id);
@@ -459,9 +580,31 @@ const ContentEdit: React.FC<ContentEditProps> = ({
     }
   };
 
+  const regenerateItemContent = async (item: OutlineItem) => {
+    if (!item || !outlineData) return;
+
+    setLeafItems(prevItems => {
+      const newItems = [...prevItems];
+      const index = newItems.findIndex(i => i.id === item.id);
+      if (index !== -1) {
+        newItems[index] = { ...newItems[index], generationError: undefined, content: undefined };
+      }
+      return newItems;
+    });
+
+    const cleanItem = { ...item, generationError: undefined, content: undefined };
+    await generateItemContent(cleanItem, outlineData.project_overview || '');
+  };
+
   // 开始生成所有内容
   const handleGenerateContent = async () => {
     if (!outlineData || leafItems.length === 0) return;
+
+    // 确认是否要生成全文
+    const confirmed = window.confirm(
+      `确定要生成所有章节内容吗？\n\n将生成 ${leafItems.length} 个章节的内容，此操作可能需要较长时间。`
+    );
+    if (!confirmed) return;
 
     setIsGenerating(true);
     setProgress({
@@ -591,7 +734,8 @@ const ContentEdit: React.FC<ContentEditProps> = ({
     );
   }
 
-  const completedItems = leafItems.filter(item => item.content).length;
+  const completedItems = leafItems.filter(item => item.content && !item.generationError).length;
+  const failedItems = leafItems.filter(item => item.generationError).length;
 
   return (
     <div className="max-w-6xl mx-auto">
@@ -603,8 +747,8 @@ const ContentEdit: React.FC<ContentEditProps> = ({
               <h2 className="text-lg font-semibold text-gray-900">标书内容</h2>
               <p className="text-sm text-gray-500 mt-1">
                 共 {leafItems.length} 个章节，已生成 {completedItems} 个
-                {progress.failed.length > 0 && (
-                  <span className="text-red-500 ml-2">失败 {progress.failed.length} 个</span>
+                {failedItems > 0 && (
+                  <span className="text-red-500 ml-2">失败 {failedItems} 个</span>
                 )}
               </p>
             </div>
@@ -612,7 +756,18 @@ const ContentEdit: React.FC<ContentEditProps> = ({
             <div className="flex items-center space-x-3">
               {onToggleConsistency && (
                 <button
-                  onClick={onToggleConsistency}
+                  onClick={() => {
+                    // 收集有内容的章节摘要
+                    const chapterSummaries = leafItems
+                      .filter(item => item.content && !item.generationError)
+                      .map(item => ({
+                        chapter_number: item.id,
+                        title: item.title,
+                        summary: item.content || '',
+                        chapter_id: item.id,
+                      }));
+                    onToggleConsistency(chapterSummaries);
+                  }}
                   className="inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-purple-500"
                   title="跨章节一致性检查"
                 >

@@ -19,8 +19,11 @@ import type {
   ACTION_TYPE_LABELS,
 } from '../types/admin';
 import type { UserRole } from '../types/auth';
+import type { PromptResponse, PromptCategory } from '../types/prompt';
+import { promptApi } from '../services/api';
+import PromptEditor from '../components/PromptEditor';
 
-type TabType = 'stats' | 'users' | 'keys' | 'logs';
+type TabType = 'stats' | 'users' | 'keys' | 'logs' | 'prompts';
 
 const ROLE_LABELS: Record<UserRole, string> = {
   admin: '管理员',
@@ -73,6 +76,13 @@ const Admin: React.FC = () => {
   const [logsPage, setLogsPage] = useState(1);
   const [logsLoading, setLogsLoading] = useState(false);
   const [logFilter, setLogFilter] = useState<OperationLogQuery>({});
+
+  // 提示词配置
+  const [prompts, setPrompts] = useState<PromptResponse[]>([]);
+  const [promptsLoading, setPromptsLoading] = useState(false);
+  const [promptCategoryFilter, setPromptCategoryFilter] = useState<PromptCategory | ''>('');
+  const [expandedPrompt, setExpandedPrompt] = useState<string | null>(null);
+  const [promptsPage, setPromptsPage] = useState(1);
 
   // 加载统计数据
   const loadStats = useCallback(async () => {
@@ -128,6 +138,21 @@ const Admin: React.FC = () => {
     }
   }, [logsPage, logFilter]);
 
+  // 加载提示词配置
+  const loadPrompts = useCallback(async () => {
+    try {
+      setPromptsLoading(true);
+      const data = await promptApi.listPrompts({
+        category: promptCategoryFilter || undefined,
+      });
+      setPrompts(data.items);
+    } catch (err) {
+      console.error('加载提示词配置失败:', err);
+    } finally {
+      setPromptsLoading(false);
+    }
+  }, [promptCategoryFilter]);
+
   // 初始加载
   useEffect(() => {
     loadStats();
@@ -144,6 +169,10 @@ const Admin: React.FC = () => {
   useEffect(() => {
     if (activeTab === 'logs') loadLogs();
   }, [activeTab, loadLogs]);
+
+  useEffect(() => {
+    if (activeTab === 'prompts') loadPrompts();
+  }, [activeTab, loadPrompts]);
 
   // 用户操作
   const handleCreateUser = async () => {
@@ -351,6 +380,7 @@ const Admin: React.FC = () => {
               { key: 'users', label: '用户管理' },
               { key: 'keys', label: '密钥管理' },
               { key: 'logs', label: '操作日志' },
+              { key: 'prompts', label: '提示词配置' },
             ].map((tab) => (
               <button
                 key={tab.key}
@@ -789,6 +819,109 @@ const Admin: React.FC = () => {
                   </div>
                 )}
               </>
+            )}
+          </div>
+        )}
+
+        {/* 提示词配置 */}
+        {activeTab === 'prompts' && (
+          <div>
+            <div className="mb-6 flex items-center justify-between">
+              <div className="flex items-center gap-4">
+                <select
+                  value={promptCategoryFilter}
+                  onChange={(e) => setPromptCategoryFilter(e.target.value as PromptCategory | '')}
+                  className="px-3 py-2 border border-gray-300 rounded-md text-sm"
+                >
+                  <option value="">全部类别</option>
+                  <option value="analysis">解析类</option>
+                  <option value="generation">生成类</option>
+                  <option value="check">检查类</option>
+                </select>
+              </div>
+              <div className="text-sm text-gray-500">
+                共 {prompts.length} 个场景
+              </div>
+            </div>
+
+            {promptsLoading ? (
+              <div className="flex justify-center py-12">
+                <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
+              </div>
+            ) : prompts.length === 0 ? (
+              <div className="text-center py-12 text-gray-500">
+                暂无提示词配置
+              </div>
+            ) : (
+              <div className="space-y-4">
+                {prompts.map((prompt) => (
+                  <div key={prompt.scene_key}>
+                    <button
+                      onClick={() => setExpandedPrompt(expandedPrompt === prompt.scene_key ? null : prompt.scene_key)}
+                      className="w-full flex items-center justify-between p-4 bg-white rounded-lg border border-gray-200 hover:border-gray-300 text-left"
+                    >
+                      <div className="flex items-center gap-4">
+                        <div>
+                          <h3 className="text-sm font-medium text-gray-900">{prompt.scene_name}</h3>
+                          <p className="text-xs text-gray-500 mt-0.5">{prompt.scene_key}</p>
+                        </div>
+                        <span className={`px-2 py-0.5 text-xs rounded-full ${
+                          prompt.category === 'analysis' ? 'bg-blue-100 text-blue-700' :
+                          prompt.category === 'generation' ? 'bg-green-100 text-green-700' :
+                          'bg-orange-100 text-orange-700'
+                        }`}>
+                          {prompt.category === 'analysis' ? '解析' : prompt.category === 'generation' ? '生成' : '检查'}
+                        </span>
+                        {prompt.is_customized && (
+                          <span className="px-2 py-0.5 text-xs rounded-full bg-purple-100 text-purple-700">
+                            已自定义
+                          </span>
+                        )}
+                      </div>
+                      <svg
+                        className={`w-5 h-5 text-gray-400 transition-transform ${expandedPrompt === prompt.scene_key ? 'rotate-180' : ''}`}
+                        fill="none"
+                        stroke="currentColor"
+                        viewBox="0 0 24 24"
+                      >
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                      </svg>
+                    </button>
+
+                    {expandedPrompt === prompt.scene_key && (
+                      <div className="mt-2">
+                        <PromptEditor
+                          sceneKey={prompt.scene_key}
+                          sceneName={prompt.scene_name}
+                          prompt={prompt.prompt}
+                          availableVars={prompt.available_vars}
+                          source={prompt.is_customized ? 'global' : 'builtin'}
+                          hasGlobalOverride={prompt.is_customized}
+                          currentVersion={prompt.version}
+                          onSave={async (newPrompt) => {
+                            try {
+                              await promptApi.updatePrompt(prompt.scene_key, {
+                                prompt: newPrompt,
+                              });
+                              loadPrompts();
+                            } catch (err: any) {
+                              alert(err.response?.data?.detail || '保存失败');
+                            }
+                          }}
+                          onReset={async () => {
+                            try {
+                              await promptApi.resetPrompt(prompt.scene_key);
+                              loadPrompts();
+                            } catch (err: any) {
+                              alert(err.response?.data?.detail || '重置失败');
+                            }
+                          }}
+                        />
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
             )}
           </div>
         )}

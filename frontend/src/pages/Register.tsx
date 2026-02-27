@@ -61,7 +61,16 @@ export default function Register(): React.ReactElement {
       });
       navigate('/');
     } catch (err: any) {
-      const message = err.response?.data?.detail || '注册失败，请稍后重试';
+      const detail = err.response?.data?.detail;
+      let message: string;
+      if (Array.isArray(detail)) {
+        // Pydantic 验证错误数组
+        message = detail.map((e: any) => e.msg).join('；');
+      } else if (typeof detail === 'string') {
+        message = detail;
+      } else {
+        message = '注册失败，请稍后重试';
+      }
       setError(message);
     } finally {
       setIsLoading(false);
