@@ -49,6 +49,32 @@ CONSISTENCY_RESULT_SCHEMA = {
     "overall_consistency": "consistent|minor_issues|major_issues",
 }
 
+RATING_CHECKLIST_SCHEMA = [
+    {
+        "rating_item": "评分项名称",
+        "score": "分值或权重",
+        "response_targets": ["必须覆盖的响应点"],
+        "evidence_suggestions": ["建议补充的证据或支撑材料"],
+        "writing_focus": "推荐重点写法",
+        "risk_points": ["容易失分的点"],
+    }
+]
+
+CHAPTER_REVERSE_ENHANCE_SCHEMA = {
+    "coverage_assessment": "充分|一般|不足",
+    "matched_points": ["已覆盖评分点"],
+    "missing_points": ["未覆盖评分点"],
+    "enhancement_actions": [
+        {
+            "problem": "问题",
+            "action": "建议补强动作",
+            "evidence_needed": "建议补充的证据或材料",
+            "priority": "high|medium|low",
+        }
+    ],
+    "summary": "简要结论",
+}
+
 
 class OpenAIService:
     """OpenAI服务类"""
@@ -773,6 +799,131 @@ class OpenAIService:
             max_tokens=4096
         ):
             yield chunk
+
+    async def generate_rating_response_checklist(
+        self,
+        overview: str,
+        requirements: str,
+    ) -> str:
+        """按评分项生成响应清单（返回 JSON 字符串）"""
+        if self._prompt_service:
+            prompt, _ = await self._prompt_service.get_prompt(
+                "rating_response_checklist", self._project_id
+            )
+            from .prompt_service import PromptService
+            system_prompt, user_template = PromptService.split_prompt(prompt)
+            system_prompt = self._append_json_output_contract(system_prompt, RATING_CHECKLIST_SCHEMA)
+            user_prompt = PromptService.render_prompt(user_template, {
+                "overview": overview,
+                "requirements": requirements,
+            })
+        else:
+            from ..utils.builtin_prompts import get_builtin_prompt
+            from .prompt_service import PromptService
+            builtin = get_builtin_prompt("rating_response_checklist")
+            system_prompt, user_template = PromptService.split_prompt(builtin["prompt"])
+            system_prompt = self._append_json_output_contract(system_prompt, RATING_CHECKLIST_SCHEMA)
+            user_prompt = PromptService.render_prompt(user_template, {
+                "overview": overview,
+                "requirements": requirements,
+            })
+
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt}
+        ]
+        return await self._generate_with_json_check(
+            messages=messages,
+            schema=RATING_CHECKLIST_SCHEMA,
+            max_retries=3,
+            temperature=0.4,
+            response_format=None,
+            log_prefix="评分响应清单",
+            raise_on_fail=True,
+        )
+
+    async def reverse_enhance_chapter(
+        self,
+        chapter_title: str,
+        chapter_content: str,
+        tech_requirements: str,
+        project_overview: str | None = None,
+    ) -> str:
+        """根据评分点反向补强章节（返回 JSON 字符串）"""
+        if self._prompt_service:
+            prompt, _ = await self._prompt_service.get_prompt(
+                "chapter_reverse_enhance", self._project_id
+            )
+            from .prompt_service import PromptService
+            system_prompt, user_template = PromptService.split_prompt(prompt)
+            system_prompt = self._append_json_output_contract(system_prompt, CHAPTER_REVERSE_ENHANCE_SCHEMA)
+            user_prompt = PromptService.render_prompt(user_template, {
+                "chapter_title": chapter_title,
+                "chapter_content": chapter_content,
+                "tech_requirements": tech_requirements,
+                "project_overview": project_overview or "",
+            })
+        else:
+            from ..utils.builtin_prompts import get_builtin_prompt
+            from .prompt_service import PromptService
+            builtin = get_builtin_prompt("chapter_reverse_enhance")
+            system_prompt, user_template = PromptService.split_prompt(builtin["prompt"])
+            system_prompt = self._append_json_output_contract(system_prompt, CHAPTER_REVERSE_ENHANCE_SCHEMA)
+            user_prompt = PromptService.render_prompt(user_template, {
+                "chapter_title": chapter_title,
+                "chapter_content": chapter_content,
+                "tech_requirements": tech_requirements,
+                "project_overview": project_overview or "",
+            })
+
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt}
+        ]
+        return await self._generate_with_json_check(
+            messages=messages,
+            schema=CHAPTER_REVERSE_ENHANCE_SCHEMA,
+            max_retries=3,
+            temperature=0.3,
+            response_format=None,
+            log_prefix="章节反向补强",
+            raise_on_fail=True,
+        )
+
+    async def generate_clause_response(
+        self,
+        clause_text: str,
+        project_overview: str | None = None,
+        knowledge_context: str | None = None,
+    ) -> str:
+        """生成技术参数/条款逐条响应正文"""
+        if self._prompt_service:
+            prompt, _ = await self._prompt_service.get_prompt(
+                "clause_response_generation", self._project_id
+            )
+            from .prompt_service import PromptService
+            system_prompt, user_template = PromptService.split_prompt(prompt)
+            user_prompt = PromptService.render_prompt(user_template, {
+                "clause_text": clause_text,
+                "project_overview": project_overview or "",
+                "knowledge_context": knowledge_context or "",
+            })
+        else:
+            from ..utils.builtin_prompts import get_builtin_prompt
+            from .prompt_service import PromptService
+            builtin = get_builtin_prompt("clause_response_generation")
+            system_prompt, user_template = PromptService.split_prompt(builtin["prompt"])
+            user_prompt = PromptService.render_prompt(user_template, {
+                "clause_text": clause_text,
+                "project_overview": project_overview or "",
+                "knowledge_context": knowledge_context or "",
+            })
+
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt}
+        ]
+        return await self._collect_stream_text(messages, temperature=0.4)
 
     async def rewrite_chapter_with_suggestions(
         self,

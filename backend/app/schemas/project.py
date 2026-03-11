@@ -146,3 +146,46 @@ class ConsistencyCheckResponse(BaseModel):
     created_at: datetime = Field(..., description="检查时间")
 
     model_config = {"from_attributes": True}
+
+
+class RatingChecklistItem(BaseModel):
+    """评分项响应清单项"""
+    rating_item: str = Field(..., description="评分项名称")
+    score: str = Field(..., description="分值或权重")
+    response_targets: list[str] = Field(default_factory=list, description="必须覆盖的响应点")
+    evidence_suggestions: list[str] = Field(default_factory=list, description="建议补充的证据或支撑材料")
+    writing_focus: str = Field(default="", description="推荐重点写法")
+    risk_points: list[str] = Field(default_factory=list, description="容易失分的点")
+
+
+class RatingChecklistResponse(BaseModel):
+    """评分项响应清单响应"""
+    items: list[RatingChecklistItem] = Field(default_factory=list)
+
+
+class ClauseResponseRequest(BaseModel):
+    """条款逐条响应请求"""
+    clause_text: str = Field(..., min_length=1, description="技术参数或条款原文")
+    knowledge_context: str | None = Field(None, description="可选的补充知识上下文")
+
+
+class ClauseResponseResult(BaseModel):
+    """条款逐条响应结果"""
+    content: str = Field(..., description="生成的逐条响应正文")
+
+
+class ChapterEnhancementAction(BaseModel):
+    """章节补强动作"""
+    problem: str = Field(..., description="发现的问题")
+    action: str = Field(..., description="建议补强动作")
+    evidence_needed: str = Field(default="", description="建议补充的证据或材料")
+    priority: Literal["high", "medium", "low"] = Field(..., description="优先级")
+
+
+class ChapterReverseEnhanceResponse(BaseModel):
+    """章节反向补强响应"""
+    coverage_assessment: str = Field(..., description="覆盖评估")
+    matched_points: list[str] = Field(default_factory=list, description="已覆盖评分点")
+    missing_points: list[str] = Field(default_factory=list, description="未覆盖或覆盖不足的评分点")
+    enhancement_actions: list[ChapterEnhancementAction] = Field(default_factory=list, description="补强动作列表")
+    summary: str = Field(..., description="简要总结")
