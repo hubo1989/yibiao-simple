@@ -1,28 +1,41 @@
-/**
- * 内容编辑页面 - 完整标书预览和生成
- */
 import React, { useState, useEffect, useCallback } from 'react';
 import ReactMarkdown from 'react-markdown';
 import { OutlineData, OutlineItem } from '../types';
-import {
-  DocumentTextIcon,
-  PlayIcon,
-  DocumentArrowDownIcon,
-  CheckCircleIcon,
-  ExclamationCircleIcon,
-  ArrowUpIcon,
-  ChatBubbleLeftIcon,
-  DocumentCheckIcon,
-  ArrowPathIcon,
-} from '@heroicons/react/24/outline';
 import { contentApi, documentApi, proofreadApi, chapterApi, ChapterContentRequest } from '../services/api';
 import { useAuth } from '../contexts/AuthContext';
 import { saveAs } from 'file-saver';
 import { draftStorage } from '../utils/draftStorage';
+import { getCurrentModel, getCurrentProviderConfigId } from '../utils/modelCache';
 import ChapterStatusBadge from '../components/ChapterStatusBadge';
 import ProofreadPanel from '../components/ProofreadPanel';
 import type { ChapterStatus } from '../types/chapter';
 import type { ProofreadResult, ProofreadIssue } from '../types/proofread';
+import { ProCard } from '@ant-design/pro-components';
+import { 
+  Button, 
+  Space, 
+  Typography, 
+  Progress, 
+  Card, 
+  Tag,
+  Tooltip,
+  FloatButton,
+  message,
+  Modal
+} from 'antd';
+import { 
+  FileTextOutlined,
+  PlayCircleOutlined,
+  DownloadOutlined,
+  CheckCircleOutlined,
+  ExclamationCircleOutlined,
+  MessageOutlined,
+  SafetyCertificateOutlined,
+  SyncOutlined,
+  RightOutlined,
+  DownOutlined,
+  LoadingOutlined
+} from '@ant-design/icons';
 
 interface ContentEditProps {
   outlineData: OutlineData | null;
@@ -39,9 +52,8 @@ interface GenerationProgress {
   completed: number;
   current: string;
   failed: string[];
-  generating: Set<string>; // 正在生成的项目ID集合
+  generating: Set<string>;
 }
-
 
 const ContentEdit: React.FC<ContentEditProps> = ({
   outlineData,
@@ -63,8 +75,8 @@ const ContentEdit: React.FC<ContentEditProps> = ({
   });
   const [leafItems, setLeafItems] = useState<OutlineItem[]>([]);
   const [showScrollToTop, setShowScrollToTop] = useState(false);
+  const [collapsedChapters, setCollapsedChapters] = useState<Set<string>>(new Set());
 
-  // 校对相关状态
   const [showProofreadPanel, setShowProofreadPanel] = useState(false);
   const [proofreadChapterId, setProofreadChapterId] = useState<string | null>(null);
   const [proofreadChapterTitle, setProofreadChapterTitle] = useState('');
@@ -72,17 +84,14 @@ const ContentEdit: React.FC<ContentEditProps> = ({
   const [isProofreading, setIsProofreading] = useState(false);
   const [proofreadStreamingText, setProofreadStreamingText] = useState('');
 
-  // 高亮修改内容的函数
   const highlightConsistencyFixes = (content: string): React.ReactNode => {
     if (!content) return null;
 
-    // 检查是否包含一致性修改标记
     const marker = '【一致性修改】';
     if (!content.includes(marker)) {
       return <ReactMarkdown>{content}</ReactMarkdown>;
     }
 
-    // 分割内容，找出修改部分
     const parts: React.ReactNode[] = [];
     let keyIndex = 0;
     let remainingContent = content;
@@ -90,13 +99,11 @@ const ContentEdit: React.FC<ContentEditProps> = ({
     while (remainingContent.includes(marker)) {
       const markerIndex = remainingContent.indexOf(marker);
 
-      // 添加修改前的普通内容
       if (markerIndex > 0) {
         const normalContent = remainingContent.substring(0, markerIndex);
         parts.push(<ReactMarkdown key={`normal-${keyIndex}`}>{normalContent}</ReactMarkdown>);
       }
 
-      // 找到修改内容的结束位置（下一个换行或内容结束）
       const afterMarker = remainingContent.substring(markerIndex + marker.length);
       let endIndex = afterMarker.indexOf('\n');
       if (endIndex === -1) {
@@ -106,12 +113,11 @@ const ContentEdit: React.FC<ContentEditProps> = ({
       const fixContent = afterMarker.substring(0, endIndex);
       remainingContent = afterMarker.substring(endIndex);
 
-      // 添加高亮的修改内容
       parts.push(
-        <div key={`fix-${keyIndex}`} className="bg-yellow-100 border-l-4 border-yellow-500 p-3 my-2 rounded-r">
-          <div className="flex items-start">
-            <span className="text-yellow-700 font-medium text-sm mr-2">一致性修改:</span>
-            <span className="text-yellow-800">{fixContent}</span>
+        <div key={`fix-${keyIndex}`} style={{ backgroundColor: '#fffbe6', borderLeft: '4px solid #faad14', padding: '12px', margin: '8px 0', borderRadius: '0 4px 4px 0' }}>
+          <div style={{ display: 'flex', alignItems: 'flex-start' }}>
+            <span style={{ color: '#d48806', fontWeight: 500, fontSize: 14, marginRight: 8 }}>一致性修改:</span>
+            <span style={{ color: '#ad6800', fontSize: 14 }}>{fixContent}</span>
           </div>
         </div>
       );
@@ -119,9 +125,7 @@ const ContentEdit: React.FC<ContentEditProps> = ({
       keyIndex++;
     }
 
-    // 添加剩余的普通内容
     if (remainingContent.trim()) {
-      // 移除开头的 --- 分隔线
       const cleanRemaining = remainingContent.replace(/^[\s-]*/, '');
       if (cleanRemaining.trim()) {
         parts.push(<ReactMarkdown key={`remaining-${keyIndex}`}>{cleanRemaining}</ReactMarkdown>);
@@ -131,7 +135,6 @@ const ContentEdit: React.FC<ContentEditProps> = ({
     return <>{parts}</>;
   };
 
-  // 收集所有叶子节点
   const collectLeafItems = useCallback((items: OutlineItem[]): OutlineItem[] => {
     let leaves: OutlineItem[] = [];
     items.forEach(item => {
@@ -144,7 +147,6 @@ const ContentEdit: React.FC<ContentEditProps> = ({
     return leaves;
   }, []);
 
-  // 获取章节的上级章节信息
   const getParentChapters = useCallback((targetId: string, items: OutlineItem[], parents: OutlineItem[] = []): OutlineItem[] => {
     for (const item of items) {
       if (item.id === targetId) {
@@ -160,14 +162,11 @@ const ContentEdit: React.FC<ContentEditProps> = ({
     return [];
   }, []);
 
-  // 获取章节的同级章节信息
   const getSiblingChapters = useCallback((targetId: string, items: OutlineItem[]): OutlineItem[] => {
-    // 直接在当前级别查找
     if (items.some(item => item.id === targetId)) {
       return items;
     }
     
-    // 递归在子级别查找
     for (const item of items) {
       if (item.children && item.children.length > 0) {
         const siblings = getSiblingChapters(targetId, item.children);
@@ -183,14 +182,12 @@ const ContentEdit: React.FC<ContentEditProps> = ({
   useEffect(() => {
     if (outlineData) {
       const leaves = collectLeafItems(outlineData.outline);
-      // 恢复本地缓存的正文内容（仅对叶子节点生效）
       const filtered = draftStorage.filterContentByOutlineLeaves(outlineData.outline);
       const mergedLeaves = leaves.map((leaf) => {
         const cached = filtered[leaf.id];
         return cached ? { ...leaf, content: cached } : leaf;
       });
 
-      // 目录变更时，顺手清理掉无效的旧缓存（只保留当前叶子节点）
       draftStorage.saveContentById(filtered);
 
       setLeafItems(mergedLeaves);
@@ -198,9 +195,7 @@ const ContentEdit: React.FC<ContentEditProps> = ({
     }
   }, [outlineData, collectLeafItems]);
 
-  // 监听页面滚动，控制回到顶部按钮的显示
   useEffect(() => {
-    // 现在主内容区为内部滚动容器（App.tsx: #app-main-scroll），不能只监听 window
     const scrollContainer = document.getElementById('app-main-scroll');
 
     const handleScroll = () => {
@@ -210,33 +205,26 @@ const ContentEdit: React.FC<ContentEditProps> = ({
       setShowScrollToTop(scrollTop > 300);
     };
 
-    // 初始化计算一次，避免刷新后位置不对
     handleScroll();
-
     const target: any = scrollContainer || window;
     target.addEventListener('scroll', handleScroll);
     return () => target.removeEventListener('scroll', handleScroll);
   }, []);
 
-  // 获取叶子节点的实时内容
   const getLeafItemContent = (itemId: string): string | undefined => {
     const leafItem = leafItems.find(leaf => leaf.id === itemId);
     return leafItem?.content;
   };
 
-  // 检查是否为叶子节点
   const isLeafNode = (item: OutlineItem): boolean => {
     return !item.children || item.children.length === 0;
   };
 
-  // 根据内容状态确定章节状态
   const getChapterStatus = (item: OutlineItem, isGenerating: boolean): ChapterStatus => {
     if (isGenerating) return 'generated';
     if (!isLeafNode(item)) {
-      // 非叶子节点根据子节点状态判断
       return 'pending';
     }
-    // 检查是否有生成错误
     const leafItem = leafItems.find(leaf => leaf.id === item.id);
     if (leafItem?.generationError) return 'error';
     const content = getLeafItemContent(item.id) || item.content;
@@ -244,7 +232,6 @@ const ContentEdit: React.FC<ContentEditProps> = ({
     return 'pending';
   };
 
-  // 触发章节校对
   const handleProofreadChapter = async (chapterId: string, chapterTitle: string) => {
     setProofreadChapterId(chapterId);
     setProofreadChapterTitle(chapterTitle);
@@ -287,40 +274,34 @@ const ContentEdit: React.FC<ContentEditProps> = ({
                 throw new Error(parsed.error);
               }
             } catch {
-              // 忽略JSON解析错误
+              // Ignore
             }
           }
         }
       }
     } catch (error) {
       console.error('校对失败:', error);
-      alert('校对失败，请重试');
+      message.error('校对失败，请重试');
     } finally {
       setIsProofreading(false);
     }
   };
 
-  // 接受校对建议
   const handleApplySuggestion = async (issue: ProofreadIssue) => {
     if (!proofreadChapterId) return;
 
     try {
-      // 获取当前章节内容
       const chapterData = await chapterApi.get(proofreadChapterId);
       let content = chapterData.content || '';
 
-      // 简单实现：将建议附加到内容末尾（实际场景中可能需要更智能的替换）
-      // 这里我们用一个占位符标记修改
       const suggestionNote = `\n\n<!-- 校对建议：${issue.suggestion} -->`;
 
-      // 更新章节内容
       await chapterApi.updateContent(
         proofreadChapterId,
         content + suggestionNote,
         `应用校对建议：${issue.issue}`
       );
 
-      // 更新本地状态
       setLeafItems(prevItems =>
         prevItems.map(item =>
           item.id === proofreadChapterId
@@ -329,20 +310,20 @@ const ContentEdit: React.FC<ContentEditProps> = ({
         )
       );
 
-      alert('建议已应用到内容中');
+      message.success('建议已应用到内容中');
     } catch (error) {
       console.error('应用建议失败:', error);
-      alert('应用建议失败');
+      message.error('应用建议失败');
     }
   };
 
-  // 手动编辑内容
   const handleEditContent = (issue: ProofreadIssue) => {
-    // 提示用户去编辑
-    alert(`请根据以下建议手动编辑内容：\n\n${issue.suggestion}`);
+    Modal.info({
+      title: '手动编辑内容',
+      content: `请根据以下建议手动编辑内容：\n\n${issue.suggestion}`,
+    });
   };
 
-  // 关闭校对面板
   const handleCloseProofreadPanel = () => {
     setShowProofreadPanel(false);
     setProofreadChapterId(null);
@@ -350,7 +331,6 @@ const ContentEdit: React.FC<ContentEditProps> = ({
     setProofreadStreamingText('');
   };
 
-  // 渲染目录结构
   const renderOutline = (items: OutlineItem[], level: number = 1): React.ReactElement[] => {
     return items.map((item) => {
       const isLeaf = isLeafNode(item);
@@ -360,106 +340,166 @@ const ContentEdit: React.FC<ContentEditProps> = ({
       const isGeneratingThis = progress.generating.has(item.id);
       const chapterStatus = getChapterStatus(item, isGeneratingThis);
       const isHighlighted = highlightedChapters?.has(item.id);
+      const isCollapsed = collapsedChapters.has(item.id);
+      const hasChildren = item.children && item.children.length > 0;
 
       return (
-        <div key={item.id} className={`mb-${level === 1 ? '8' : '4'} ${isHighlighted ? 'ring-2 ring-green-400 ring-offset-2 rounded-lg' : ''}`}>
-          {/* 标题和状态 */}
-          <div className={`flex items-center space-x-3 mb-2 ${isHighlighted ? 'bg-green-50 px-3 py-2 rounded-lg' : ''}`}>
-            <div className={`text-${level === 1 ? 'xl' : level === 2 ? 'lg' : 'base'} font-${level === 1 ? 'bold' : 'semibold'} ${isHighlighted ? 'text-green-700' : 'text-gray-900'}`}>
+        <div key={item.id} style={{ marginBottom: level === 1 ? 24 : 16 }}>
+          <div 
+            style={{ 
+              display: 'flex', 
+              alignItems: 'center', 
+              gap: 8,
+              padding: isHighlighted ? '8px 12px' : 0,
+              backgroundColor: isHighlighted ? '#f6ffed' : 'transparent',
+              borderRadius: isHighlighted ? 8 : 0,
+            }}
+          >
+            {!isLeaf && hasChildren && (
+              <Button
+                type="text"
+                size="small"
+                icon={isCollapsed ? <RightOutlined style={{ fontSize: 12, color: '#bfbfbf' }} /> : <DownOutlined style={{ fontSize: 12, color: '#bfbfbf' }} />}
+                onClick={() => {
+                  setCollapsedChapters(prev => {
+                    const newSet = new Set(prev);
+                    if (newSet.has(item.id)) {
+                      newSet.delete(item.id);
+                    } else {
+                      newSet.add(item.id);
+                    }
+                    return newSet;
+                  });
+                }}
+                style={{ padding: 0, minWidth: 24 }}
+              />
+            )}
+            
+            <Typography.Text 
+              strong={level <= 2}
+              style={{ 
+                fontSize: level === 1 ? 18 : level === 2 ? 16 : 14,
+                color: isHighlighted ? '#389e0d' : undefined,
+                flex: 1
+              }}
+            >
               {item.id} {item.title}
               {isHighlighted && (
-                <span className="ml-2 text-xs font-normal text-green-600 bg-green-100 px-2 py-0.5 rounded">
-                  已修改
-                </span>
+                <Tag color="success" style={{ marginLeft: 8 }}>已修改</Tag>
               )}
-            </div>
-            <ChapterStatusBadge status={chapterStatus} />
+            </Typography.Text>
+            
+            {isLeaf && <ChapterStatusBadge status={chapterStatus} />}
+            
             {isLeaf && currentContent && !generationError && (
-              <button
-                type="button"
-                onClick={() => handleProofreadChapter(item.id, item.title)}
-                disabled={isProofreading}
-                className="inline-flex items-center px-2 py-1 text-xs text-purple-600 hover:text-purple-800 hover:bg-purple-50 rounded disabled:opacity-50"
-                title="AI 校对"
-              >
-                <DocumentCheckIcon className="w-3 h-3 mr-1" />
-                校对
-              </button>
+              <Tooltip title="AI 校对">
+                <Button
+                  type="text"
+                  size="small"
+                  icon={<SafetyCertificateOutlined />}
+                  onClick={() => handleProofreadChapter(item.id, item.title)}
+                  disabled={isProofreading}
+                  style={{ color: '#722ed1' }}
+                >
+                  校对
+                </Button>
+              </Tooltip>
             )}
+            
             {isLeaf && onToggleComments && (
-              <button
-                type="button"
-                onClick={() => onToggleComments(item.id)}
-                className="inline-flex items-center px-2 py-1 text-xs text-gray-500 hover:text-gray-700 hover:bg-gray-100 rounded"
-                title="查看批注"
-              >
-                <ChatBubbleLeftIcon className="w-3 h-3 mr-1" />
-                批注
-              </button>
+              <Tooltip title="查看批注">
+                <Button
+                  type="text"
+                  size="small"
+                  icon={<MessageOutlined />}
+                  onClick={() => onToggleComments(item.id)}
+                  style={{ color: '#8c8c8c' }}
+                >
+                  批注
+                </Button>
+              </Tooltip>
             )}
           </div>
 
-          {/* 描述 */}
-          <div className="text-sm text-gray-600 mb-4">
+          <Typography.Text type="secondary" style={{ display: 'block', marginLeft: !isLeaf && hasChildren ? 32 : 0, marginTop: 4, marginBottom: 8, fontSize: 13 }}>
             {item.description}
-          </div>
+          </Typography.Text>
 
-          {/* 内容（仅叶子节点） */}
+          {(item.rating_item || item.chapter_role || item.avoid_overlap) && (
+            <div style={{ marginLeft: !isLeaf && hasChildren ? 32 : 0, marginBottom: 12 }}>
+              <Space wrap size={[8, 8]}>
+                {item.rating_item && <Tag color="blue">评分点：{item.rating_item}</Tag>}
+                {item.chapter_role && <Tag color="purple">职责：{item.chapter_role}</Tag>}
+                {item.avoid_overlap && <Tag color="gold">去重边界：{item.avoid_overlap}</Tag>}
+              </Space>
+            </div>
+          )}
+
           {isLeaf && (
-            <div className={`border-l-4 pl-4 mb-6 ${generationError ? 'border-red-300 bg-red-50' : 'border-blue-200'}`}>
+            <div 
+              style={{ 
+                borderLeft: `3px solid ${generationError ? '#ffccc7' : '#91caff'}`,
+                paddingLeft: 16,
+                marginLeft: !isLeaf && hasChildren ? 32 : 0,
+                marginBottom: 16,
+                backgroundColor: generationError ? '#fff1f0' : undefined,
+                padding: generationError ? '12px 16px' : undefined,
+                borderRadius: generationError ? '0 4px 4px 0' : 0,
+              }}
+            >
               {generationError ? (
-                <div className="py-4">
-                  <div className="flex items-center text-red-600 mb-2">
-                    <ExclamationCircleIcon className="w-4 h-4 mr-2" />
-                    <span className="text-sm font-medium">生成失败</span>
-                  </div>
-                  <div className="text-xs text-red-500 mb-3 bg-red-100 p-2 rounded">
+                <div>
+                  <Typography.Text type="danger" strong style={{ display: 'flex', alignItems: 'center', marginBottom: 8 }}>
+                    <ExclamationCircleOutlined style={{ marginRight: 8 }} />
+                    生成失败
+                  </Typography.Text>
+                  <Typography.Text type="danger" style={{ display: 'block', marginBottom: 12, fontSize: 13, backgroundColor: 'rgba(255, 77, 79, 0.1)', padding: 8, borderRadius: 4 }}>
                     {generationError}
-                  </div>
-                  <button
-                    type="button"
+                  </Typography.Text>
+                  <Button
+                    type="primary"
+                    danger
+                    size="small"
+                    icon={isGeneratingThis ? <LoadingOutlined /> : <SyncOutlined />}
                     onClick={() => regenerateItemContent(item)}
                     disabled={isGeneratingThis}
-                    className="inline-flex items-center px-3 py-1.5 text-xs font-medium text-red-600 hover:bg-red-100 rounded disabled:opacity-50 disabled:cursor-not-allowed"
                   >
-                    <ArrowPathIcon className="w-3 h-3 mr-1" />
                     {isGeneratingThis ? '重新生成中...' : '重新生成'}
-                  </button>
+                  </Button>
                 </div>
               ) : currentContent ? (
                 <div>
-                  <div className="prose max-w-none">
+                  <div className="markdown-body" style={{ fontSize: 14 }}>
                     {highlightConsistencyFixes(currentContent)}
                   </div>
-                  <div className="mt-3 pt-3 border-t border-gray-200">
-                    <button
-                      type="button"
+                  <div style={{ marginTop: 12, paddingTop: 12, borderTop: '1px solid #f0f0f0' }}>
+                    <Button
+                      type="default"
+                      size="small"
+                      icon={isGeneratingThis ? <LoadingOutlined /> : <SyncOutlined />}
                       onClick={() => regenerateItemContent(item)}
                       disabled={isGeneratingThis}
-                      className="inline-flex items-center px-3 py-1.5 text-xs font-medium text-gray-600 bg-gray-100 hover:bg-gray-200 rounded disabled:opacity-50 disabled:cursor-not-allowed"
                     >
-                      <ArrowPathIcon className="w-3 h-3 mr-1" />
                       {isGeneratingThis ? '重新生成中...' : '重新生成'}
-                    </button>
+                    </Button>
                   </div>
                 </div>
               ) : (
-                <div className="text-gray-400 italic py-4">
-                  <DocumentTextIcon className="inline w-4 h-4 mr-2" />
+                <Typography.Text type="secondary" italic style={{ padding: '16px 0', display: 'block' }}>
+                  <FileTextOutlined style={{ marginRight: 8 }} />
                   {isGeneratingThis ? (
-                    <span className="text-blue-600">正在生成内容...</span>
+                    <span style={{ color: '#1677ff' }}>正在生成内容...</span>
                   ) : (
                     '内容待生成...'
                   )}
-                </div>
+                </Typography.Text>
               )}
             </div>
           )}
 
-          {/* 子章节 */}
-          {item.children && item.children.length > 0 && (
-            <div className={`ml-${level * 4} mt-4`}>
-              {renderOutline(item.children, level + 1)}
+          {hasChildren && !isCollapsed && (
+            <div style={{ marginLeft: 24, marginTop: 8 }}>
+              {renderOutline(item.children!, level + 1)}
             </div>
           )}
         </div>
@@ -467,11 +507,9 @@ const ContentEdit: React.FC<ContentEditProps> = ({
     });
   };
 
-  // 生成单个章节内容
   const generateItemContent = async (item: OutlineItem, projectOverview: string): Promise<OutlineItem> => {
     if (!outlineData) throw new Error('缺少目录数据');
     
-    // 将当前项目添加到正在生成的集合中
     setProgress(prev => ({ 
       ...prev, 
       current: item.title,
@@ -479,7 +517,6 @@ const ContentEdit: React.FC<ContentEditProps> = ({
     }));
     
     try {
-      // 获取上级章节和同级章节信息
       const parentChapters = getParentChapters(item.id, outlineData.outline);
       const siblingChapters = getSiblingChapters(item.id, outlineData.outline);
 
@@ -487,7 +524,9 @@ const ContentEdit: React.FC<ContentEditProps> = ({
         chapter: item,
         parent_chapters: parentChapters,
         sibling_chapters: siblingChapters,
-        project_overview: projectOverview
+        project_overview: projectOverview,
+        model_name: getCurrentModel() || undefined,
+        provider_config_id: getCurrentProviderConfigId() || undefined,
       };
 
       const response = await contentApi.generateChapterContentStream(request, token || undefined);
@@ -515,14 +554,15 @@ const ContentEdit: React.FC<ContentEditProps> = ({
             try {
               const parsed = JSON.parse(data);
               
+              if (parsed.status === 'error') {
+                throw new Error(parsed.message || '生成失败');
+              }
+              
               if (parsed.status === 'streaming' && parsed.full_content) {
-                // 实时更新内容
                 content = parsed.full_content;
                 updatedItem.content = content;
-                // 本地持久化（刷新后可恢复）
                 draftStorage.upsertChapterContent(item.id, content);
                 
-                // 实时更新叶子节点数据以触发重新渲染
                 setLeafItems(prevItems => {
                   const newItems = [...prevItems];
                   const index = newItems.findIndex(i => i.id === item.id);
@@ -538,11 +578,11 @@ const ContentEdit: React.FC<ContentEditProps> = ({
                 if (projectId) {
                   chapterApi.updateContent(`${projectId}_${item.id}`, content).catch(() => {});
                 }
-              } else if (parsed.status === 'error') {
-                throw new Error(parsed.message);
               }
             } catch (e) {
-              // 忽略JSON解析错误
+              if (e instanceof Error) {
+                throw e;
+              }
             }
           }
         }
@@ -551,9 +591,7 @@ const ContentEdit: React.FC<ContentEditProps> = ({
       return updatedItem;
     } catch (error: any) {
       const errorMessage = error?.message || '生成失败';
-      // 清除部分生成的内容，设置错误状态
       const updatedItem = { ...item, content: undefined, generationError: errorMessage };
-      // 同时清除本地存储
       draftStorage.clearChapterContent(item.id);
       setLeafItems(prevItems => {
         const newItems = [...prevItems];
@@ -596,95 +634,87 @@ const ContentEdit: React.FC<ContentEditProps> = ({
     await generateItemContent(cleanItem, outlineData.project_overview || '');
   };
 
-  // 开始生成所有内容
   const handleGenerateContent = async () => {
     if (!outlineData || leafItems.length === 0) return;
 
-    // 确认是否要生成全文
-    const confirmed = window.confirm(
-      `确定要生成所有章节内容吗？\n\n将生成 ${leafItems.length} 个章节的内容，此操作可能需要较长时间。`
+    const itemsToGenerate = leafItems.filter(item => 
+      !item.content || item.generationError
     );
-    if (!confirmed) return;
-
-    setIsGenerating(true);
-    setProgress({
-      total: leafItems.length,
-      completed: 0,
-      current: '',
-      failed: [],
-      generating: new Set<string>()
-    });
-
-    try {
-      // 使用5个并发线程生成内容
-      const concurrency = 5;
-      const updatedItems = [...leafItems];
-      
-      for (let i = 0; i < leafItems.length; i += concurrency) {
-        const batch = leafItems.slice(i, i + concurrency);
-        const promises = batch.map(item => 
-          generateItemContent(item, outlineData.project_overview || '')
-            .then(updatedItem => {
-              const index = updatedItems.findIndex(ui => ui.id === updatedItem.id);
-              if (index !== -1) {
-                updatedItems[index] = updatedItem;
-              }
-              setProgress(prev => ({ ...prev, completed: prev.completed + 1 }));
-              return updatedItem;
-            })
-            .catch(error => {
-              console.error(`生成内容失败 ${item.title}:`, error);
-              setProgress(prev => ({ ...prev, completed: prev.completed + 1 }));
-              return item; // 返回原始项目
-            })
-        );
-
-        await Promise.all(promises);
-      }
-
-      // 更新状态
-      setLeafItems(updatedItems);
-      
-      // 这里需要更新整个outlineData，但由于我们只有props，需要通过回调通知父组件
-      // 暂时只更新本地状态
-      
-    } catch (error) {
-      console.error('生成内容时出错:', error);
-    } finally {
-      setIsGenerating(false);
-      setProgress(prev => ({ ...prev, current: '', generating: new Set<string>() }));
+    
+    if (itemsToGenerate.length === 0) {
+      message.info('所有章节内容已生成完成，无需重新生成。');
+      return;
     }
+
+    Modal.confirm({
+      title: '生成确认',
+      content: `确定要生成章节内容吗？\n\n将生成 ${itemsToGenerate.length} 个章节的内容（空内容或失败的章节），此操作可能需要较长时间。`,
+      onOk: async () => {
+        setIsGenerating(true);
+        setProgress({
+          total: itemsToGenerate.length,
+          completed: 0,
+          current: '',
+          failed: [],
+          generating: new Set<string>()
+        });
+
+        try {
+          const concurrency = 1;
+          const updatedItems = [...leafItems];
+          const delayBetweenRequests = 5000; 
+          
+          for (let i = 0; i < itemsToGenerate.length; i += concurrency) {
+            const batch = itemsToGenerate.slice(i, i + concurrency);
+            const promises = batch.map(item => 
+              generateItemContent(item, outlineData.project_overview || '')
+                .then(updatedItem => {
+                  const index = updatedItems.findIndex(ui => ui.id === updatedItem.id);
+                  if (index !== -1) {
+                    updatedItems[index] = updatedItem;
+                  }
+                  setProgress(prev => ({ ...prev, completed: prev.completed + 1 }));
+                  return updatedItem;
+                })
+                .catch(error => {
+                  console.error(`生成内容失败 ${item.title}:`, error);
+                  setProgress(prev => ({ ...prev, completed: prev.completed + 1 }));
+                  return item; 
+                })
+            );
+
+            await Promise.all(promises);
+            
+            if (i + concurrency < itemsToGenerate.length) {
+              await new Promise(resolve => setTimeout(resolve, delayBetweenRequests));
+            }
+          }
+
+          setLeafItems(updatedItems);
+          message.success('标书生成完成');
+        } catch (error) {
+          console.error('生成内容时出错:', error);
+          message.error('部分内容生成出错，请查看日志或重试');
+        } finally {
+          setIsGenerating(false);
+          setProgress(prev => ({ ...prev, current: '', generating: new Set<string>() }));
+        }
+      }
+    });
   };
 
-  // 获取叶子节点的最新内容（包括生成的内容）
   const getLatestContent = (item: OutlineItem): string => {
     if (!item.children || item.children.length === 0) {
-      // 叶子节点，从 leafItems 获取最新内容
       const leafItem = leafItems.find(leaf => leaf.id === item.id);
       return leafItem?.content || item.content || '';
     }
     return item.content || '';
   };
 
-  // 解析Markdown内容为Word段落
-  // （已提取到文件顶层，供后续导出Word等复用）
-
-  // 滚动到页面顶部
-  const scrollToTop = () => {
-    const scrollContainer = document.getElementById('app-main-scroll');
-    if (scrollContainer) {
-      scrollContainer.scrollTo({ top: 0, behavior: 'smooth' });
-      return;
-    }
-    window.scrollTo({ top: 0, behavior: 'smooth' });
-  };
-
-  // 导出Word文档
   const handleExportWord = async () => {
     if (!outlineData) return;
 
     try {
-      // 构建带有最新内容的导出数据（leafItems 中存的是实时内容）
       const buildExportOutline = (items: OutlineItem[]): OutlineItem[] => {
         return items.map(item => {
           const latestContent = getLatestContent(item);
@@ -711,25 +741,25 @@ const ContentEdit: React.FC<ContentEditProps> = ({
       }
       const blob = await response.blob();
       saveAs(blob, `${outlineData.project_name || '标书文档'}.docx`);
-      
+      message.success('导出成功');
     } catch (error) {
       console.error('导出失败:', error);
-      alert('导出失败，请重试');
+      message.error('导出失败，请重试');
     }
   };
 
   if (!outlineData) {
     return (
-      <div className="max-w-6xl mx-auto">
-        <div className="bg-white rounded-lg shadow p-6">
-          <div className="text-center py-12">
-            <DocumentTextIcon className="mx-auto h-12 w-12 text-gray-400" />
-            <h3 className="mt-2 text-sm font-medium text-gray-900">暂无内容</h3>
-            <p className="mt-1 text-sm text-gray-500">
+      <div style={{ maxWidth: 1000, margin: '0 auto' }}>
+        <ProCard>
+          <div style={{ textAlign: 'center', padding: '48px 0' }}>
+            <FileTextOutlined style={{ fontSize: 48, color: '#bfbfbf', marginBottom: 16 }} />
+            <Typography.Title level={5} style={{ color: '#595959', margin: 0 }}>暂无内容</Typography.Title>
+            <Typography.Text type="secondary" style={{ marginTop: 8, display: 'block' }}>
               请先在"目录编辑"步骤中生成目录结构
-            </p>
+            </Typography.Text>
           </div>
-        </div>
+        </ProCard>
       </div>
     );
   }
@@ -738,26 +768,18 @@ const ContentEdit: React.FC<ContentEditProps> = ({
   const failedItems = leafItems.filter(item => item.generationError).length;
 
   return (
-    <div className="max-w-6xl mx-auto">
-      {/* 顶部工具栏 */}
-      <div className="bg-white rounded-lg shadow mb-6">
-        <div className="px-6 py-4 border-b border-gray-200">
-          <div className="flex items-center justify-between">
-            <div>
-              <h2 className="text-lg font-semibold text-gray-900">标书内容</h2>
-              <p className="text-sm text-gray-500 mt-1">
-                共 {leafItems.length} 个章节，已生成 {completedItems} 个
-                {failedItems > 0 && (
-                  <span className="text-red-500 ml-2">失败 {failedItems} 个</span>
-                )}
-              </p>
-            </div>
-            
-            <div className="flex items-center space-x-3">
+    <div style={{ maxWidth: 1000, margin: '0 auto', paddingBottom: 64 }}>
+      <Space direction="vertical" size="large" style={{ width: '100%' }}>
+        {/* 顶部工具栏 */}
+        <ProCard
+          title="标书内容"
+          headerBordered
+          extra={
+            <Space>
               {onToggleConsistency && (
-                <button
+                <Button
+                  icon={<SafetyCertificateOutlined />}
                   onClick={() => {
-                    // 收集有内容的章节摘要
                     const chapterSummaries = leafItems
                       .filter(item => item.content && !item.generationError)
                       .map(item => ({
@@ -768,110 +790,107 @@ const ContentEdit: React.FC<ContentEditProps> = ({
                       }));
                     onToggleConsistency(chapterSummaries);
                   }}
-                  className="inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-purple-500"
                   title="跨章节一致性检查"
                 >
-                  <DocumentCheckIcon className="w-4 h-4 mr-2" />
                   一致性检查
-                </button>
+                </Button>
               )}
-              <button
+              <Button
+                type="primary"
+                icon={<PlayCircleOutlined />}
                 onClick={handleGenerateContent}
                 disabled={isGenerating}
-                className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed"
+                style={{ backgroundColor: '#1677ff' }}
+                loading={isGenerating}
               >
-                <PlayIcon className="w-4 h-4 mr-2" />
-                {isGenerating ? '生成中...' : '生成标书'}
-              </button>
+                生成标书
+              </Button>
 
-              <button
+              <Button
+                icon={<DownloadOutlined />}
                 onClick={handleExportWord}
                 disabled={isGenerating}
-                className="inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                <DocumentArrowDownIcon className="w-4 h-4 mr-2" />
                 导出Word
-              </button>
-            </div>
-          </div>
+              </Button>
+            </Space>
+          }
+        >
+          <Space size="middle" style={{ marginBottom: isGenerating ? 16 : 0, width: '100%' }}>
+            <Typography.Text type="secondary">
+              共 {leafItems.length} 个章节，已生成 {completedItems} 个
+              {failedItems > 0 && (
+                <Typography.Text type="danger" style={{ marginLeft: 8 }}>失败 {failedItems} 个</Typography.Text>
+              )}
+            </Typography.Text>
+          </Space>
           
           {/* 进度条 */}
           {isGenerating && (
-            <div className="mt-4">
-              <div className="flex items-center justify-between text-sm text-gray-600 mb-2">
-                <span>正在生成: {progress.current}</span>
-                <span>{progress.completed} / {progress.total}</span>
+            <div style={{ marginTop: 8 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
+                <Typography.Text type="secondary" style={{ fontSize: 13 }}>正在生成: {progress.current}</Typography.Text>
+                <Typography.Text type="secondary" style={{ fontSize: 13 }}>{progress.completed} / {progress.total}</Typography.Text>
               </div>
-              <div className="w-full bg-gray-200 rounded-full h-2">
-                <div
-                  className="bg-blue-600 h-2 rounded-full transition-all duration-300"
-                  style={{ width: `${(progress.completed / progress.total) * 100}%` }}
-                />
-              </div>
+              <Progress 
+                percent={Math.round((progress.completed / progress.total) * 100)} 
+                status="active" 
+                strokeColor={{ '0%': '#108ee9', '100%': '#87d068' }}
+              />
             </div>
           )}
-        </div>
-      </div>
+        </ProCard>
 
-      {/* 文档内容 */}
-      <div className="bg-white rounded-lg shadow">
-        <div className="p-8">
-          <div className="prose max-w-none">
+        {/* 文档内容 */}
+        <ProCard>
+          <div style={{ padding: '0 24px' }}>
             {/* 文档标题 */}
-            <h1 className="text-3xl font-bold text-gray-900 mb-8">
+            <Typography.Title level={2} style={{ textAlign: 'center', marginBottom: 32 }}>
               {outlineData.project_name || '投标技术文件'}
-            </h1>
+            </Typography.Title>
             
             {/* 项目概述 */}
             {outlineData.project_overview && (
-              <div className="bg-blue-50 border-l-4 border-blue-400 p-6 mb-8">
-                <h2 className="text-lg font-semibold text-blue-900 mb-2">项目概述</h2>
-                <p className="text-blue-800">{outlineData.project_overview}</p>
-              </div>
+              <Card 
+                size="small" 
+                title={<span style={{ color: '#0958d9' }}><FileTextOutlined style={{ marginRight: 8 }} />项目概述</span>} 
+                styles={{ header: { backgroundColor: '#e6f4ff', borderColor: '#91caff' } }}
+                style={{ marginBottom: 32, borderColor: '#91caff' }}
+              >
+                <Typography.Text style={{ color: '#003eb3' }}>{outlineData.project_overview}</Typography.Text>
+              </Card>
             )}
 
             {/* 目录结构和内容 */}
-            <div className="space-y-8">
+            <div style={{ paddingBottom: 24 }}>
               {renderOutline(outlineData.outline)}
             </div>
           </div>
-        </div>
-      </div>
+        </ProCard>
 
-      {/* 底部统计 */}
-      <div className="mt-6 bg-white rounded-lg shadow p-4">
-        <div className="flex items-center justify-between text-sm text-gray-600">
-          <div className="flex items-center space-x-6">
-            <div className="flex items-center">
-              <CheckCircleIcon className="w-4 h-4 text-green-500 mr-1" />
-              <span>已完成: {completedItems}</span>
-            </div>
-            <div className="flex items-center">
-              <DocumentTextIcon className="w-4 h-4 text-gray-400 mr-1" />
-              <span>待生成: {leafItems.length - completedItems}</span>
-            </div>
-            {progress.failed.length > 0 && (
-              <div className="flex items-center">
-                <ExclamationCircleIcon className="w-4 h-4 text-red-500 mr-1" />
-                <span className="text-red-600">失败: {progress.failed.length}</span>
-              </div>
-            )}
+        {/* 底部统计 */}
+        <ProCard style={{ padding: '12px 24px' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <Space size="large">
+              <span style={{ color: '#52c41a' }}><CheckCircleOutlined style={{ marginRight: 4 }} /> 已完成: {completedItems}</span>
+              <span style={{ color: '#8c8c8c' }}><FileTextOutlined style={{ marginRight: 4 }} /> 待生成: {leafItems.length - completedItems}</span>
+              {progress.failed.length > 0 && (
+                <span style={{ color: '#ff4d4f' }}><ExclamationCircleOutlined style={{ marginRight: 4 }} /> 失败: {progress.failed.length}</span>
+              )}
+            </Space>
+            <Typography.Text type="secondary">
+              总字数: {leafItems.reduce((sum, item) => sum + (item.content?.length || 0), 0)}
+            </Typography.Text>
           </div>
-          <div>
-            <span>总字数: {leafItems.reduce((sum, item) => sum + (item.content?.length || 0), 0)}</span>
-          </div>
-        </div>
-      </div>
+        </ProCard>
+      </Space>
 
       {/* 回到顶部按钮 */}
       {showScrollToTop && (
-        <button
-          onClick={scrollToTop}
-          className="fixed bottom-24 right-6 bg-blue-600 hover:bg-blue-700 text-white rounded-full p-3 shadow-lg transition-all duration-300 hover:shadow-xl focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 z-[60]"
-          aria-label="回到顶部"
-        >
-          <ArrowUpIcon className="w-5 h-5" />
-        </button>
+        <FloatButton.BackTop 
+          target={() => document.getElementById('app-main-scroll') || window}
+          visibilityHeight={300}
+        />
       )}
 
       {/* 校对结果面板 */}

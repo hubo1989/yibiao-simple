@@ -10,9 +10,13 @@ export interface OutlineItem {
   id: string;
   title: string;
   description: string;
+  rating_item?: string;
+  chapter_role?: string;
+  avoid_overlap?: string;
   children?: OutlineItem[];
   content?: string;
   generationError?: string;
+  status?: 'pending' | 'generating' | 'generated'; // 章节状态：待生成、生成中、已生成
 }
 
 export interface OutlineData {
