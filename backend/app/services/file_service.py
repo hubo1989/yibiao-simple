@@ -12,16 +12,30 @@ import docx
 from fastapi import UploadFile
 from ..config import settings
 
-# 新增的第三方库
-try:
-    import pdfplumber
-    import fitz  # PyMuPDF
-    from docx2python import docx2python
-    from PIL import Image
-    HAS_ADVANCED_LIBS = True
-except ImportError as e:
-    HAS_ADVANCED_LIBS = False
-    print(f"高级文档处理库未安装: {e}")
+# 新增的第三方库 - 延迟导入以避免启动时卡住
+HAS_ADVANCED_LIBS = False
+pdfplumber = None
+fitz = None
+docx2python = None
+Image = None
+
+def _init_advanced_libs():
+    """延迟初始化高级文档处理库"""
+    global HAS_ADVANCED_LIBS, pdfplumber, fitz, docx2python, Image
+    if HAS_ADVANCED_LIBS:
+        return True
+    try:
+        import importlib
+        pdfplumber = importlib.import_module('pdfplumber')
+        fitz = importlib.import_module('fitz')
+        docx2python = importlib.import_module('docx2python').docx2python
+        Image = importlib.import_module('PIL').Image
+        HAS_ADVANCED_LIBS = True
+        return True
+    except ImportError as e:
+        HAS_ADVANCED_LIBS = False
+        print(f"高级文档处理库未安装: {e}")
+        return False
 
 
 class FileService:

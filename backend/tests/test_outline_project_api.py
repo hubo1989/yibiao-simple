@@ -33,6 +33,15 @@ class TestProjectOutlineRequestSchema:
         })
         assert request.project_id is not None
 
+    def test_accepts_provider_config_id(self) -> None:
+        """支持传入指定 provider 配置"""
+        provider_id = uuid.uuid4()
+        request = ProjectOutlineRequest(
+            project_id=str(uuid.uuid4()),
+            provider_config_id=str(provider_id),
+        )
+        assert request.provider_config_id == str(provider_id)
+
 
 class TestProjectContentGenerateRequestSchema:
     """测试 ProjectContentGenerateRequest Schema"""
@@ -64,6 +73,16 @@ class TestProjectContentGenerateRequestSchema:
         })
         assert request.project_id == str(project_id)
         assert request.chapter_id == str(chapter_id)
+
+    def test_accepts_provider_config_id(self) -> None:
+        """支持传入指定 provider 配置"""
+        provider_id = uuid.uuid4()
+        request = ProjectContentGenerateRequest(
+            project_id=str(uuid.uuid4()),
+            chapter_id=str(uuid.uuid4()),
+            provider_config_id=str(provider_id),
+        )
+        assert request.provider_config_id == str(provider_id)
 
 
 class TestChapterCreatedResponseSchema:

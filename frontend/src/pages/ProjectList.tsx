@@ -1,12 +1,37 @@
-/**
- * 项目列表页面
- */
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { PageContainer, ProCard } from '@ant-design/pro-components';
+import {
+  Avatar,
+  Button,
+  Card,
+  Col,
+  Empty,
+  Form,
+  Input,
+  List,
+  Modal,
+  Progress,
+  Row,
+  Space,
+  Statistic,
+  Tag,
+  Typography,
+} from 'antd';
+import {
+  ArrowRightOutlined,
+  AuditOutlined,
+  BookOutlined,
+  CheckCircleOutlined,
+  FileAddOutlined,
+  FolderOpenOutlined,
+  PlusOutlined,
+  SyncOutlined,
+} from '@ant-design/icons';
 import { useAuth } from '../contexts/AuthContext';
 import { projectApi } from '../services/api';
-import type { ProjectSummary, ProjectProgress, ProjectCreate } from '../types/project';
-import { PROJECT_STATUS_LABELS, PROJECT_STATUS_COLORS, ProjectStatus } from '../types/project';
+import type { ProjectCreate, ProjectProgress, ProjectSummary } from '../types/project';
+import { PROJECT_STATUS_LABELS, ProjectStatus } from '../types/project';
 
 interface ProjectWithProgress extends ProjectSummary {
   progress?: ProjectProgress;
@@ -14,10 +39,9 @@ interface ProjectWithProgress extends ProjectSummary {
 
 const ProjectList: React.FC = () => {
   const navigate = useNavigate();
-  const { user, logout } = useAuth();
+  const { user } = useAuth();
   const [projects, setProjects] = useState<ProjectWithProgress[]>([]);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [createForm, setCreateForm] = useState<ProjectCreate>({ name: '', description: '' });
   const [creating, setCreating] = useState(false);
@@ -25,10 +49,7 @@ const ProjectList: React.FC = () => {
   const loadProjects = useCallback(async () => {
     try {
       setLoading(true);
-      setError(null);
       const projectList = await projectApi.list({ sort_by: 'updated_at', sort_order: 'desc' });
-
-      // 获取每个项目的进度
       const projectsWithProgress = await Promise.all(
         projectList.map(async (project) => {
           try {
@@ -39,10 +60,8 @@ const ProjectList: React.FC = () => {
           }
         })
       );
-
       setProjects(projectsWithProgress);
     } catch (err) {
-      setError('加载项目列表失败，请稍后重试');
       console.error('加载项目失败:', err);
     } finally {
       setLoading(false);
@@ -53,234 +72,296 @@ const ProjectList: React.FC = () => {
     loadProjects();
   }, [loadProjects]);
 
-  const handleCreateProject = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const handleCreateProject = async () => {
     if (!createForm.name.trim()) return;
-
     try {
       setCreating(true);
       const newProject = await projectApi.create(createForm);
       navigate(`/project/${newProject.id}`);
     } catch (err) {
-      setError('创建项目失败，请稍后重试');
       console.error('创建项目失败:', err);
     } finally {
       setCreating(false);
     }
   };
 
-  const handleLogout = () => {
-    logout();
-    navigate('/login');
-  };
+  const projectStats = useMemo(() => {
+    const total = projects.length;
+    const active = projects.filter((project) => project.status === 'in_progress').length;
+    const reviewing = projects.filter((project) => project.status === 'reviewing').length;
+    const completed = projects.filter((project) => project.status === 'completed').length;
+    const averageProgress =
+      total === 0
+        ? 0
+        : Math.round(
+            projects.reduce((sum, project) => sum + (project.progress?.completion_percentage || 0), 0) / total
+          );
+
+    return { total, active, reviewing, completed, averageProgress };
+  }, [projects]);
+
+  const recentProjects = useMemo(() => projects.slice(0, 6), [projects]);
+  const recentUpdates = useMemo(() => projects.slice(0, 5), [projects]);
 
   const formatDate = (dateStr: string) => {
     const date = new Date(dateStr);
     return date.toLocaleDateString('zh-CN', {
-      year: 'numeric',
       month: '2-digit',
       day: '2-digit',
     });
   };
 
-  const getStatusBadge = (status: ProjectStatus) => (
-    <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${PROJECT_STATUS_COLORS[status]}`}>
-      {PROJECT_STATUS_LABELS[status]}
-    </span>
-  );
+  const formatDateTime = (dateStr: string) => {
+    const date = new Date(dateStr);
+    return date.toLocaleString('zh-CN', {
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+  };
+
+  const getStatusColor = (status: ProjectStatus) => {
+    const colors: Record<ProjectStatus, string> = {
+      draft: 'default',
+      in_progress: 'processing',
+      reviewing: 'warning',
+      completed: 'success',
+    };
+    return colors[status] || 'default';
+  };
 
   return (
-    <div className="min-h-screen bg-gray-50">
-      {/* 顶部导航栏 */}
-      <header className="bg-white shadow-sm">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex justify-between items-center h-16">
-            <div className="flex items-center">
-              <h1 className="text-xl font-bold text-gray-900">AI 写标书助手</h1>
-            </div>
-            <div className="flex items-center space-x-4">
-              <span className="text-sm text-gray-600">
-                {user?.username} ({user?.role === 'admin' ? '管理员' : user?.role === 'reviewer' ? '审核员' : '编辑'})
-              </span>
-              {user?.role === 'admin' && (
-                <button
-                  onClick={() => navigate('/admin')}
-                  className="inline-flex items-center px-3 py-1.5 text-sm font-medium rounded-md text-white bg-purple-600 hover:bg-purple-700"
+    <PageContainer header={{ title: '' }}>
+      <Space direction="vertical" size="large" style={{ width: '100%' }}>
+        <Card
+          style={{
+            borderRadius: 24,
+            overflow: 'hidden',
+            background:
+              'linear-gradient(135deg, rgba(22,119,255,0.12) 0%, rgba(255,255,255,0.98) 42%, rgba(19,194,194,0.10) 100%)',
+            border: '1px solid rgba(22, 119, 255, 0.10)',
+          }}
+          bodyStyle={{ padding: 28 }}
+        >
+          <Row gutter={[24, 24]} align="middle" justify="space-between">
+            <Col xs={24} xl={16}>
+              <Space size="large" align="start">
+                <Avatar size={68} style={{ background: 'linear-gradient(135deg, #1677ff 0%, #13c2c2 100%)' }}>
+                  {(user?.username || 'U').slice(0, 1).toUpperCase()}
+                </Avatar>
+                <div>
+                  <Typography.Text style={{ color: '#1677ff', fontWeight: 700 }}>
+                    项目工作台
+                  </Typography.Text>
+                  <Typography.Title level={3} style={{ marginTop: 8, marginBottom: 8 }}>
+                    {user?.username || '团队成员'}，先处理最近要交付的项目。
+                  </Typography.Title>
+                  <Typography.Paragraph style={{ marginBottom: 0, maxWidth: 720, color: 'rgba(15, 23, 42, 0.62)' }}>
+                    当前界面不再混入硬编码的待办或公告，而是直接基于真实项目状态、进度和最近更新时间组织信息。
+                  </Typography.Paragraph>
+                </div>
+              </Space>
+            </Col>
+            <Col xs={24} xl={8}>
+              <Space wrap style={{ justifyContent: 'flex-end', width: '100%' }}>
+                <Button icon={<FolderOpenOutlined />} onClick={() => navigate('/projects')}>
+                  查看全部项目
+                </Button>
+                <Button type="primary" icon={<PlusOutlined />} onClick={() => setShowCreateModal(true)}>
+                  新建项目
+                </Button>
+              </Space>
+              <Typography.Text type="secondary" style={{ display: 'block', textAlign: 'right', marginTop: 12 }}>
+                {new Date().toLocaleDateString('zh-CN', {
+                  year: 'numeric',
+                  month: 'long',
+                  day: 'numeric',
+                  weekday: 'long',
+                })}
+              </Typography.Text>
+            </Col>
+          </Row>
+        </Card>
+
+        <Row gutter={[16, 16]}>
+          <Col xs={24} md={12} xl={6}>
+            <Card bordered={false} style={{ borderRadius: 20 }}>
+              <Statistic title="项目总数" value={projectStats.total} prefix={<FolderOpenOutlined />} />
+            </Card>
+          </Col>
+          <Col xs={24} md={12} xl={6}>
+            <Card bordered={false} style={{ borderRadius: 20 }}>
+              <Statistic title="进行中" value={projectStats.active} prefix={<SyncOutlined />} valueStyle={{ color: '#1677ff' }} />
+            </Card>
+          </Col>
+          <Col xs={24} md={12} xl={6}>
+            <Card bordered={false} style={{ borderRadius: 20 }}>
+              <Statistic title="待审核" value={projectStats.reviewing} prefix={<AuditOutlined />} valueStyle={{ color: '#d48806' }} />
+            </Card>
+          </Col>
+          <Col xs={24} md={12} xl={6}>
+            <Card bordered={false} style={{ borderRadius: 20 }}>
+              <Statistic title="平均完成度" value={projectStats.averageProgress} suffix="%" prefix={<CheckCircleOutlined />} valueStyle={{ color: '#389e0d' }} />
+            </Card>
+          </Col>
+        </Row>
+
+        <Row gutter={[16, 16]}>
+          <Col xs={24} xl={16}>
+            <ProCard
+              title="最近项目"
+              loading={loading}
+              extra={
+                <Button type="link" icon={<ArrowRightOutlined />} onClick={() => navigate('/projects')}>
+                  打开项目管理
+                </Button>
+              }
+            >
+              {recentProjects.length === 0 ? (
+                <Empty
+                  image={Empty.PRESENTED_IMAGE_SIMPLE}
+                  description="当前还没有项目，先创建一个项目开始"
                 >
-                  <svg className="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-                  </svg>
-                  后台管理
-                </button>
+                  <Button type="primary" icon={<FileAddOutlined />} onClick={() => setShowCreateModal(true)}>
+                    创建首个项目
+                  </Button>
+                </Empty>
+              ) : (
+                <Row gutter={[16, 16]}>
+                  {recentProjects.map((project) => (
+                    <Col xs={24} md={12} key={project.id}>
+                      <Card
+                        hoverable
+                        size="small"
+                        style={{ borderRadius: 18 }}
+                        bodyStyle={{ padding: 18 }}
+                        onClick={() => navigate(`/project/${project.id}`)}
+                      >
+                        <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'flex-start' }}>
+                          <div style={{ minWidth: 0 }}>
+                            <Typography.Title level={5} style={{ marginBottom: 8 }}>
+                              {project.name}
+                            </Typography.Title>
+                            <Typography.Paragraph
+                              ellipsis={{ rows: 2 }}
+                              style={{ marginBottom: 12, color: 'rgba(15, 23, 42, 0.62)' }}
+                            >
+                              {project.description || '暂无项目描述'}
+                            </Typography.Paragraph>
+                          </div>
+                          <Tag color={getStatusColor(project.status)}>{PROJECT_STATUS_LABELS[project.status]}</Tag>
+                        </div>
+
+                        {project.progress?.total_chapters ? (
+                          <div style={{ marginBottom: 12 }}>
+                            <Progress percent={project.progress.completion_percentage} size="small" status="active" />
+                          </div>
+                        ) : null}
+
+                        <Space split={<span style={{ color: '#d9d9d9' }}>|</span>} size={0} wrap>
+                          <Typography.Text type="secondary">更新于 {formatDateTime(project.updated_at)}</Typography.Text>
+                          <Typography.Text type="secondary">创建于 {formatDate(project.created_at)}</Typography.Text>
+                        </Space>
+                      </Card>
+                    </Col>
+                  ))}
+                </Row>
               )}
-              <button
-                onClick={handleLogout}
-                className="inline-flex items-center px-3 py-1.5 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50"
-              >
-                退出登录
-              </button>
-            </div>
-          </div>
-        </div>
-      </header>
+            </ProCard>
+          </Col>
 
-      {/* 主内容区 */}
-      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        {/* 页面标题和操作 */}
-        <div className="flex justify-between items-center mb-8">
-          <div>
-            <h2 className="text-2xl font-bold text-gray-900">我的项目</h2>
-            <p className="text-sm text-gray-500 mt-1">管理您的标书项目</p>
-          </div>
-          <button
-            onClick={() => setShowCreateModal(true)}
-            className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
-          >
-            <svg className="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-            </svg>
-            新建项目
-          </button>
-        </div>
+          <Col xs={24} xl={8}>
+            <Space direction="vertical" size="middle" style={{ width: '100%' }}>
+              <ProCard title="快捷操作">
+                <Row gutter={[12, 12]}>
+                  <Col span={12}>
+                    <Button block style={{ height: 88 }} onClick={() => setShowCreateModal(true)}>
+                      <Space direction="vertical" size={6}>
+                        <FileAddOutlined style={{ fontSize: 22, color: '#1677ff' }} />
+                        <span>新建项目</span>
+                      </Space>
+                    </Button>
+                  </Col>
+                  <Col span={12}>
+                    <Button block style={{ height: 88 }} onClick={() => navigate('/projects')}>
+                      <Space direction="vertical" size={6}>
+                        <FolderOpenOutlined style={{ fontSize: 22, color: '#722ed1' }} />
+                        <span>项目管理</span>
+                      </Space>
+                    </Button>
+                  </Col>
+                  <Col span={12}>
+                    <Button block style={{ height: 88 }} onClick={() => navigate('/knowledge')}>
+                      <Space direction="vertical" size={6}>
+                        <BookOutlined style={{ fontSize: 22, color: '#13c2c2' }} />
+                        <span>知识库</span>
+                      </Space>
+                    </Button>
+                  </Col>
+                  <Col span={12}>
+                    <Button block style={{ height: 88 }} onClick={() => navigate('/projects')}>
+                      <Space direction="vertical" size={6}>
+                        <AuditOutlined style={{ fontSize: 22, color: '#d48806' }} />
+                        <span>进入审核</span>
+                      </Space>
+                    </Button>
+                  </Col>
+                </Row>
+              </ProCard>
 
-        {/* 错误提示 */}
-        {error && (
-          <div className="mb-6 p-4 bg-red-50 border border-red-200 rounded-md">
-            <p className="text-sm text-red-700">{error}</p>
-          </div>
-        )}
-
-        {/* 加载状态 */}
-        {loading ? (
-          <div className="flex justify-center items-center py-12">
-            <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
-          </div>
-        ) : projects.length === 0 ? (
-          /* 空状态 */
-          <div className="text-center py-12">
-            <svg className="mx-auto h-12 w-12 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-            </svg>
-            <h3 className="mt-2 text-sm font-medium text-gray-900">暂无项目</h3>
-            <p className="mt-1 text-sm text-gray-500">点击上方"新建项目"按钮创建您的第一个标书项目</p>
-          </div>
-        ) : (
-          /* 项目列表 */
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-            {projects.map((project) => (
-              <div
-                key={project.id}
-                onClick={() => navigate(`/project/${project.id}`)}
-                className="bg-white rounded-lg shadow-sm border border-gray-200 p-6 hover:shadow-md transition-shadow cursor-pointer"
-              >
-                {/* 项目标题和状态 */}
-                <div className="flex justify-between items-start mb-3">
-                  <h3 className="text-lg font-semibold text-gray-900 truncate flex-1 mr-2">
-                    {project.name}
-                  </h3>
-                  {getStatusBadge(project.status)}
-                </div>
-
-                {/* 项目描述 */}
-                {project.description && (
-                  <p className="text-sm text-gray-600 mb-4 line-clamp-2">{project.description}</p>
+              <ProCard title="最近更新" loading={loading}>
+                {recentUpdates.length === 0 ? (
+                  <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无项目更新记录" />
+                ) : (
+                  <List
+                    dataSource={recentUpdates}
+                    renderItem={(project) => (
+                      <List.Item
+                        style={{ paddingInline: 0, cursor: 'pointer' }}
+                        onClick={() => navigate(`/project/${project.id}`)}
+                      >
+                        <List.Item.Meta
+                          title={
+                            <Space size={8} wrap>
+                              <Typography.Text strong>{project.name}</Typography.Text>
+                              <Tag color={getStatusColor(project.status)}>{PROJECT_STATUS_LABELS[project.status]}</Tag>
+                            </Space>
+                          }
+                          description={
+                            <Typography.Text type="secondary">
+                              {project.description || '暂无项目描述'} · {formatDateTime(project.updated_at)}
+                            </Typography.Text>
+                          }
+                        />
+                      </List.Item>
+                    )}
+                  />
                 )}
+              </ProCard>
+            </Space>
+          </Col>
+        </Row>
+      </Space>
 
-                {/* 进度条 */}
-                {project.progress && project.progress.total_chapters > 0 && (
-                  <div className="mb-4">
-                    <div className="flex justify-between text-xs text-gray-500 mb-1">
-                      <span>进度</span>
-                      <span>{project.progress.finalized}/{project.progress.total_chapters} 已定稿</span>
-                    </div>
-                    <div className="w-full bg-gray-200 rounded-full h-2">
-                      <div
-                        className="bg-green-500 h-2 rounded-full transition-all duration-300"
-                        style={{ width: `${project.progress.completion_percentage}%` }}
-                      ></div>
-                    </div>
-                  </div>
-                )}
-
-                {/* 项目元信息 */}
-                <div className="flex justify-between items-center text-xs text-gray-500">
-                  <span>创建于 {formatDate(project.created_at)}</span>
-                  {project.progress && project.progress.total_chapters > 0 && (
-                    <span>{project.progress.completion_percentage.toFixed(0)}% 完成</span>
-                  )}
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-      </main>
-
-      {/* 创建项目弹窗 */}
-      {showCreateModal && (
-        <div className="fixed inset-0 z-50 overflow-y-auto">
-          <div className="flex min-h-screen items-center justify-center p-4">
-            {/* 背景遮罩 */}
-            <div
-              className="fixed inset-0 bg-black bg-opacity-50 transition-opacity"
-              onClick={() => setShowCreateModal(false)}
-            ></div>
-
-            {/* 弹窗内容 */}
-            <div className="relative bg-white rounded-lg shadow-xl max-w-md w-full p-6">
-              <h3 className="text-lg font-semibold text-gray-900 mb-4">新建项目</h3>
-              <form onSubmit={handleCreateProject}>
-                <div className="space-y-4">
-                  <div>
-                    <label htmlFor="projectName" className="block text-sm font-medium text-gray-700 mb-1">
-                      项目名称 <span className="text-red-500">*</span>
-                    </label>
-                    <input
-                      type="text"
-                      id="projectName"
-                      value={createForm.name}
-                      onChange={(e) => setCreateForm({ ...createForm, name: e.target.value })}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                      placeholder="请输入项目名称"
-                      required
-                    />
-                  </div>
-                  <div>
-                    <label htmlFor="projectDesc" className="block text-sm font-medium text-gray-700 mb-1">
-                      项目描述
-                    </label>
-                    <textarea
-                      id="projectDesc"
-                      value={createForm.description || ''}
-                      onChange={(e) => setCreateForm({ ...createForm, description: e.target.value })}
-                      rows={3}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                      placeholder="请输入项目描述（可选）"
-                    />
-                  </div>
-                </div>
-                <div className="flex justify-end space-x-3 mt-6">
-                  <button
-                    type="button"
-                    onClick={() => setShowCreateModal(false)}
-                    className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50"
-                  >
-                    取消
-                  </button>
-                  <button
-                    type="submit"
-                    disabled={creating || !createForm.name.trim()}
-                    className="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-md hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed"
-                  >
-                    {creating ? '创建中...' : '创建'}
-                  </button>
-                </div>
-              </form>
-            </div>
-          </div>
-        </div>
-      )}
-    </div>
+      <Modal
+        title="新建项目"
+        open={showCreateModal}
+        onCancel={() => setShowCreateModal(false)}
+        onOk={handleCreateProject}
+        confirmLoading={creating}
+        okText={creating ? '创建中...' : '创建'}
+      >
+        <Form layout="vertical">
+          <Form.Item label="项目名称" required>
+            <Input value={createForm.name} onChange={(e) => setCreateForm({ ...createForm, name: e.target.value })} placeholder="请输入项目名称" />
+          </Form.Item>
+          <Form.Item label="项目描述">
+            <Input.TextArea value={createForm.description} onChange={(e) => setCreateForm({ ...createForm, description: e.target.value })} rows={3} placeholder="请输入项目描述（可选）" />
+          </Form.Item>
+        </Form>
+      </Modal>
+    </PageContainer>
   );
 };
 

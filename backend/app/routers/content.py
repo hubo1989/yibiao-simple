@@ -26,10 +26,18 @@ async def generate_chapter_content(
     try:
         # 创建OpenAI服务实例，从数据库加载配置
         openai_service = OpenAIService(db=db)
-        await openai_service._ensure_initialized()
+        if request.provider_config_id:
+            configured = await openai_service.use_config_by_id(request.provider_config_id)
+            if not configured:
+                raise HTTPException(status_code=404, detail="所选 Provider 配置不存在")
+        else:
+            await openai_service._ensure_initialized()
 
         if not openai_service.api_key:
             raise HTTPException(status_code=400, detail="请先配置OpenAI API密钥")
+
+        if request.model_name:
+            openai_service.set_model(request.model_name)
 
         # 生成单章节内容
         content = ""
@@ -57,10 +65,18 @@ async def generate_chapter_content_stream(
     try:
         # 创建OpenAI服务实例，从数据库加载配置
         openai_service = OpenAIService(db=db)
-        await openai_service._ensure_initialized()
+        if request.provider_config_id:
+            configured = await openai_service.use_config_by_id(request.provider_config_id)
+            if not configured:
+                raise HTTPException(status_code=404, detail="所选 Provider 配置不存在")
+        else:
+            await openai_service._ensure_initialized()
 
         if not openai_service.api_key:
             raise HTTPException(status_code=400, detail="请先配置OpenAI API密钥")
+
+        if request.model_name:
+            openai_service.set_model(request.model_name)
 
         async def generate():
             try:

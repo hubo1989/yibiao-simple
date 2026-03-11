@@ -1,6 +1,6 @@
 """Project 模型和 Schema 单元测试"""
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 
 import pytest
 from pydantic import ValidationError
@@ -65,6 +65,7 @@ class TestProjectModel:
             "file_content",
             "project_overview",
             "tech_requirements",
+            "custom_prompts",
             "created_at",
             "updated_at",
         }
@@ -162,8 +163,8 @@ class TestProjectResponse:
             file_content = None
             project_overview = None
             tech_requirements = None
-            created_at = datetime.utcnow()
-            updated_at = datetime.utcnow()
+            created_at = datetime.now(timezone.utc)
+            updated_at = datetime.now(timezone.utc)
 
         response = ProjectResponse.model_validate(MockProject())
         assert response.name == "Test"
@@ -214,7 +215,7 @@ class TestProjectMemberResponse:
             user_id = uuid.uuid4()
             project_id = uuid.uuid4()
             role = ProjectMemberRole.OWNER
-            joined_at = datetime.utcnow()
+            joined_at = datetime.now(timezone.utc)
 
         response = ProjectMemberResponse.model_validate(MockMember())
         assert response.role == ProjectMemberRole.OWNER

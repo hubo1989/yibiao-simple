@@ -27,6 +27,9 @@ seleniumbase==4.33.3
 undetected-chromedriver==3.5.5
 # MCP服务支持
 mcp==1.13.1
+# PageIndex 依赖
+tiktoken==0.11.0
+pyyaml==6.0.2
 # 验证
 email-validator==2.2.0
 # 数据库支持
@@ -36,3 +39,9 @@ alembic==1.15.2
 # JWT 认证
 python-jose[cryptography]==3.4.0
 bcrypt==4.2.1
+# LlamaIndex 知识库
+llama-index-core>=0.10.0
+llama-index-embeddings-ollama>=0.3.0
+llama-index-vector-stores-postgres>=0.2.0
+pgvector>=0.2.0
+httpx>=0.27.0

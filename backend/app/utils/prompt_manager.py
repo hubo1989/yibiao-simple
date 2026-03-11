@@ -8,23 +8,13 @@
 - 异步代码：使用 PromptService 获取可配置的提示词
 """
 
-import re
 from .builtin_prompts import get_builtin_prompt
+from ..services.prompt_service import PromptService
 
 
 def split_prompt(prompt: str) -> tuple[str, str]:
     """将合并后的 prompt 分割为 system_prompt 和 user_template"""
-    parts = prompt.split("\n---\n", 1)
-    if len(parts) == 2:
-        system_part = parts[0].strip()
-        user_part = parts[1].strip()
-        # 移除 "# 系统指令" 和 "# 用户输入" 标题
-        system_prompt = re.sub(r'^#\s*系统指令\s*\n', '', system_part, flags=re.IGNORECASE)
-        user_template = re.sub(r'^#\s*用户输入\s*\n', '', user_part, flags=re.IGNORECASE)
-        return (system_prompt.strip(), user_template.strip())
-    else:
-        system_prompt = re.sub(r'^#\s*系统指令\s*\n', '', prompt.strip(), flags=re.IGNORECASE)
-        return (system_prompt.strip(), "")
+    return PromptService.split_prompt(prompt)
 
 
 def read_expand_outline_prompt():

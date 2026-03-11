@@ -15,7 +15,6 @@ import type {
   ContradictionItem,
   ConsistencyCheckResponse,
   ConsistencySeverity,
-  ConsistencyCategory,
   OverallConsistency,
 } from '../types/consistency';
 import {

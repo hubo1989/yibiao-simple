@@ -151,7 +151,6 @@ const VersionHistory: React.FC<VersionHistoryProps> = ({
     // 简单的行级 diff 显示
     const oldLines = (oldContent || '').split('\n');
     const newLines = (newContent || '').split('\n');
-    const maxLines = Math.max(oldLines.length, newLines.length);
 
     const diffLines: Array<{ type: 'unchanged' | 'added' | 'removed'; content: string }> = [];
 

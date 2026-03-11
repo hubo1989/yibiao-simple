@@ -71,7 +71,9 @@ class TestLockExpiration:
         class MockChapter:
             locked_by = uuid.uuid4()
             # 无时区信息
-            locked_at = datetime.utcnow() - timedelta(minutes=LOCK_TIMEOUT_MINUTES + 1)
+            locked_at = (
+                datetime.now(timezone.utc) - timedelta(minutes=LOCK_TIMEOUT_MINUTES + 1)
+            ).replace(tzinfo=None)
 
         chapter = MockChapter()
         assert _is_lock_expired(chapter) is True

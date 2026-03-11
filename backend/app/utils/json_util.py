@@ -1,4 +1,68 @@
 import json
+import re
+
+def repair_truncated_json(json_str: str) -> str:
+    """
+    尝试修复被截断的 JSON 字符串
+    
+    Args:
+        json_str: 可能被截断的 JSON 字符串
+        
+    Returns:
+        修复后的 JSON 字符串
+    """
+    json_str = json_str.strip()
+    
+    # 如果已经是有效的 JSON，直接返回
+    try:
+        json.loads(json_str)
+        return json_str
+    except json.JSONDecodeError:
+        pass
+    
+    # 尝试修复常见的截断问题
+    repaired = json_str
+    
+    # 1. 修复未闭合的字符串（在字符串中间被截断）
+    # 找到最后一个未转义的引号
+    last_quote = repaired.rfind('"')
+    if last_quote > 0:
+        # 检查这个引号是否被转义
+        escape_count = 0
+        i = last_quote - 1
+        while i >= 0 and repaired[i] == '\\':
+            escape_count += 1
+            i -= 1
+        
+        # 如果引号未被转义（偶数个反斜杠），说明字符串未闭合
+        if escape_count % 2 == 0:
+            # 在最后一个引号后添加闭合引号
+            repaired = repaired[:last_quote + 1]
+    
+    # 2. 移除最后一个不完整的键值对
+    # 查找最后一个完整的键值对
+    patterns_to_try = [
+        r',\s*"[^"]*"\s*:\s*$',  # 最后一个不完整的键
+        r',\s*"[^"]*"\s*:\s*"[^"]*$',  # 最后一个不完整的字符串值
+        r',\s*"[^"]*"\s*:\s*\[[^\]]*$',  # 最后一个不完整的数组
+        r',\s*"[^"]*"\s*:\s*\{[^}]*$',  # 最后一个不完整的对象
+    ]
+    
+    for pattern in patterns_to_try:
+        match = re.search(pattern, repaired)
+        if match:
+            repaired = repaired[:match.start()]
+            break
+    
+    # 3. 统计未闭合的括号并添加闭合
+    open_braces = repaired.count('{') - repaired.count('}')
+    open_brackets = repaired.count('[') - repaired.count(']')
+    
+    # 添加缺失的闭合括号
+    repaired += ']' * open_brackets + '}' * open_braces
+    
+    return repaired
+
 def check_json(json_str: str, schema: str | dict) -> tuple[bool, str]:
     """
     根据模板 JSON 校验目标字符串的格式是否符合要求

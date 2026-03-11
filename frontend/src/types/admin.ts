@@ -43,12 +43,21 @@ export interface ResetPasswordRequest {
 
 // ==================== API Key 配置类型 ====================
 
+export interface ApiKeyModelConfig {
+  model_id: string;
+  use_for_generation: boolean;
+  use_for_indexing: boolean;
+}
+
 export interface ApiKeyConfig {
   id: string;
   provider: string;
   api_key_masked: string;
   base_url: string | null;
   model_name: string;
+  model_configs: ApiKeyModelConfig[];
+  generation_model_name: string;
+  index_model_name: string;
   is_default: boolean;
   created_by: string | null;
   created_at: string;
@@ -65,6 +74,16 @@ export interface ApiKeyConfigCreate {
   api_key: string;
   base_url?: string;
   model_name?: string;
+  model_configs: ApiKeyModelConfig[];
+  is_default?: boolean;
+}
+
+export interface ApiKeyConfigUpdate {
+  provider?: string;
+  api_key?: string;
+  base_url?: string;
+  model_name?: string;
+  model_configs?: ApiKeyModelConfig[];
   is_default?: boolean;
 }
 
