@@ -51,6 +51,9 @@ class ChapterContentResponse(BaseModel):
     chapter_number: str
     title: str
     content: str | None
+    rating_item: str | None = None
+    chapter_role: str | None = None
+    avoid_overlap: str | None = None
     status: str
     locked_by: str | None = None
     locked_at: str | None = None
@@ -389,6 +392,9 @@ async def update_chapter_content(
         chapter_number=chapter.chapter_number,
         title=chapter.title,
         content=chapter.content,
+        rating_item=chapter.rating_item,
+        chapter_role=chapter.chapter_role,
+        avoid_overlap=chapter.avoid_overlap,
         status=chapter.status.value,
         locked_by=str(chapter.locked_by) if chapter.locked_by else None,
         locked_at=chapter.locked_at.isoformat() if chapter.locked_at else None,

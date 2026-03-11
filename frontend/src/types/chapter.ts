@@ -9,6 +9,9 @@ export interface ChapterContentResponse {
   chapter_number: string;
   title: string;
   content: string | null;
+  rating_item?: string | null;
+  chapter_role?: string | null;
+  avoid_overlap?: string | null;
   status: ChapterStatus;
   locked_by: string | null;
   locked_at: string | null;

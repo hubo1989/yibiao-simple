@@ -9,7 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..utils.outline_util import get_random_indexes, calculate_nodes_distribution, generate_one_outline_json_by_level1
-from ..utils.json_util import check_json
+from ..utils.json_util import check_json, repair_truncated_json
 from ..utils.config_manager import config_manager
 from ..utils.encryption import encryption_service
 from ..models.api_key_config import ApiKeyConfig
@@ -38,6 +38,17 @@ CONSISTENCY_CONTRADICTION_SCHEMA = {
     "suggestion": "统一的建议"
 }
 
+PROOFREAD_RESULT_SCHEMA = {
+    "issues": [PROOFREAD_ISSUE_SCHEMA],
+    "summary": "整体问题摘要",
+}
+
+CONSISTENCY_RESULT_SCHEMA = {
+    "contradictions": [CONSISTENCY_CONTRADICTION_SCHEMA],
+    "summary": "简要总结",
+    "overall_consistency": "consistent|minor_issues|major_issues",
+}
+
 
 class OpenAIService:
     """OpenAI服务类"""
@@ -59,6 +70,25 @@ class OpenAIService:
         self._client = None
         self._prompt_service = None
 
+    def _set_prompt_service(self) -> None:
+        if self._db and self._prompt_service is None:
+            self._prompt_service = PromptService(self._db)
+
+    def use_api_key_config(self, config: ApiKeyConfig) -> bool:
+        """直接应用指定的 API Key 配置。"""
+        self.api_key = encryption_service.decrypt(config.api_key_encrypted)
+        self.base_url = config.base_url or ''
+        self.model_name = config.get_generation_model_name()
+        self._client = (
+            openai.AsyncOpenAI(
+                api_key=self.api_key,
+                base_url=self.base_url if self.base_url else None
+            )
+            if self.api_key else None
+        )
+        self._set_prompt_service()
+        return bool(self.api_key)
+
     async def _load_config_from_db(self) -> bool:
         """从数据库加载默认 API Key 配置"""
         if self._db is None:
@@ -75,11 +105,29 @@ class OpenAIService:
         config = result.scalar_one_or_none()
 
         if config:
-            self.api_key = encryption_service.decrypt(config.api_key_encrypted)
-            self.base_url = config.base_url or ''
-            self.model_name = config.model_name
-            return True
+            return self.use_api_key_config(config)
         return False
+
+    async def use_config_by_id(self, config_id: str) -> bool:
+        """按配置 ID 选择指定 provider 配置。"""
+        try:
+            config_uuid = uuid.UUID(str(config_id))
+        except ValueError:
+            return False
+
+        if self._db is None:
+            async with async_session_factory() as session:
+                return await self._fetch_config_by_id(session, config_uuid)
+        return await self._fetch_config_by_id(self._db, config_uuid)
+
+    async def _fetch_config_by_id(self, db: AsyncSession, config_id: uuid.UUID) -> bool:
+        result = await db.execute(
+            select(ApiKeyConfig).where(ApiKeyConfig.id == config_id).limit(1)
+        )
+        config = result.scalar_one_or_none()
+        if not config:
+            return False
+        return self.use_api_key_config(config)
 
     async def _ensure_initialized(self):
         """确保服务已初始化"""
@@ -93,16 +141,12 @@ class OpenAIService:
                 self.api_key = config.get('api_key', '')
                 self.base_url = config.get('base_url', '')
                 self.model_name = config.get('model_name', 'gpt-3.5-turbo')
+                self._client = openai.AsyncOpenAI(
+                    api_key=self.api_key,
+                    base_url=self.base_url if self.base_url else None
+                )
 
-            # 初始化 OpenAI 客户端
-            self._client = openai.AsyncOpenAI(
-                api_key=self.api_key,
-                base_url=self.base_url if self.base_url else None
-            )
-
-            # 初始化 PromptService
-            if self._db:
-                self._prompt_service = PromptService(self._db)
+            self._set_prompt_service()
 
     @property
     def client(self):
@@ -115,6 +159,25 @@ class OpenAIService:
     def set_model(self, model_name: str):
         """覆盖默认模型"""
         self.model_name = model_name
+
+    @staticmethod
+    def _append_json_output_contract(system_prompt: str, schema: str | Dict[str, Any]) -> str:
+        """为需要结构化输出的提示词追加稳定的 JSON 返回约束"""
+        schema_text = (
+            schema
+            if isinstance(schema, str)
+            else json.dumps(schema, ensure_ascii=False, indent=2)
+        )
+        if schema_text in system_prompt:
+            return system_prompt
+
+        contract = (
+            "### 输出格式约束\n"
+            "你必须返回合法 JSON，且不要输出任何 JSON 之外的解释、代码块标记或注释。\n"
+            "返回结构必须匹配以下示例：\n"
+            f"```json\n{schema_text}\n```"
+        )
+        return f"{system_prompt.rstrip()}\n\n{contract}"
     
     async def get_available_models(self) -> List[str]:
         """获取可用的模型列表"""
@@ -141,7 +204,7 @@ class OpenAIService:
         messages: list,
         temperature: float = 0.7,
         response_format: dict = None,
-        max_tokens: int = 4096
+        max_tokens: int = 8192
     ) -> AsyncGenerator[str, None]:
         """流式聊天完成请求 - 真正的异步实现"""
         await self._ensure_initialized()
@@ -204,12 +267,38 @@ class OpenAIService:
                 response_format=response_format,
             )
 
-            isok, error_msg = check_json(str(full_content), schema)
+            # 定义前缀，用于日志输出
+            prefix = f"{log_prefix} " if log_prefix else ""
+
+            # 如果 schema 是 dict，但 AI 返回的是 list，尝试取第一个元素
+            content_to_check = full_content
+            try:
+                parsed = json.loads(full_content.strip())
+                if isinstance(parsed, list) and len(parsed) > 0:
+                    # AI 返回的是数组，取第一个元素
+                    content_to_check = json.dumps(parsed[0], ensure_ascii=False)
+                    print(f"{prefix}AI 返回的是数组，自动取第一个元素")
+            except:
+                pass
+
+            # 首先尝试直接校验
+            isok, error_msg = check_json(content_to_check, schema)
             if isok:
-                return full_content
+                return content_to_check
+
+            # 打印 AI 返回的内容，便于调试
+            print(f"{prefix}AI 返回内容前500字符: {str(full_content)[:500]}")
+
+            # 如果校验失败，尝试修复截断的 JSON
+            repaired_content = repair_truncated_json(str(full_content))
+            if repaired_content != full_content:
+                print(f"{prefix}尝试修复截断的 JSON...")
+                isok, error_msg = check_json(repaired_content, schema)
+                if isok:
+                    print(f"{prefix}JSON 修复成功！")
+                    return repaired_content
 
             last_error_msg = error_msg
-            prefix = f"{log_prefix} " if log_prefix else ""
 
             if attempt >= max_retries:
                 print(f"{prefix}check_json 校验失败，已达到最大重试次数({max_retries})：{last_error_msg}")
@@ -311,6 +400,10 @@ class OpenAIService:
         sibling_chapters: list = None,
         project_overview: str = "",
         knowledge_context: str = "",
+        tech_requirements: str = "",
+        chapter_rating_focus: str = "",
+        chapter_role: str = "",
+        adjacent_boundary: str = "",
     ) -> AsyncGenerator[str, None]:
         """
         为单个章节流式生成内容
@@ -321,6 +414,10 @@ class OpenAIService:
             sibling_chapters: 同级章节列表，避免内容重复
             project_overview: 项目概述信息，提供项目背景和要求
             knowledge_context: 知识库检索结果，提供参考资料
+            tech_requirements: 技术评分/响应要求
+            chapter_rating_focus: 当前章节绑定的评分点
+            chapter_role: 当前章节职责定位
+            adjacent_boundary: 当前章节与相邻章节边界
 
         Yields:
             生成的内容流
@@ -329,6 +426,9 @@ class OpenAIService:
             chapter_id = chapter.get('id', 'unknown')
             chapter_title = chapter.get('title', '未命名章节')
             chapter_description = chapter.get('description', '')
+            chapter_rating_focus = chapter_rating_focus or chapter.get('rating_item', '') or chapter.get('chapter_rating_focus', '')
+            chapter_role = chapter_role or chapter.get('chapter_role', '')
+            adjacent_boundary = adjacent_boundary or chapter.get('avoid_overlap', '') or chapter.get('adjacent_boundary', '')
 
             # 使用 PromptService 获取提示词
             if self._prompt_service:
@@ -340,6 +440,10 @@ class OpenAIService:
                 # 渲染用户提示词模板
                 user_prompt = self._prompt_service.render_prompt(user_template, {
                     "project_overview": project_overview,
+                    "tech_requirements": tech_requirements,
+                    "chapter_rating_focus": chapter_rating_focus,
+                    "chapter_role": chapter_role,
+                    "adjacent_boundary": adjacent_boundary,
                     "knowledge_context": knowledge_context,
                     "parent_chapters": parent_chapters or [],
                     "sibling_chapters": [s for s in (sibling_chapters or []) if s.get('id') != chapter_id],
@@ -353,14 +457,19 @@ class OpenAIService:
                 from .prompt_service import PromptService
                 builtin = get_builtin_prompt("chapter_content")
                 system_prompt, user_template = PromptService.split_prompt(builtin["prompt"])
-                # 简单渲染
-                user_prompt = user_template.replace("{{chapter_id}}", chapter_id)
-                user_prompt = user_prompt.replace("{{chapter_title}}", chapter_title)
-                user_prompt = user_prompt.replace("{{chapter_description}}", chapter_description)
-                if project_overview:
-                    user_prompt = user_prompt.replace("{{project_overview}}", project_overview)
-                if knowledge_context:
-                    user_prompt = user_prompt.replace("{{knowledge_context}}", knowledge_context)
+                user_prompt = PromptService.render_prompt(user_template, {
+                    "project_overview": project_overview,
+                    "tech_requirements": tech_requirements,
+                    "chapter_rating_focus": chapter_rating_focus,
+                    "chapter_role": chapter_role,
+                    "adjacent_boundary": adjacent_boundary,
+                    "knowledge_context": knowledge_context,
+                    "parent_chapters": parent_chapters or [],
+                    "sibling_chapters": [s for s in (sibling_chapters or []) if s.get('id') != chapter_id],
+                    "chapter_id": chapter_id,
+                    "chapter_title": chapter_title,
+                    "chapter_description": chapter_description,
+                })
 
             # 调用AI流式生成内容
             messages = [
@@ -374,13 +483,15 @@ class OpenAIService:
 
         except Exception as e:
             print(f"生成章节内容时出错: {str(e)}")
-            yield f"错误: {str(e)}"
+            raise  # 重新抛出异常，而不是 yield 错误字符串
 
     async def generate_outline_v2(self, overview: str, requirements: str) -> Dict[str, Any]:
         schema_json = json.dumps([
             {
                 "rating_item": "原评分项",
                 "new_title": "根据评分项修改的标题",
+                "chapter_role": "本章主职责",
+                "avoid_overlap": "与其他章节应避免重复的内容边界",
             }
         ])
 
@@ -391,7 +502,8 @@ class OpenAIService:
             )
             from .prompt_service import PromptService
             system_prompt, user_template = PromptService.split_prompt(prompt)
-            user_prompt = self._prompt_service.render_prompt(user_template, {
+            system_prompt = self._append_json_output_contract(system_prompt, schema_json)
+            user_prompt = PromptService.render_prompt(user_template, {
                 "overview": overview,
                 "requirements": requirements,
             })
@@ -401,11 +513,11 @@ class OpenAIService:
             from .prompt_service import PromptService
             builtin = get_builtin_prompt("outline_l1")
             system_prompt, user_template = PromptService.split_prompt(builtin["prompt"])
-            system_prompt = system_prompt + f"\n\n### Output Format in JSON\n{schema_json}"
-            user_prompt = self._prompt_service.render_prompt(user_template, {
+            system_prompt = self._append_json_output_contract(system_prompt, schema_json)
+            user_prompt = PromptService.render_prompt(user_template, {
                 "overview": overview,
                 "requirements": requirements,
-            }) if self._prompt_service else user_template.replace("{{overview}}", overview).replace("{{requirements}}", requirements)
+            })
 
         messages = [
             {"role": "system", "content": system_prompt},
@@ -413,12 +525,13 @@ class OpenAIService:
         ]
 
         # 使用通用方法进行 JSON 校验与重试（失败时抛出异常）
+        # 注意：z.ai API 不支持 response_format 参数，移除此参数
         full_content = await self._generate_with_json_check(
             messages=messages,
             schema=schema_json,
             max_retries=3,
             temperature=0.7,
-            response_format={"type": "json_object"},
+            response_format=None,  # z.ai API 不支持此参数
             log_prefix="一级提纲",
             raise_on_fail=True,
         )
@@ -464,9 +577,13 @@ class OpenAIService:
             )
             from .prompt_service import PromptService
             system_prompt, user_template = PromptService.split_prompt(prompt)
-            user_prompt = self._prompt_service.render_prompt(user_template, {
+            system_prompt = self._append_json_output_contract(system_prompt, json_outline)
+            user_prompt = PromptService.render_prompt(user_template, {
                 "overview": overview,
                 "requirements": requirements,
+                "chapter_rating_item": level1_node.get("rating_item", ""),
+                "chapter_role": level1_node.get("chapter_role", ""),
+                "avoid_overlap": level1_node.get("avoid_overlap", ""),
                 "other_outline": other_outline,
                 "current_outline_json": json_outline,
             })
@@ -476,28 +593,16 @@ class OpenAIService:
             from .prompt_service import PromptService
             builtin = get_builtin_prompt("outline_l2l3")
             system_prompt, user_template = PromptService.split_prompt(builtin["prompt"])
-            system_prompt = system_prompt + f"\n\n### Output Format in JSON\n{json_outline}"
-            user_prompt = f"""
-    ### 项目信息
-
-    <overview>
-    {overview}
-    </overview>
-
-    <requirements>
-    {requirements}
-    </requirements>
-
-    <other_outline>
-    {other_outline}
-    </other_outline>
-
-    <current_outline_json>
-    {json_outline}
-    </current_outline_json>
-
-    直接返回json，不要任何额外说明或格式标记
-    """
+            system_prompt = self._append_json_output_contract(system_prompt, json_outline)
+            user_prompt = PromptService.render_prompt(user_template, {
+                "overview": overview,
+                "requirements": requirements,
+                "chapter_rating_item": level1_node.get("rating_item", ""),
+                "chapter_role": level1_node.get("chapter_role", ""),
+                "avoid_overlap": level1_node.get("avoid_overlap", ""),
+                "other_outline": other_outline,
+                "current_outline_json": json_outline,
+            })
 
         messages = [
             {"role": "system", "content": system_prompt},
@@ -505,17 +610,28 @@ class OpenAIService:
         ]
 
         # 使用通用方法进行 JSON 校验与重试（失败时不抛异常，保持原有"返回最后一次结果"的行为）
+        # 注意：z.ai API 不支持 response_format 参数
         full_content = await self._generate_with_json_check(
             messages=messages,
             schema=json_outline,
             max_retries=3,
             temperature=0.7,
-            response_format={"type": "json_object"},
+            response_format=None,  # z.ai API 不支持此参数
             log_prefix=f"第{i+1}章",
             raise_on_fail=False,
         )
 
-        return json.loads(full_content.strip())
+        # 解析 JSON
+        parsed_content = json.loads(full_content.strip())
+        
+        # 如果 AI 返回的是数组，取第一个元素
+        if isinstance(parsed_content, list):
+            if len(parsed_content) > 0:
+                parsed_content = parsed_content[0]
+            else:
+                parsed_content = json_outline  # 如果数组为空，使用原始 schema
+        
+        return parsed_content
 
     async def proofread_chapter(
         self,
@@ -545,7 +661,8 @@ class OpenAIService:
             )
             from .prompt_service import PromptService
             system_prompt, user_template = PromptService.split_prompt(prompt)
-            user_prompt = self._prompt_service.render_prompt(user_template, {
+            system_prompt = self._append_json_output_contract(system_prompt, PROOFREAD_RESULT_SCHEMA)
+            user_prompt = PromptService.render_prompt(user_template, {
                 "chapter_title": chapter_title,
                 "chapter_content": chapter_content,
                 "tech_requirements": tech_requirements,
@@ -558,16 +675,14 @@ class OpenAIService:
             from .prompt_service import PromptService
             builtin = get_builtin_prompt("proofread")
             system_prompt, user_template = PromptService.split_prompt(builtin["prompt"])
-            # 构建章节摘要
-            chapters_text = "\n\n".join([
-                f"【{ch.get('chapter_number', '')} {ch.get('title', '')}】\n{ch.get('summary', '')}"
-                for ch in []
-            ])
-            user_prompt = user_template.replace("{{chapter_title}}", chapter_title)
-            user_prompt = user_prompt.replace("{{chapter_content}}", chapter_content)
-            user_prompt = user_prompt.replace("{{tech_requirements}}", tech_requirements)
-            if project_overview:
-                user_prompt = user_prompt.replace("{{project_overview}}", project_overview)
+            system_prompt = self._append_json_output_contract(system_prompt, PROOFREAD_RESULT_SCHEMA)
+            user_prompt = PromptService.render_prompt(user_template, {
+                "chapter_title": chapter_title,
+                "chapter_content": chapter_content,
+                "tech_requirements": tech_requirements,
+                "sibling_chapter_titles": sibling_chapter_titles or [],
+                "project_overview": project_overview or "",
+            })
 
         messages = [
             {"role": "system", "content": system_prompt},
@@ -575,10 +690,11 @@ class OpenAIService:
         ]
 
         # 流式返回校对结果
+        # 注意：z.ai API 不支持 response_format 参数
         async for chunk in self.stream_chat_completion(
             messages,
             temperature=0.3,  # 较低温度以获得更稳定的校对结果
-            response_format={"type": "json_object"}
+            response_format=None  # z.ai API 不支持此参数
         ):
             yield chunk
 
@@ -621,7 +737,8 @@ class OpenAIService:
             )
             from .prompt_service import PromptService
             system_prompt, user_template = PromptService.split_prompt(prompt)
-            user_prompt = self._prompt_service.render_prompt(user_template, {
+            system_prompt = self._append_json_output_contract(system_prompt, CONSISTENCY_RESULT_SCHEMA)
+            user_prompt = PromptService.render_prompt(user_template, {
                 "chapter_summaries": chapters_text,
                 "project_overview": project_overview or "",
                 "tech_requirements": tech_requirements or "",
@@ -632,11 +749,12 @@ class OpenAIService:
             from .prompt_service import PromptService
             builtin = get_builtin_prompt("consistency_check")
             system_prompt, user_template = PromptService.split_prompt(builtin["prompt"])
-            user_prompt = user_template.replace("{{chapter_summaries}}", chapters_text)
-            if project_overview:
-                user_prompt = user_prompt.replace("{{project_overview}}", project_overview)
-            if tech_requirements:
-                user_prompt = user_prompt.replace("{{tech_requirements}}", tech_requirements)
+            system_prompt = self._append_json_output_contract(system_prompt, CONSISTENCY_RESULT_SCHEMA)
+            user_prompt = PromptService.render_prompt(user_template, {
+                "chapter_summaries": chapters_text,
+                "project_overview": project_overview or "",
+                "tech_requirements": tech_requirements or "",
+            })
 
         messages = [
             {"role": "system", "content": system_prompt},
@@ -683,14 +801,15 @@ class OpenAIService:
         has_content = chapter_content and chapter_content.strip()
 
         if has_content:
-            system_prompt = """你是一位专业的标书编辑专家。你的任务是根据修改建议重写章节内容。
+            system_prompt = """你是一位专业的投标文件编辑专家。你的任务是根据修改建议重写章节内容，使其更贴合招标要求、更利于得分、更专业可信。
 
 ### 要求
-1. 仔细阅读原始内容和修改建议
-2. 根据建议修改内容，保持专业性和连贯性
-3. 保留原有的结构和格式
-4. 只修改与建议相关的部分，不要改动其他内容
-5. 修改后的内容应该更加准确、一致、专业
+1. 仔细阅读原始内容和修改建议，优先修正会影响得分、合规性和专业度的问题
+2. 保留原有章节主旨和合理结构，但可为提升质量做必要重组
+3. 只在修改建议涉及或为解决相关问题所必需的范围内调整内容，避免无关改写
+4. 语言应正式、克制、专业，避免宣传腔、套话和明显 AI 痕迹
+5. 不要编造未被原文或建议支持的项目事实、案例、数据、人员、设备、承诺
+6. 若建议要求补强内容但缺少明确事实依据，应采用稳妥的投标方案式写法，而非写成既成事实
 
 ### 输出格式
 直接输出修改后的完整章节内容，不要添加任何解释或说明。"""
@@ -704,15 +823,16 @@ class OpenAIService:
 ### 修改建议
 {suggestions_text}
 
-请根据以上修改建议重写章节内容。"""
+请根据以上修改建议重写章节内容，重点提升针对性、完整性和可得分性。"""
         else:
-            system_prompt = """你是一位专业的标书编辑专家。你的任务是根据章节标题和修改建议生成章节内容。
+            system_prompt = """你是一位专业的投标文件编辑专家。你的任务是根据章节标题和修改建议生成章节内容。
 
 ### 要求
-1. 根据章节标题和修改建议，撰写专业、完整的标书章节内容
-2. 内容要针对招标文件的要求，具有说服力
-3. 确保内容与修改建议完全一致
-4. 内容要详实、专业，符合标书规范
+1. 严格围绕章节标题和修改建议撰写内容，确保内容真正响应该章节应承担的要求
+2. 内容要专业、具体、可执行，优先体现方案、方法、流程、保障和成果输出
+3. 对修改建议中明确要求补充的点，必须全部覆盖
+4. 语言要符合正式投标文本习惯，避免空泛宣传和绝对化承诺
+5. 不要编造未被建议支持的项目事实、案例、数据、人员、设备、时间承诺
 
 ### 输出格式
 直接输出生成的章节内容，不要添加章节标题或任何解释说明。"""
@@ -723,7 +843,7 @@ class OpenAIService:
 ### 修改建议（必须遵守）
 {suggestions_text}
 
-请根据以上章节标题和修改建议生成章节内容。"""
+请根据以上章节标题和修改建议生成章节内容，确保内容可直接用于投标文件。"""
 
         messages = [
             {"role": "system", "content": system_prompt},
@@ -767,14 +887,15 @@ class OpenAIService:
         # 构建修改建议文本
         suggestions_text = "\n".join([f"- {s}" for s in suggestions])
 
-        system_prompt = """你是一位专业的标书编辑专家。你的任务是根据修改建议重写章节内容。
+        system_prompt = """你是一位专业的投标文件编辑专家。你的任务是根据修改建议重写章节内容，使其更贴合招标要求、更利于得分、更专业可信。
 
 ### 要求
-1. 仔细阅读原始内容和修改建议
-2. 根据建议修改内容，保持专业性和连贯性
-3. 保留原有的结构和格式
-4. 只修改与建议相关的部分，不要改动其他内容
-5. 修改后的内容应该更加准确、一致、专业
+1. 仔细阅读原始内容和修改建议，优先修正会影响得分、合规性和专业度的问题
+2. 保留原有章节主旨和合理结构，但可为提升质量做必要重组
+3. 只在修改建议涉及或为解决相关问题所必需的范围内调整内容，避免无关改写
+4. 语言应正式、克制、专业，避免宣传腔、套话和明显 AI 痕迹
+5. 不要编造未被原文或建议支持的项目事实、案例、数据、人员、设备、承诺
+6. 若建议要求补强内容但缺少明确事实依据，应采用稳妥的投标方案式写法，而非写成既成事实
 
 ### 输出格式
 直接输出修改后的完整章节内容，不要添加任何解释或说明。"""
@@ -788,7 +909,7 @@ class OpenAIService:
 ### 修改建议
 {suggestions_text}
 
-请根据以上修改建议重写章节内容。"""
+请根据以上修改建议重写章节内容，重点提升针对性、完整性和可得分性。"""
 
         messages = [
             {"role": "system", "content": system_prompt},
