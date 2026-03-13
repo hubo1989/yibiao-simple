@@ -15,6 +15,7 @@ import type {
   LockResponse,
   StatusUpdateResponse,
   ChapterStatus,
+  ProjectChapterListResponse,
 } from '../types/chapter';
 import type { Comment, CommentListResponse, CommentCreateRequest } from '../types/comment';
 import type { ConsistencyCheckResponse } from '../types/consistency';
@@ -465,6 +466,11 @@ export const outlineApi = {
       },
       body: JSON.stringify(data),
     }, token);
+  },
+
+  getProjectChapters: async (projectId: string): Promise<ProjectChapterListResponse> => {
+    const response = await api.get<ProjectChapterListResponse>(`/api/outline/project-chapters/${projectId}`);
+    return response.data;
   },
 
 };

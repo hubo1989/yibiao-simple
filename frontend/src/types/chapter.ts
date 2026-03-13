@@ -38,6 +38,20 @@ export interface StatusUpdateResponse {
   message: string;
 }
 
+export interface ProjectChapterReference {
+  id: string;
+  chapter_number: string;
+  title: string;
+  parent_id: string | null;
+  status: ChapterStatus;
+}
+
+export interface ProjectChapterListResponse {
+  project_id: string;
+  chapters: ProjectChapterReference[];
+  total_count: number;
+}
+
 export const CHAPTER_STATUS_LABELS: Record<ChapterStatus, string> = {
   pending: '待生成',
   generated: '已生成',

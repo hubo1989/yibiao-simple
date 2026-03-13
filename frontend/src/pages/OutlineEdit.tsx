@@ -1,12 +1,13 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { OutlineData, OutlineItem } from '../types';
-import { outlineApi, expandApi } from '../services/api';
+import { outlineApi, expandApi, consistencyApi } from '../services/api';
 import { useAuth } from '../contexts/AuthContext';
 import ChapterStatusBadge from '../components/ChapterStatusBadge';
 import type { ChapterStatus } from '../types/chapter';
+import type { RatingChecklistResponse } from '../types/bid';
 import { getCurrentModel, getCurrentProviderConfigId } from '../utils/modelCache';
 import { ProCard } from '@ant-design/pro-components';
-import { Button, Space, Upload, Alert, message, Typography, Tree, Input, Modal, Form } from 'antd';
+import { Button, Space, Upload, Alert, message, Typography, Tree, Input, Modal, Form, Spin, Tag } from 'antd';
 import { 
   PlusOutlined, 
   UploadOutlined, 
@@ -91,6 +92,9 @@ const OutlineEdit: React.FC<OutlineEditProps> = ({
   const [expandFile, setExpandFile] = useState<File | null>(null);
   const [uploadedExpand, setUploadedExpand] = useState(false);
   const [streamingStageLabel, setStreamingStageLabel] = useState('');
+  const [showRatingChecklist, setShowRatingChecklist] = useState(false);
+  const [isLoadingRatingChecklist, setIsLoadingRatingChecklist] = useState(false);
+  const [ratingChecklist, setRatingChecklist] = useState<RatingChecklistResponse | null>(null);
 
   const outlineStats = useMemo(() => {
     const stats = {
@@ -129,6 +133,34 @@ const OutlineEdit: React.FC<OutlineEditProps> = ({
   const hasOutline = Boolean(outlineData?.outline?.length);
   const canContinue = hasOutline && Boolean(onContinue);
   const isBusy = generatingL1 || generatingL2L3;
+
+  const getErrorMessage = (error: any, fallback: string) => {
+    return error?.response?.data?.detail || error?.message || fallback;
+  };
+
+  const fetchRatingChecklist = async () => {
+    if (!projectId) {
+      message.warning('缺少项目 ID，无法生成评分响应清单');
+      return;
+    }
+
+    setIsLoadingRatingChecklist(true);
+    try {
+      const result = await consistencyApi.generateRatingChecklist(projectId);
+      setRatingChecklist(result);
+    } catch (error: any) {
+      message.error(getErrorMessage(error, '评分响应清单生成失败，请重试'));
+    } finally {
+      setIsLoadingRatingChecklist(false);
+    }
+  };
+
+  const handleOpenRatingChecklist = () => {
+    setShowRatingChecklist(true);
+    if (!ratingChecklist && !isLoadingRatingChecklist) {
+      void fetchRatingChecklist();
+    }
+  };
 
   const collectOutlineIds = (items: OutlineItem[]): Set<string> => {
     const ids = new Set<string>();
@@ -744,6 +776,11 @@ const OutlineEdit: React.FC<OutlineEditProps> = ({
             subTitle="这里汇总当前结构、生成进度和下一步入口。"
             headerBordered
             className="h-full"
+            extra={(
+              <Button onClick={handleOpenRatingChecklist} disabled={!projectId}>
+                评分响应清单
+              </Button>
+            )}
           >
             <div className="grid gap-4 md:grid-cols-4">
               <div className="rounded-3xl border border-slate-200 bg-slate-50 px-4 py-4">
@@ -922,6 +959,122 @@ const OutlineEdit: React.FC<OutlineEditProps> = ({
           </ProCard>
         </div>
       </div>
+
+      <Modal
+        title="评分响应清单"
+        open={showRatingChecklist}
+        width={920}
+        onCancel={() => setShowRatingChecklist(false)}
+        footer={[
+          <Button
+            key="refresh"
+            onClick={() => {
+              void fetchRatingChecklist();
+            }}
+            loading={isLoadingRatingChecklist}
+          >
+            重新生成
+          </Button>,
+          <Button key="close" type="primary" onClick={() => setShowRatingChecklist(false)}>
+            关闭
+          </Button>,
+        ]}
+      >
+        {isLoadingRatingChecklist ? (
+          <div style={{ padding: '48px 0', textAlign: 'center' }}>
+            <Spin size="large" />
+          </div>
+        ) : ratingChecklist?.items?.length ? (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 16, maxHeight: '70vh', overflowY: 'auto', paddingRight: 4 }}>
+            <Alert
+              type="info"
+              showIcon
+              message={`共生成 ${ratingChecklist.items.length} 条评分项响应建议，可用于核对目录覆盖范围与后续正文写作重点。`}
+            />
+
+            {ratingChecklist.items.map((item, index) => (
+              <div
+                key={`${item.rating_item}-${index}`}
+                style={{
+                  border: '1px solid #e5e7eb',
+                  borderRadius: 16,
+                  padding: 16,
+                  background: '#fff',
+                }}
+              >
+                <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, marginBottom: 12, alignItems: 'flex-start' }}>
+                  <div>
+                    <Typography.Text strong style={{ fontSize: 15 }}>
+                      {index + 1}. {item.rating_item}
+                    </Typography.Text>
+                    <Typography.Text type="secondary" style={{ display: 'block', marginTop: 4 }}>
+                      建议优先映射到目录主职责明确、能直接承接评分要点的章节中。
+                    </Typography.Text>
+                  </div>
+                  <Tag color="blue">{item.score || '未标注分值'}</Tag>
+                </div>
+
+                {item.response_targets?.length ? (
+                  <div style={{ marginBottom: 12 }}>
+                    <Typography.Text strong>响应目标</Typography.Text>
+                    <div style={{ marginTop: 8, display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                      {item.response_targets.map((target) => (
+                        <Tag key={target} color="geekblue">
+                          {target}
+                        </Tag>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
+
+                {item.evidence_suggestions?.length ? (
+                  <div style={{ marginBottom: 12 }}>
+                    <Typography.Text strong>建议佐证</Typography.Text>
+                    <div style={{ marginTop: 8, display: 'grid', gap: 6 }}>
+                      {item.evidence_suggestions.map((evidence, evidenceIndex) => (
+                        <Typography.Text key={`${evidence}-${evidenceIndex}`} type="secondary">
+                          • {evidence}
+                        </Typography.Text>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
+
+                {item.writing_focus ? (
+                  <div style={{ marginBottom: item.risk_points?.length ? 12 : 0 }}>
+                    <Typography.Text strong>写作重点</Typography.Text>
+                    <Typography.Paragraph style={{ marginTop: 8, marginBottom: 0 }}>
+                      {item.writing_focus}
+                    </Typography.Paragraph>
+                  </div>
+                ) : null}
+
+                {item.risk_points?.length ? (
+                  <div>
+                    <Typography.Text strong style={{ color: '#cf1322' }}>
+                      失分风险
+                    </Typography.Text>
+                    <div style={{ marginTop: 8, display: 'grid', gap: 6 }}>
+                      {item.risk_points.map((risk, riskIndex) => (
+                        <Typography.Text key={`${risk}-${riskIndex}`} style={{ color: '#cf1322' }}>
+                          • {risk}
+                        </Typography.Text>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
+              </div>
+            ))}
+          </div>
+        ) : (
+          <Alert
+            type="warning"
+            showIcon
+            message="暂未生成评分响应清单"
+            description="请确认项目已经完成标书解析，并且技术评分要求已成功保存。"
+          />
+        )}
+      </Modal>
 
       <Modal
         title="编辑目录项"

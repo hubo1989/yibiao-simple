@@ -45,9 +45,9 @@ class ChapterResponse(ChapterBase):
     project_id: uuid.UUID
     parent_id: uuid.UUID | None
     content: str | None
-    rating_item: str | None
-    chapter_role: str | None
-    avoid_overlap: str | None
+    rating_item: str | None = None
+    chapter_role: str | None = None
+    avoid_overlap: str | None = None
     status: ChapterStatus
     order_index: int
     locked_by: uuid.UUID | None

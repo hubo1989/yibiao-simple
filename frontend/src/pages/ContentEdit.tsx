@@ -1,7 +1,15 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import ReactMarkdown from 'react-markdown';
 import { OutlineData, OutlineItem } from '../types';
-import { contentApi, documentApi, proofreadApi, chapterApi, ChapterContentRequest } from '../services/api';
+import {
+  contentApi,
+  documentApi,
+  proofreadApi,
+  chapterApi,
+  outlineApi,
+  consistencyApi,
+  ChapterContentRequest,
+} from '../services/api';
 import { useAuth } from '../contexts/AuthContext';
 import { saveAs } from 'file-saver';
 import { draftStorage } from '../utils/draftStorage';
@@ -10,6 +18,7 @@ import ChapterStatusBadge from '../components/ChapterStatusBadge';
 import ProofreadPanel from '../components/ProofreadPanel';
 import type { ChapterStatus } from '../types/chapter';
 import type { ProofreadResult, ProofreadIssue } from '../types/proofread';
+import type { ChapterReverseEnhanceResponse, ClauseResponseResult } from '../types/bid';
 import { ProCard } from '@ant-design/pro-components';
 import { 
   Button, 
@@ -21,7 +30,10 @@ import {
   Tooltip,
   FloatButton,
   message,
-  Modal
+  Modal,
+  Alert,
+  Input,
+  Spin,
 } from 'antd';
 import { 
   FileTextOutlined,
@@ -34,7 +46,9 @@ import {
   SyncOutlined,
   RightOutlined,
   DownOutlined,
-  LoadingOutlined
+  LoadingOutlined,
+  BulbOutlined,
+  ProfileOutlined,
 } from '@ant-design/icons';
 
 interface ContentEditProps {
@@ -79,10 +93,77 @@ const ContentEdit: React.FC<ContentEditProps> = ({
 
   const [showProofreadPanel, setShowProofreadPanel] = useState(false);
   const [proofreadChapterId, setProofreadChapterId] = useState<string | null>(null);
+  const [proofreadChapterNumber, setProofreadChapterNumber] = useState<string | null>(null);
   const [proofreadChapterTitle, setProofreadChapterTitle] = useState('');
   const [proofreadResult, setProofreadResult] = useState<ProofreadResult | null>(null);
   const [isProofreading, setIsProofreading] = useState(false);
   const [proofreadStreamingText, setProofreadStreamingText] = useState('');
+  const [chapterIdMap, setChapterIdMap] = useState<Record<string, string>>({});
+  const [showReverseEnhanceModal, setShowReverseEnhanceModal] = useState(false);
+  const [reverseEnhanceTarget, setReverseEnhanceTarget] = useState<{ chapterNumber: string; title: string } | null>(null);
+  const [reverseEnhanceResult, setReverseEnhanceResult] = useState<ChapterReverseEnhanceResponse | null>(null);
+  const [isReverseEnhancing, setIsReverseEnhancing] = useState(false);
+  const [showClauseResponseModal, setShowClauseResponseModal] = useState(false);
+  const [clauseText, setClauseText] = useState('');
+  const [clauseKnowledgeContext, setClauseKnowledgeContext] = useState('');
+  const [clauseResponseResult, setClauseResponseResult] = useState<ClauseResponseResult | null>(null);
+  const [isGeneratingClauseResponse, setIsGeneratingClauseResponse] = useState(false);
+
+  const getErrorMessage = (error: any, fallback: string) => {
+    return error?.response?.data?.detail || error?.message || fallback;
+  };
+
+  const loadProjectChapterMap = useCallback(async (): Promise<Record<string, string>> => {
+    if (!projectId) {
+      setChapterIdMap({});
+      return {};
+    }
+
+    const response = await outlineApi.getProjectChapters(projectId);
+    const nextMap = response.chapters.reduce<Record<string, string>>((acc, chapter) => {
+      acc[chapter.chapter_number] = chapter.id;
+      return acc;
+    }, {});
+    setChapterIdMap(nextMap);
+    return nextMap;
+  }, [projectId]);
+
+  const getProjectChapterId = useCallback(
+    async (chapterNumber: string): Promise<string | null> => {
+      if (chapterIdMap[chapterNumber]) {
+        return chapterIdMap[chapterNumber];
+      }
+
+      const refreshedMap = await loadProjectChapterMap();
+      return refreshedMap[chapterNumber] || null;
+    },
+    [chapterIdMap, loadProjectChapterMap]
+  );
+
+  const ensureChapterContentPersisted = useCallback(
+    async (chapterNumber: string, chapterTitle: string, currentContent: string): Promise<string> => {
+      if (!currentContent.trim()) {
+        throw new Error('章节内容为空，无法执行该操作');
+      }
+
+      const projectChapterId = await getProjectChapterId(chapterNumber);
+      if (!projectChapterId) {
+        throw new Error(`未找到章节 ${chapterNumber} 的数据库记录`);
+      }
+
+      const latestChapter = await chapterApi.get(projectChapterId);
+      if ((latestChapter.content || '').trim() !== currentContent.trim()) {
+        await chapterApi.updateContent(
+          projectChapterId,
+          currentContent,
+          `同步正文后执行：${chapterNumber} ${chapterTitle}`
+        );
+      }
+
+      return projectChapterId;
+    },
+    [getProjectChapterId]
+  );
 
   const highlightConsistencyFixes = (content: string): React.ReactNode => {
     if (!content) return null;
@@ -196,6 +277,17 @@ const ContentEdit: React.FC<ContentEditProps> = ({
   }, [outlineData, collectLeafItems]);
 
   useEffect(() => {
+    if (!projectId) {
+      setChapterIdMap({});
+      return;
+    }
+
+    loadProjectChapterMap().catch((error) => {
+      console.error('加载项目章节映射失败:', error);
+    });
+  }, [projectId, outlineData, loadProjectChapterMap]);
+
+  useEffect(() => {
     const scrollContainer = document.getElementById('app-main-scroll');
 
     const handleScroll = () => {
@@ -232,8 +324,13 @@ const ContentEdit: React.FC<ContentEditProps> = ({
     return 'pending';
   };
 
-  const handleProofreadChapter = async (chapterId: string, chapterTitle: string) => {
-    setProofreadChapterId(chapterId);
+  const handleProofreadChapter = async (
+    chapterNumber: string,
+    chapterTitle: string,
+    currentContent: string
+  ) => {
+    setProofreadChapterId(null);
+    setProofreadChapterNumber(chapterNumber);
     setProofreadChapterTitle(chapterTitle);
     setProofreadResult(null);
     setProofreadStreamingText('');
@@ -241,6 +338,9 @@ const ContentEdit: React.FC<ContentEditProps> = ({
     setIsProofreading(true);
 
     try {
+      const chapterId = await ensureChapterContentPersisted(chapterNumber, chapterTitle, currentContent);
+      setProofreadChapterId(chapterId);
+
       const response = await proofreadApi.proofreadChapter(chapterId);
       if (!response.ok) {
         throw new Error('校对请求失败');
@@ -281,14 +381,15 @@ const ContentEdit: React.FC<ContentEditProps> = ({
       }
     } catch (error) {
       console.error('校对失败:', error);
-      message.error('校对失败，请重试');
+      message.error(getErrorMessage(error, '校对失败，请重试'));
+      setShowProofreadPanel(false);
     } finally {
       setIsProofreading(false);
     }
   };
 
   const handleApplySuggestion = async (issue: ProofreadIssue) => {
-    if (!proofreadChapterId) return;
+    if (!proofreadChapterId || !proofreadChapterNumber) return;
 
     try {
       const chapterData = await chapterApi.get(proofreadChapterId);
@@ -304,7 +405,7 @@ const ContentEdit: React.FC<ContentEditProps> = ({
 
       setLeafItems(prevItems =>
         prevItems.map(item =>
-          item.id === proofreadChapterId
+          item.id === proofreadChapterNumber
             ? { ...item, content: content + suggestionNote }
             : item
         )
@@ -327,8 +428,90 @@ const ContentEdit: React.FC<ContentEditProps> = ({
   const handleCloseProofreadPanel = () => {
     setShowProofreadPanel(false);
     setProofreadChapterId(null);
+    setProofreadChapterNumber(null);
     setProofreadResult(null);
     setProofreadStreamingText('');
+  };
+
+  const buildReverseEnhanceSummary = (result: ChapterReverseEnhanceResponse) => {
+    const actionLines = result.enhancement_actions.map((action, index) => {
+      const evidenceSuffix = action.evidence_needed ? `；建议补充：${action.evidence_needed}` : '';
+      return `${index + 1}. [${action.priority}] ${action.problem} -> ${action.action}${evidenceSuffix}`;
+    });
+
+    return [
+      `覆盖评估：${result.coverage_assessment}`,
+      result.matched_points.length ? `已覆盖评分点：${result.matched_points.join('；')}` : '',
+      result.missing_points.length ? `待补强评分点：${result.missing_points.join('；')}` : '',
+      actionLines.length ? `补强动作：\n${actionLines.join('\n')}` : '',
+      `总结：${result.summary}`,
+    ]
+      .filter(Boolean)
+      .join('\n\n');
+  };
+
+  const copyText = async (text: string, successMessage: string) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      message.success(successMessage);
+    } catch (error) {
+      console.error('复制失败:', error);
+      message.error('复制失败，请手动复制');
+    }
+  };
+
+  const handleReverseEnhance = async (item: OutlineItem, currentContent: string) => {
+    if (!projectId) {
+      message.warning('缺少项目 ID，暂时无法执行反向补强');
+      return;
+    }
+
+    if (!currentContent.trim()) {
+      message.warning('当前章节还没有正文内容，无法执行反向补强');
+      return;
+    }
+
+    setReverseEnhanceTarget({ chapterNumber: item.id, title: item.title });
+    setReverseEnhanceResult(null);
+    setShowReverseEnhanceModal(true);
+    setIsReverseEnhancing(true);
+
+    try {
+      const chapterId = await ensureChapterContentPersisted(item.id, item.title, currentContent);
+      const result = await consistencyApi.reverseEnhanceChapter(projectId, chapterId);
+      setReverseEnhanceResult(result);
+    } catch (error) {
+      console.error('反向补强失败:', error);
+      message.error(getErrorMessage(error, '反向补强失败，请重试'));
+    } finally {
+      setIsReverseEnhancing(false);
+    }
+  };
+
+  const handleGenerateClauseResponse = async () => {
+    if (!projectId) {
+      message.warning('缺少项目 ID，暂时无法生成逐条响应');
+      return;
+    }
+
+    if (!clauseText.trim()) {
+      message.warning('请先输入技术参数或条款原文');
+      return;
+    }
+
+    setIsGeneratingClauseResponse(true);
+    try {
+      const result = await consistencyApi.generateClauseResponse(projectId, {
+        clause_text: clauseText.trim(),
+        knowledge_context: clauseKnowledgeContext.trim() || undefined,
+      });
+      setClauseResponseResult(result);
+    } catch (error) {
+      console.error('条款逐条响应生成失败:', error);
+      message.error(getErrorMessage(error, '条款逐条响应生成失败，请重试'));
+    } finally {
+      setIsGeneratingClauseResponse(false);
+    }
   };
 
   const renderOutline = (items: OutlineItem[], level: number = 1): React.ReactElement[] => {
@@ -397,11 +580,30 @@ const ContentEdit: React.FC<ContentEditProps> = ({
                   type="text"
                   size="small"
                   icon={<SafetyCertificateOutlined />}
-                  onClick={() => handleProofreadChapter(item.id, item.title)}
+                  onClick={() => {
+                    void handleProofreadChapter(item.id, item.title, currentContent);
+                  }}
                   disabled={isProofreading}
                   style={{ color: '#722ed1' }}
                 >
                   校对
+                </Button>
+              </Tooltip>
+            )}
+
+            {isLeaf && currentContent && !generationError && projectId && (
+              <Tooltip title="根据评分点分析本章覆盖情况并给出补强建议">
+                <Button
+                  type="text"
+                  size="small"
+                  icon={<BulbOutlined />}
+                  onClick={() => {
+                    void handleReverseEnhance(item, currentContent);
+                  }}
+                  disabled={isReverseEnhancing}
+                  style={{ color: '#d97706' }}
+                >
+                  反向补强
                 </Button>
               </Tooltip>
             )}
@@ -412,7 +614,16 @@ const ContentEdit: React.FC<ContentEditProps> = ({
                   type="text"
                   size="small"
                   icon={<MessageOutlined />}
-                  onClick={() => onToggleComments(item.id)}
+                  onClick={() => {
+                    void (async () => {
+                      const chapterId = await getProjectChapterId(item.id);
+                      if (!chapterId) {
+                        message.warning(`未找到章节 ${item.id} 的批注记录`);
+                        return;
+                      }
+                      onToggleComments(chapterId);
+                    })();
+                  }}
                   style={{ color: '#8c8c8c' }}
                 >
                   批注
@@ -776,6 +987,15 @@ const ContentEdit: React.FC<ContentEditProps> = ({
           headerBordered
           extra={
             <Space>
+              {projectId && (
+                <Button
+                  icon={<ProfileOutlined />}
+                  onClick={() => setShowClauseResponseModal(true)}
+                  title="生成技术参数/条款逐条响应"
+                >
+                  条款逐条响应
+                </Button>
+              )}
               {onToggleConsistency && (
                 <Button
                   icon={<SafetyCertificateOutlined />}
@@ -892,6 +1112,195 @@ const ContentEdit: React.FC<ContentEditProps> = ({
           visibilityHeight={300}
         />
       )}
+
+      <Modal
+        title={reverseEnhanceTarget ? `反向补强：${reverseEnhanceTarget.chapterNumber} ${reverseEnhanceTarget.title}` : '反向补强'}
+        open={showReverseEnhanceModal}
+        width={820}
+        onCancel={() => setShowReverseEnhanceModal(false)}
+        footer={[
+          reverseEnhanceResult ? (
+            <Button
+              key="copy"
+              onClick={() => {
+                void copyText(buildReverseEnhanceSummary(reverseEnhanceResult), '补强建议已复制');
+              }}
+            >
+              复制建议
+            </Button>
+          ) : null,
+          <Button key="close" type="primary" onClick={() => setShowReverseEnhanceModal(false)}>
+            关闭
+          </Button>,
+        ]}
+      >
+        {isReverseEnhancing ? (
+          <div style={{ padding: '48px 0', textAlign: 'center' }}>
+            <Spin size="large" />
+          </div>
+        ) : reverseEnhanceResult ? (
+          <Space direction="vertical" size="large" style={{ width: '100%' }}>
+            <Alert
+              type="info"
+              showIcon
+              message={reverseEnhanceResult.coverage_assessment}
+              description={reverseEnhanceResult.summary}
+            />
+
+            <div>
+              <Typography.Text strong>已覆盖评分点</Typography.Text>
+              <div style={{ marginTop: 8, display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                {reverseEnhanceResult.matched_points.length ? (
+                  reverseEnhanceResult.matched_points.map((point) => (
+                    <Tag key={point} color="success">
+                      {point}
+                    </Tag>
+                  ))
+                ) : (
+                  <Typography.Text type="secondary">暂无明确已覆盖评分点</Typography.Text>
+                )}
+              </div>
+            </div>
+
+            <div>
+              <Typography.Text strong>待补强评分点</Typography.Text>
+              <div style={{ marginTop: 8, display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                {reverseEnhanceResult.missing_points.length ? (
+                  reverseEnhanceResult.missing_points.map((point) => (
+                    <Tag key={point} color="error">
+                      {point}
+                    </Tag>
+                  ))
+                ) : (
+                  <Typography.Text type="secondary">当前没有识别到明显缺失项</Typography.Text>
+                )}
+              </div>
+            </div>
+
+            <div style={{ display: 'grid', gap: 12 }}>
+              <Typography.Text strong>补强动作</Typography.Text>
+              {reverseEnhanceResult.enhancement_actions.length ? (
+                reverseEnhanceResult.enhancement_actions.map((action, index) => (
+                  <Card key={`${action.problem}-${index}`} size="small">
+                    <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'flex-start' }}>
+                      <Typography.Text strong>
+                        {index + 1}. {action.problem}
+                      </Typography.Text>
+                      <Tag
+                        color={
+                          action.priority === 'high'
+                            ? 'error'
+                            : action.priority === 'medium'
+                              ? 'processing'
+                              : 'default'
+                        }
+                      >
+                        {action.priority === 'high'
+                          ? '高优先级'
+                          : action.priority === 'medium'
+                            ? '中优先级'
+                            : '低优先级'}
+                      </Tag>
+                    </div>
+                    <Typography.Paragraph style={{ marginTop: 8, marginBottom: action.evidence_needed ? 8 : 0 }}>
+                      {action.action}
+                    </Typography.Paragraph>
+                    {action.evidence_needed ? (
+                      <Typography.Text type="secondary">
+                        建议补充材料：{action.evidence_needed}
+                      </Typography.Text>
+                    ) : null}
+                  </Card>
+                ))
+              ) : (
+                <Typography.Text type="secondary">暂无可执行补强动作</Typography.Text>
+              )}
+            </div>
+          </Space>
+        ) : (
+          <Alert
+            type="warning"
+            showIcon
+            message="暂未获得补强结果"
+            description="请确认章节内容已生成且项目评分要求已保存，然后重试。"
+          />
+        )}
+      </Modal>
+
+      <Modal
+        title="条款逐条响应"
+        open={showClauseResponseModal}
+        width={860}
+        onCancel={() => setShowClauseResponseModal(false)}
+        footer={[
+          clauseResponseResult ? (
+            <Button
+              key="copy"
+              onClick={() => {
+                void copyText(clauseResponseResult.content, '逐条响应内容已复制');
+              }}
+            >
+              复制结果
+            </Button>
+          ) : null,
+          <Button key="close" onClick={() => setShowClauseResponseModal(false)}>
+            关闭
+          </Button>,
+          <Button
+            key="generate"
+            type="primary"
+            loading={isGeneratingClauseResponse}
+            onClick={() => {
+              void handleGenerateClauseResponse();
+            }}
+          >
+            {clauseResponseResult ? '重新生成' : '生成响应'}
+          </Button>,
+        ]}
+      >
+        <Space direction="vertical" size="large" style={{ width: '100%' }}>
+          <div>
+            <Typography.Text strong>技术参数或条款原文</Typography.Text>
+            <Input.TextArea
+              rows={6}
+              value={clauseText}
+              onChange={(event) => setClauseText(event.target.value)}
+              placeholder="请输入需要逐条响应的技术参数、技术条款或服务要求原文"
+              style={{ marginTop: 8 }}
+            />
+          </div>
+
+          <div>
+            <Typography.Text strong>补充知识上下文（可选）</Typography.Text>
+            <Input.TextArea
+              rows={4}
+              value={clauseKnowledgeContext}
+              onChange={(event) => setClauseKnowledgeContext(event.target.value)}
+              placeholder="可补充企业能力、产品参数、实施边界等信息，帮助生成更贴合项目的响应内容"
+              style={{ marginTop: 8 }}
+            />
+          </div>
+
+          {isGeneratingClauseResponse ? (
+            <div style={{ padding: '32px 0', textAlign: 'center' }}>
+              <Spin size="large" />
+            </div>
+          ) : clauseResponseResult ? (
+            <Card size="small" title="生成结果">
+              <div className="markdown-body">
+                <ReactMarkdown>{clauseResponseResult.content}</ReactMarkdown>
+              </div>
+            </Card>
+          ) : (
+            <Alert
+              type="info"
+              showIcon
+              message="输入条款后点击“生成响应”"
+              description="系统会输出可直接用于技术标正文或条款响应表的逐条响应内容。"
+            />
+          )}
+        </Space>
+      </Modal>
 
       {/* 校对结果面板 */}
       <ProofreadPanel
