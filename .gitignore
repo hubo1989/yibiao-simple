@@ -4,6 +4,28 @@
 # ralph-tui 配置目录
 .ralph-tui/
 
+# Agent / assistant local workspaces
+.agent/
+.agents/
+.claude/
+.factory/
+.iflow/
+.omc/
+.omd/
+.openclaw/
+.qwen/
+.trae/
+
+# Local assistant workspace files
+AGENTS.md
+HEARTBEAT.md
+IDENTITY.md
+SOUL.md
+TOOLS.md
+USER.md
+skills-lock.json
+skills/
+
 # 用户配置文件
 user_config.json
 config.json
@@ -12,6 +34,13 @@ config.json
 uploads/
 *.docx
 *.pdf
+
+# Local data / generated artifacts
+backend/ai_write_helper.db
+backend/logs/
+backend/results/
+backend/.omc/
+frontend/.omc/
 
 # 构建和打包相关
 dist/

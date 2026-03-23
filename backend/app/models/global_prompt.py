@@ -33,7 +33,7 @@ class GlobalPrompt(Base):
         comment="场景中文名称，如 文档分析-项目概述"
     )
     category: Mapped[PromptCategory] = mapped_column(
-        Enum(PromptCategory, name="prompt_category", native_enum=False, length=20),
+        Enum(PromptCategory, name="prompt_category", native_enum=False, length=20, values_callable=lambda obj: [e.value for e in obj]),
         nullable=False,
         comment="提示词类别：analysis/generation/check"
     )

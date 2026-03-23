@@ -1,4 +1,5 @@
 """角色权限测试"""
+import asyncio
 import uuid
 from typing import Callable
 
@@ -8,6 +9,11 @@ from fastapi import HTTPException
 from app.auth.dependencies import require_role, require_admin, require_editor, require_reviewer
 from app.auth.security import get_password_hash
 from app.models.user import User, UserRole
+
+
+def run_async(awaitable):
+    """在同步测试里执行异步依赖"""
+    return asyncio.run(awaitable)
 
 
 def create_test_user(
@@ -34,9 +40,7 @@ class TestRequireRole:
         admin_user = create_test_user("admin", UserRole.ADMIN)
         checker = require_role(UserRole.EDITOR, UserRole.REVIEWER)
 
-        # 同步调用异步函数
-        import asyncio
-        result = asyncio.get_event_loop().run_until_complete(checker(admin_user))
+        result = run_async(checker(admin_user))
         assert result == admin_user
 
     def test_require_role_editor_with_editor_permission(self) -> None:
@@ -44,8 +48,7 @@ class TestRequireRole:
         editor_user = create_test_user("editor", UserRole.EDITOR)
         checker = require_role(UserRole.EDITOR)
 
-        import asyncio
-        result = asyncio.get_event_loop().run_until_complete(checker(editor_user))
+        result = run_async(checker(editor_user))
         assert result == editor_user
 
     def test_require_role_editor_with_admin_permission_fails(self) -> None:
@@ -53,9 +56,8 @@ class TestRequireRole:
         editor_user = create_test_user("editor", UserRole.EDITOR)
         checker = require_role(UserRole.ADMIN)
 
-        import asyncio
         with pytest.raises(HTTPException) as exc_info:
-            asyncio.get_event_loop().run_until_complete(checker(editor_user))
+            run_async(checker(editor_user))
 
         assert exc_info.value.status_code == 403
         assert "权限不足" in exc_info.value.detail
@@ -65,9 +67,8 @@ class TestRequireRole:
         reviewer_user = create_test_user("reviewer", UserRole.REVIEWER)
         checker = require_role(UserRole.EDITOR)
 
-        import asyncio
         with pytest.raises(HTTPException) as exc_info:
-            asyncio.get_event_loop().run_until_complete(checker(reviewer_user))
+            run_async(checker(reviewer_user))
 
         assert exc_info.value.status_code == 403
         assert "权限不足" in exc_info.value.detail
@@ -77,8 +78,7 @@ class TestRequireRole:
         reviewer_user = create_test_user("reviewer", UserRole.REVIEWER)
         checker = require_role(UserRole.REVIEWER)
 
-        import asyncio
-        result = asyncio.get_event_loop().run_until_complete(checker(reviewer_user))
+        result = run_async(checker(reviewer_user))
         assert result == reviewer_user
 
     def test_require_role_multiple_roles_in_error_message(self) -> None:
@@ -86,9 +86,8 @@ class TestRequireRole:
         reviewer_user = create_test_user("reviewer", UserRole.REVIEWER)
         checker = require_role(UserRole.ADMIN, UserRole.EDITOR)
 
-        import asyncio
         with pytest.raises(HTTPException) as exc_info:
-            asyncio.get_event_loop().run_until_complete(checker(reviewer_user))
+            run_async(checker(reviewer_user))
 
         assert exc_info.value.status_code == 403
         assert "admin" in exc_info.value.detail
@@ -102,17 +101,15 @@ class TestPredefinedRoleDependencies:
         """管理员可以通过 require_admin"""
         admin_user = create_test_user("admin", UserRole.ADMIN)
 
-        import asyncio
-        result = asyncio.get_event_loop().run_until_complete(require_admin(admin_user))
+        result = run_async(require_admin(admin_user))
         assert result == admin_user
 
     def test_require_admin_with_editor_fails(self) -> None:
         """编辑者不能通过 require_admin"""
         editor_user = create_test_user("editor", UserRole.EDITOR)
 
-        import asyncio
         with pytest.raises(HTTPException) as exc_info:
-            asyncio.get_event_loop().run_until_complete(require_admin(editor_user))
+            run_async(require_admin(editor_user))
 
         assert exc_info.value.status_code == 403
 
@@ -120,9 +117,8 @@ class TestPredefinedRoleDependencies:
         """审阅者不能通过 require_admin"""
         reviewer_user = create_test_user("reviewer", UserRole.REVIEWER)
 
-        import asyncio
         with pytest.raises(HTTPException) as exc_info:
-            asyncio.get_event_loop().run_until_complete(require_admin(reviewer_user))
+            run_async(require_admin(reviewer_user))
 
         assert exc_info.value.status_code == 403
 
@@ -130,25 +126,22 @@ class TestPredefinedRoleDependencies:
         """管理员可以通过 require_editor"""
         admin_user = create_test_user("admin", UserRole.ADMIN)
 
-        import asyncio
-        result = asyncio.get_event_loop().run_until_complete(require_editor(admin_user))
+        result = run_async(require_editor(admin_user))
         assert result == admin_user
 
     def test_require_editor_with_editor(self) -> None:
         """编辑者可以通过 require_editor"""
         editor_user = create_test_user("editor", UserRole.EDITOR)
 
-        import asyncio
-        result = asyncio.get_event_loop().run_until_complete(require_editor(editor_user))
+        result = run_async(require_editor(editor_user))
         assert result == editor_user
 
     def test_require_editor_with_reviewer_fails(self) -> None:
         """审阅者不能通过 require_editor"""
         reviewer_user = create_test_user("reviewer", UserRole.REVIEWER)
 
-        import asyncio
         with pytest.raises(HTTPException) as exc_info:
-            asyncio.get_event_loop().run_until_complete(require_editor(reviewer_user))
+            run_async(require_editor(reviewer_user))
 
         assert exc_info.value.status_code == 403
 
@@ -156,24 +149,21 @@ class TestPredefinedRoleDependencies:
         """管理员可以通过 require_reviewer"""
         admin_user = create_test_user("admin", UserRole.ADMIN)
 
-        import asyncio
-        result = asyncio.get_event_loop().run_until_complete(require_reviewer(admin_user))
+        result = run_async(require_reviewer(admin_user))
         assert result == admin_user
 
     def test_require_reviewer_with_editor(self) -> None:
         """编辑者可以通过 require_reviewer"""
         editor_user = create_test_user("editor", UserRole.EDITOR)
 
-        import asyncio
-        result = asyncio.get_event_loop().run_until_complete(require_reviewer(editor_user))
+        result = run_async(require_reviewer(editor_user))
         assert result == editor_user
 
     def test_require_reviewer_with_reviewer(self) -> None:
         """审阅者可以通过 require_reviewer"""
         reviewer_user = create_test_user("reviewer", UserRole.REVIEWER)
 
-        import asyncio
-        result = asyncio.get_event_loop().run_until_complete(require_reviewer(reviewer_user))
+        result = run_async(require_reviewer(reviewer_user))
         assert result == reviewer_user
 
 
@@ -185,9 +175,8 @@ class TestErrorMessageInChinese:
         reviewer_user = create_test_user("reviewer", UserRole.REVIEWER)
         checker = require_role(UserRole.ADMIN)
 
-        import asyncio
         with pytest.raises(HTTPException) as exc_info:
-            asyncio.get_event_loop().run_until_complete(checker(reviewer_user))
+            run_async(checker(reviewer_user))
 
         assert exc_info.value.status_code == 403
         # 检查包含中文
@@ -199,9 +188,8 @@ class TestErrorMessageInChinese:
         reviewer_user = create_test_user("reviewer", UserRole.REVIEWER)
         checker = require_role(UserRole.EDITOR)
 
-        import asyncio
         with pytest.raises(HTTPException) as exc_info:
-            asyncio.get_event_loop().run_until_complete(checker(reviewer_user))
+            run_async(checker(reviewer_user))
 
         assert exc_info.value.status_code == 403
 
@@ -213,58 +201,49 @@ class TestRoleHierarchy:
         """管理员拥有所有权限"""
         admin_user = create_test_user("admin", UserRole.ADMIN)
 
-        import asyncio
-        loop = asyncio.get_event_loop()
-
         # 测试管理员可以通过所有角色检查
         for role in [UserRole.ADMIN, UserRole.EDITOR, UserRole.REVIEWER]:
             checker = require_role(role)
-            result = loop.run_until_complete(checker(admin_user))
+            result = run_async(checker(admin_user))
             assert result == admin_user
 
     def test_editor_has_editor_permission_only(self) -> None:
         """编辑者只有编辑者权限，没有管理员或审阅者权限"""
         editor_user = create_test_user("editor", UserRole.EDITOR)
 
-        import asyncio
-        loop = asyncio.get_event_loop()
-
         # 编辑者可以通过编辑者检查
         checker = require_role(UserRole.EDITOR)
-        result = loop.run_until_complete(checker(editor_user))
+        result = run_async(checker(editor_user))
         assert result == editor_user
 
         # 编辑者不能通过审阅者检查（角色是精确匹配的）
         checker = require_role(UserRole.REVIEWER)
         with pytest.raises(HTTPException):
-            loop.run_until_complete(checker(editor_user))
+            run_async(checker(editor_user))
 
         # 编辑者不能通过管理员检查
         checker = require_role(UserRole.ADMIN)
         with pytest.raises(HTTPException):
-            loop.run_until_complete(checker(editor_user))
+            run_async(checker(editor_user))
 
     def test_reviewer_only_has_reviewer_permission(self) -> None:
         """审阅者只有审阅者权限"""
         reviewer_user = create_test_user("reviewer", UserRole.REVIEWER)
 
-        import asyncio
-        loop = asyncio.get_event_loop()
-
         # 审阅者可以通过审阅者检查
         checker = require_role(UserRole.REVIEWER)
-        result = loop.run_until_complete(checker(reviewer_user))
+        result = run_async(checker(reviewer_user))
         assert result == reviewer_user
 
         # 审阅者不能通过编辑者检查
         checker = require_role(UserRole.EDITOR)
         with pytest.raises(HTTPException):
-            loop.run_until_complete(checker(reviewer_user))
+            run_async(checker(reviewer_user))
 
         # 审阅者不能通过管理员检查
         checker = require_role(UserRole.ADMIN)
         with pytest.raises(HTTPException):
-            loop.run_until_complete(checker(reviewer_user))
+            run_async(checker(reviewer_user))
 
 
 class TestRequireRoleFactory:
@@ -280,8 +259,7 @@ class TestRequireRoleFactory:
         admin_user = create_test_user("admin", UserRole.ADMIN)
         checker = require_role(UserRole.ADMIN)
 
-        import asyncio
-        result = asyncio.get_event_loop().run_until_complete(checker(admin_user))
+        result = run_async(checker(admin_user))
         assert result == admin_user
 
     def test_require_role_multiple_roles(self) -> None:
@@ -289,8 +267,7 @@ class TestRequireRoleFactory:
         editor_user = create_test_user("editor", UserRole.EDITOR)
         checker = require_role(UserRole.ADMIN, UserRole.EDITOR)
 
-        import asyncio
-        result = asyncio.get_event_loop().run_until_complete(checker(editor_user))
+        result = run_async(checker(editor_user))
         assert result == editor_user
 
     def test_require_role_empty_roles_still_allows_admin(self) -> None:
@@ -298,6 +275,5 @@ class TestRequireRoleFactory:
         admin_user = create_test_user("admin", UserRole.ADMIN)
         checker = require_role()
 
-        import asyncio
-        result = asyncio.get_event_loop().run_until_complete(checker(admin_user))
+        result = run_async(checker(admin_user))
         assert result == admin_user

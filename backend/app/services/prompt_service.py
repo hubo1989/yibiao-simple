@@ -3,6 +3,7 @@
 实现三层优先级回退：项目级 > 管理员全局 > 系统内置
 """
 
+import json
 import re
 from typing import Any, Optional
 import uuid
@@ -36,22 +37,63 @@ class PromptService:
         Returns:
             (system_prompt, user_template)
         """
-        # 使用 --- 作为分隔符
-        parts = prompt.split("\n---\n", 1)
+        normalized_prompt = prompt.replace("\r\n", "\n").replace("\r", "\n").strip()
+        parts = re.split(r"\n\s*---\s*\n", normalized_prompt, maxsplit=1)
 
         if len(parts) == 2:
             system_part = parts[0].strip()
             user_part = parts[1].strip()
 
             # 移除 "# 系统指令" 和 "# 用户输入" 标题
-            system_prompt = re.sub(r'^#\s*系统指令\s*\n', '', system_part, flags=re.IGNORECASE)
-            user_template = re.sub(r'^#\s*用户输入\s*\n', '', user_part, flags=re.IGNORECASE)
+            system_prompt = re.sub(r'^#\s*系统指令\s*\n+', '', system_part, flags=re.IGNORECASE)
+            user_template = re.sub(r'^#\s*用户输入\s*\n+', '', user_part, flags=re.IGNORECASE)
 
             return (system_prompt.strip(), user_template.strip())
         else:
             # 如果没有分隔符，整个作为 system_prompt，user_template 为空
-            system_prompt = re.sub(r'^#\s*系统指令\s*\n', '', prompt.strip(), flags=re.IGNORECASE)
+            system_prompt = re.sub(r'^#\s*系统指令\s*\n+', '', normalized_prompt, flags=re.IGNORECASE)
             return (system_prompt.strip(), "")
+
+    @staticmethod
+    def extract_template_variables(template: str) -> set[str]:
+        """提取模板中使用到的顶层变量名"""
+        variables = set(
+            re.findall(r"\{\{#(?:if|each)\s+([a-zA-Z_]\w*)\s*\}\}", template)
+        )
+        variables.update(
+            re.findall(r"\{\{\s*([a-zA-Z_]\w*)\s*\}\}", template)
+        )
+        variables.discard("this")
+        return variables
+
+    @classmethod
+    def validate_prompt(cls, scene_key: str, prompt: str) -> None:
+        """校验提示词结构和变量合法性"""
+        builtin = get_builtin_prompt(scene_key)
+        if not builtin:
+            raise ValueError(f"无效的场景标识: {scene_key}")
+
+        system_prompt, user_template = cls.split_prompt(prompt)
+        if not system_prompt or not user_template:
+            raise ValueError("提示词必须同时包含“系统指令”和“用户输入”两部分，并使用 --- 分隔")
+
+        allowed_vars = set((builtin.get("available_vars") or {}).keys())
+        used_vars = cls.extract_template_variables(prompt)
+        unknown_vars = sorted(used_vars - allowed_vars)
+
+        if unknown_vars:
+            raise ValueError(f"提示词包含未定义变量: {', '.join(unknown_vars)}")
+
+    @staticmethod
+    def _stringify_template_value(value: Any) -> str:
+        """将模板变量稳定地转换为字符串"""
+        if value is None:
+            return ""
+        if isinstance(value, str):
+            return value
+        if isinstance(value, (list, dict)):
+            return json.dumps(value, ensure_ascii=False, indent=2)
+        return str(value)
 
     async def get_prompt(
         self,
@@ -122,7 +164,8 @@ class PromptService:
 
         return None
 
-    def render_prompt(self, template: str, variables: dict[str, Any]) -> str:
+    @staticmethod
+    def render_prompt(template: str, variables: dict[str, Any]) -> str:
         """
         渲染提示词模板，替换变量
 
@@ -141,7 +184,7 @@ class PromptService:
         result = template
 
         # 处理条件块 {{#if var}}...{{/if}}
-        if_pattern = r'\{\{#if\s+(\w+)\}\}(.*?)\{\{/if\}\}'
+        if_pattern = r'\{\{#if\s+([a-zA-Z_]\w*)\s*\}\}(.*?)\{\{/if\}\}'
         while True:
             match = re.search(if_pattern, result, re.DOTALL)
             if not match:
@@ -156,7 +199,7 @@ class PromptService:
                 result = result[:match.start()] + result[match.end():]
 
         # 处理列表迭代 {{#each var}}...{{/each}}
-        each_pattern = r'\{\{#each\s+(\w+)\}\}(.*?)\{\{/each\}\}'
+        each_pattern = r'\{\{#each\s+([a-zA-Z_]\w*)\s*\}\}(.*?)\{\{/each\}\}'
         while True:
             match = re.search(each_pattern, result, re.DOTALL)
             if not match:
@@ -170,11 +213,24 @@ class PromptService:
                 for item in var_value:
                     item_text = item_template
                     if isinstance(item, dict):
+                        item_text = re.sub(
+                            r"\{\{\s*this\s*\}\}",
+                            PromptService._stringify_template_value(item),
+                            item_text,
+                        )
                         # 替换 {{this.key}}
                         for key, val in item.items():
-                            item_text = item_text.replace(f"{{{{this.{key}}}}}", str(val) if val else "")
+                            item_text = re.sub(
+                                rf"\{{\{{\s*this\.{re.escape(key)}\s*\}}\}}",
+                                PromptService._stringify_template_value(val),
+                                item_text,
+                            )
                     else:
-                        item_text = item_text.replace("{{this}}", str(item))
+                        item_text = re.sub(
+                            r"\{\{\s*this\s*\}\}",
+                            PromptService._stringify_template_value(item),
+                            item_text,
+                        )
                     items.append(item_text.strip())
                 replacement = "\n".join(items)
             else:
@@ -183,15 +239,13 @@ class PromptService:
             result = result[:match.start()] + replacement + result[match.end():]
 
         # 处理简单变量 {{variable}}
-        var_pattern = r'\{\{(\w+)\}\}'
-        for match in re.finditer(var_pattern, result):
+        var_pattern = r'\{\{\s*([a-zA-Z_]\w*)\s*\}\}'
+
+        def replace_var(match: re.Match[str]) -> str:
             var_name = match.group(1)
-            var_value = variables.get(var_name, "")
-            if var_value is None:
-                var_value = ""
-            elif isinstance(var_value, (list, dict)):
-                var_value = str(var_value)
-            result = result.replace(match.group(0), str(var_value))
+            return PromptService._stringify_template_value(variables.get(var_name, ""))
+
+        result = re.sub(var_pattern, replace_var, result)
 
         return result
 
@@ -342,6 +396,8 @@ class PromptService:
 
         自动创建版本历史
         """
+        self.validate_prompt(scene_key, prompt)
+
         # 查询现有配置
         result = await self.db.execute(
             select(GlobalPrompt).where(GlobalPrompt.scene_key == scene_key)
@@ -471,6 +527,8 @@ class PromptService:
         prompt: str,
     ) -> None:
         """设置项目级提示词覆盖"""
+        self.validate_prompt(scene_key, prompt)
+
         result = await self.db.execute(
             select(Project).where(Project.id == project_id)
         )

@@ -103,7 +103,12 @@ async def analyze_document_stream(
     try:
         # 创建OpenAI服务实例，从数据库加载配置
         openai_service = OpenAIService(db=db)
-        await openai_service._ensure_initialized()
+        if request.provider_config_id:
+            configured = await openai_service.use_config_by_id(request.provider_config_id)
+            if not configured:
+                raise HTTPException(status_code=404, detail="所选 Provider 配置不存在")
+        else:
+            await openai_service._ensure_initialized()
 
         if not openai_service.api_key:
             raise HTTPException(status_code=400, detail="请先配置OpenAI API密钥")
@@ -142,8 +147,10 @@ async def analyze_document_stream(
 
         return sse_response(generate())
 
+    except HTTPException:
+        raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"文档分析失败: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"文档分析失败: {e}") from e
 
 
 @router.post("/export-word")
@@ -568,7 +575,12 @@ async def analyze_project_document_stream(
 
         # 创建OpenAI服务实例，从数据库加载配置
         openai_service = OpenAIService(db=db, project_id=project_uuid)
-        await openai_service._ensure_initialized()
+        if request.provider_config_id:
+            configured = await openai_service.use_config_by_id(request.provider_config_id)
+            if not configured:
+                raise HTTPException(status_code=404, detail="所选 Provider 配置不存在")
+        else:
+            await openai_service._ensure_initialized()
 
         if not openai_service.api_key:
             raise HTTPException(status_code=400, detail="请先配置OpenAI API密钥")

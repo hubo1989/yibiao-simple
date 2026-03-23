@@ -1,14 +1,29 @@
-/**
- * 目录编辑页面
- */
-import React, { useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { OutlineData, OutlineItem } from '../types';
-import { outlineApi, expandApi } from '../services/api';
+import { outlineApi, expandApi, consistencyApi } from '../services/api';
 import { useAuth } from '../contexts/AuthContext';
-import { ChevronRightIcon, ChevronDownIcon, DocumentTextIcon, PencilIcon, TrashIcon, PlusIcon } from '@heroicons/react/24/outline';
 import ChapterStatusBadge from '../components/ChapterStatusBadge';
 import type { ChapterStatus } from '../types/chapter';
-import { getCurrentModel } from '../utils/modelCache';
+import type { RatingChecklistResponse } from '../types/bid';
+import { getCurrentModel, getCurrentProviderConfigId } from '../utils/modelCache';
+import { ProCard } from '@ant-design/pro-components';
+import { Button, Space, Upload, Alert, message, Typography, Tree, Input, Modal, Form, Spin, Tag } from 'antd';
+import { 
+  PlusOutlined, 
+  UploadOutlined, 
+  LoadingOutlined,
+  CheckCircleOutlined,
+  EditOutlined,
+  DeleteOutlined,
+  ArrowRightOutlined,
+  FolderOpenOutlined,
+  NodeExpandOutlined,
+  CompressOutlined,
+  OrderedListOutlined,
+  BranchesOutlined,
+  CheckCircleFilled
+} from '@ant-design/icons';
+import type { DataNode } from 'antd/es/tree';
 
 interface OutlineEditProps {
   projectOverview: string;
@@ -16,7 +31,46 @@ interface OutlineEditProps {
   outlineData: OutlineData | null;
   onOutlineGenerated: (outline: OutlineData) => void;
   projectId: string;
+  onContinue?: () => void;
 }
+
+const consumeSseEvents = (
+  buffer: string,
+  onEvent: (payload: any) => void
+): { remainder: string; done: boolean } => {
+  const normalizedBuffer = buffer.replace(/\r\n/g, '\n');
+  const events = normalizedBuffer.split('\n\n');
+  const remainder = events.pop() ?? '';
+
+  for (const event of events) {
+    if (!event.trim()) {
+      continue;
+    }
+
+    const data = event
+      .split('\n')
+      .filter((line) => line.startsWith('data: '))
+      .map((line) => line.slice(6))
+      .join('\n')
+      .trim();
+
+    if (!data) {
+      continue;
+    }
+
+    if (data === '[DONE]') {
+      return { remainder: '', done: true };
+    }
+
+    try {
+      onEvent(JSON.parse(data));
+    } catch {
+      // Ignore malformed complete SSE events but keep the stream alive.
+    }
+  }
+
+  return { remainder, done: false };
+};
 
 const OutlineEdit: React.FC<OutlineEditProps> = ({
   projectOverview,
@@ -24,66 +78,156 @@ const OutlineEdit: React.FC<OutlineEditProps> = ({
   outlineData,
   onOutlineGenerated,
   projectId,
+  onContinue,
 }) => {
   const { token } = useAuth();
-  const [generating, setGenerating] = useState(false);
+  const [generatingL1, setGeneratingL1] = useState(false);
+  const [generatingL2L3, setGeneratingL2L3] = useState(false);
   const [expandedItems, setExpandedItems] = useState<Set<string>>(new Set());
-  const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  const [msg, setMsg] = useState<{ type: 'success' | 'error' | 'warning' | 'info'; text: string } | null>(null);
   const [streamingContent, setStreamingContent] = useState('');
   const [editingItem, setEditingItem] = useState<string | null>(null);
   const [editTitle, setEditTitle] = useState('');
   const [editDescription, setEditDescription] = useState('');
   const [expandFile, setExpandFile] = useState<File | null>(null);
-  const [uploadedExpand, setuploadedExpand] = useState(false);
-  const [oldOutline, setOldOutline] = useState<string | null>(null);
-  const [oldDocument, setOldDocument] = useState<string | null>(null);
+  const [uploadedExpand, setUploadedExpand] = useState(false);
+  const [streamingStageLabel, setStreamingStageLabel] = useState('');
+  const [showRatingChecklist, setShowRatingChecklist] = useState(false);
+  const [isLoadingRatingChecklist, setIsLoadingRatingChecklist] = useState(false);
+  const [ratingChecklist, setRatingChecklist] = useState<RatingChecklistResponse | null>(null);
 
-  // 处理方案扩写文件上传
+  const outlineStats = useMemo(() => {
+    const stats = {
+      total: 0,
+      topLevel: outlineData?.outline?.length || 0,
+      generated: 0,
+      leaf: 0,
+    };
+
+    const walk = (items: OutlineItem[]) => {
+      items.forEach((item) => {
+        stats.total += 1;
+        if (item.status === 'generated' || item.content || (item.children && item.children.length > 0)) {
+          stats.generated += 1;
+        }
+        if (!item.children || item.children.length === 0) {
+          stats.leaf += 1;
+        } else {
+          walk(item.children);
+        }
+      });
+    };
+
+    if (outlineData?.outline?.length) {
+      walk(outlineData.outline);
+    }
+
+    return stats;
+  }, [outlineData]);
+
+  const topLevelPreview = useMemo(
+    () => (outlineData?.outline || []).slice(0, 4),
+    [outlineData]
+  );
+
+  const hasOutline = Boolean(outlineData?.outline?.length);
+  const canContinue = hasOutline && Boolean(onContinue);
+  const isBusy = generatingL1 || generatingL2L3;
+
+  const getErrorMessage = (error: any, fallback: string) => {
+    return error?.response?.data?.detail || error?.message || fallback;
+  };
+
+  const fetchRatingChecklist = async () => {
+    if (!projectId) {
+      message.warning('缺少项目 ID，无法生成评分响应清单');
+      return;
+    }
+
+    setIsLoadingRatingChecklist(true);
+    try {
+      const result = await consistencyApi.generateRatingChecklist(projectId);
+      setRatingChecklist(result);
+    } catch (error: any) {
+      message.error(getErrorMessage(error, '评分响应清单生成失败，请重试'));
+    } finally {
+      setIsLoadingRatingChecklist(false);
+    }
+  };
+
+  const handleOpenRatingChecklist = () => {
+    setShowRatingChecklist(true);
+    if (!ratingChecklist && !isLoadingRatingChecklist) {
+      void fetchRatingChecklist();
+    }
+  };
+
+  const collectOutlineIds = (items: OutlineItem[]): Set<string> => {
+    const ids = new Set<string>();
+    const walk = (nodes: OutlineItem[]) => {
+      nodes.forEach((node) => {
+        ids.add(node.id);
+        if (node.children?.length) {
+          walk(node.children);
+        }
+      });
+    };
+    walk(items);
+    return ids;
+  };
+
+  useEffect(() => {
+    if (outlineData?.outline?.length && expandedItems.size === 0) {
+      setExpandedItems(collectOutlineIds(outlineData.outline));
+    }
+  }, [expandedItems.size, outlineData]);
+
   const handleExpandUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (!file) return;
 
     try {
-      setuploadedExpand(true);
-      setMessage(null);
+      setUploadedExpand(true);
+      setMsg(null);
 
       const response = await expandApi.uploadExpandFile(file, token || undefined);
       const data = await response.json();
 
       if (data.success) {
         setExpandFile(file);
-        setOldOutline(data.old_outline || null);
-        setOldDocument(data.file_content || null);
-        setMessage({ type: 'success', text: `方案扩写文件上传成功：${file.name}` });
+        message.success(`方案扩写文件上传成功：${file.name}`);
       } else {
         throw new Error(data.message || '文件上传失败');
       }
     } catch (error: any) {
-      setMessage({ type: 'error', text: error.response?.data?.message || error.message || '文件上传失败' });
+      setMsg({ type: 'error', text: error.response?.data?.message || error.message || '文件上传失败' });
     } finally {
-
+      // NOTE: keeping uploadedExpand state active to disable further uploads 
     }
   };
 
-  const handleGenerateOutline = async () => {
+  const handleGenerateL1Outline = async () => {
     if (!projectOverview || !techRequirements) {
-      setMessage({ type: 'error', text: '请先完成文档分析' });
+      setMsg({ type: 'error', text: '请先完成文档分析' });
       return;
     }
 
     try {
-      setGenerating(true);
-      setMessage(null);
+      setGeneratingL1(true);
+      setMsg(null);
       setStreamingContent('');
+      setStreamingStageLabel('正在生成一级目录');
 
       if (!projectId) {
         throw new Error('缺少项目ID，请从项目列表进入');
       }
 
       const currentModel = getCurrentModel();
-      const response = await outlineApi.generateProjectOutlineStream({
+      const currentProviderConfigId = getCurrentProviderConfigId();
+      const response = await outlineApi.generateProjectOutlineL1Stream({
         project_id: projectId,
         model_name: currentModel || undefined,
+        provider_config_id: currentProviderConfigId || undefined,
       }, token || undefined);
 
       if (!response.ok) {
@@ -98,68 +242,51 @@ const OutlineEdit: React.FC<OutlineEditProps> = ({
 
       let result = '';
       const decoder = new TextDecoder();
+      let pending = '';
+      const appendOutlineChunk = (parsed: any) => {
+        if (parsed.chunk) {
+          result += parsed.chunk;
+          setStreamingContent(result);
+        }
+      };
 
       while (true) {
         const { done, value } = await reader.read();
-        if (done) break;
+        if (done) {
+          break;
+        }
 
-        const chunk = decoder.decode(value, { stream: true });
-        const lines = chunk.split('\n');
+        pending += decoder.decode(value, { stream: true });
+        const { remainder, done: streamDone } = consumeSseEvents(pending, appendOutlineChunk);
+        pending = remainder;
 
-        for (const line of lines) {
-          if (line.startsWith('data: ')) {
-            const data = line.slice(6);
-            if (data === '[DONE]') {
-              break;
-            }
-            try {
-              const parsed = JSON.parse(data);
-              if (parsed.chunk) {
-                result += parsed.chunk;
-                // 实时显示生成的内容
-                setStreamingContent(result);
-              }
-            } catch (e) {
-              // 忽略JSON解析错误
-            }
-          }
+        if (streamDone) {
+          break;
         }
       }
 
-      // 解析最终结果
+      pending += decoder.decode();
+      consumeSseEvents(`${pending}\n\n`, appendOutlineChunk);
+
       try {
-        const outlineJson = JSON.parse(result);
-
-        // 兼容 glm-5 模型返回的 {"answer": "..."} 格式
-        if (outlineJson.answer && !outlineJson.outline) {
-          const answerValue = outlineJson.answer;
-          let items: string[];
-
-          if (Array.isArray(answerValue)) {
-            items = answerValue.filter((item): item is string => typeof item === 'string');
-          } else if (typeof answerValue === 'string') {
-            items = answerValue.split('\n').filter((line: string) => line.trim());
-          } else {
-            items = [];
+        let cleanResult = result.trim();
+        if (cleanResult.includes('```json')) {
+          const jsonMatch = cleanResult.match(/```json\s*([\s\S]*?)\s*```/);
+          if (jsonMatch) {
+            cleanResult = jsonMatch[1];
           }
-
-          const outlineItems: OutlineItem[] = items.map((text: string, index: number) => {
-            const match = text.match(/^(\d+)[.、\s]+(.+)$/);
-            return {
-              id: match ? match[1] : String(index + 1),
-              title: match ? match[2].trim() : text.trim(),
-              description: '',
-              children: []
-            };
-          });
-          outlineJson.outline = outlineItems;
+        } else if (cleanResult.includes('```')) {
+          const jsonMatch = cleanResult.match(/```\s*([\s\S]*?)\s*```/);
+          if (jsonMatch) {
+            cleanResult = jsonMatch[1];
+          }
         }
-
+        
+        const outlineJson = JSON.parse(cleanResult);
         onOutlineGenerated(outlineJson);
-        setMessage({ type: 'success', text: '目录结构生成完成' });
-        setStreamingContent(''); // 清空流式内容
+        message.success('一级目录生成完成');
+        setStreamingContent('');
 
-        // 默认展开所有项目
         const allIds = new Set<string>();
         const collectIds = (items: OutlineItem[]) => {
           items.forEach(item => {
@@ -173,42 +300,143 @@ const OutlineEdit: React.FC<OutlineEditProps> = ({
         setExpandedItems(allIds);
 
       } catch (parseError) {
-        throw new Error('解析目录结构失败');
+        throw new Error('解析一级目录结构失败');
       }
     } catch (error: any) {
-      setMessage({ type: 'error', text: error.message || '目录生成失败' });
-      setStreamingContent(''); // 出错时也清空
+      setMsg({ type: 'error', text: error.message || '一级目录生成失败' });
+      setStreamingContent('');
     } finally {
-      setGenerating(false);
+      setGeneratingL1(false);
+      setStreamingStageLabel('');
     }
   };
 
-
-  const toggleExpanded = (itemId: string) => {
-    const newExpanded = new Set(expandedItems);
-    if (newExpanded.has(itemId)) {
-      newExpanded.delete(itemId);
-    } else {
-      newExpanded.add(itemId);
+  const handleGenerateL2L3Outline = async () => {
+    if (!projectOverview || !techRequirements) {
+      setMsg({ type: 'error', text: '请先完成文档分析' });
+      return;
     }
-    setExpandedItems(newExpanded);
+
+    if (!outlineData?.outline?.length) {
+      setMsg({ type: 'error', text: '请先生成一级目录' });
+      return;
+    }
+
+    try {
+      setGeneratingL2L3(true);
+      setMsg(null);
+      setStreamingContent('');
+      setStreamingStageLabel('正在生成二三级目录');
+
+      if (!projectId) {
+        throw new Error('缺少项目ID，请从项目列表进入');
+      }
+
+      const currentModel = getCurrentModel();
+      const currentProviderConfigId = getCurrentProviderConfigId();
+      const response = await outlineApi.generateProjectOutlineL2L3Stream({
+        project_id: projectId,
+        model_name: currentModel || undefined,
+        provider_config_id: currentProviderConfigId || undefined,
+        outline_data: outlineData,
+      }, token || undefined);
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.detail || `请求失败: ${response.status}`);
+      }
+
+      const reader = response.body?.getReader();
+      if (!reader) {
+        throw new Error('无法读取响应流');
+      }
+
+      const decoder = new TextDecoder();
+      let pending = '';
+      let updatedOutline = outlineData ? [...outlineData.outline] : [];
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) {
+          break;
+        }
+
+        pending += decoder.decode(value, { stream: true });
+        const { remainder, done: streamDone } = consumeSseEvents(pending, (parsed) => {
+          if (parsed.type === 'chapter') {
+            const chapterIndex = parsed.index;
+            if (chapterIndex < updatedOutline.length) {
+              updatedOutline[chapterIndex] = {
+                ...updatedOutline[chapterIndex],
+                children: parsed.data.children || [],
+                status: 'generated'
+              };
+            } else {
+              updatedOutline.push({
+                ...parsed.data,
+                status: 'generated'
+              });
+            }
+
+            const tempOutline = { outline: updatedOutline };
+            onOutlineGenerated(tempOutline);
+            setStreamingContent(`正在生成第 ${parsed.index + 1}/${parsed.total} 章...`);
+          }
+
+          if (parsed.type === 'complete') {
+            onOutlineGenerated(parsed.data);
+            setStreamingContent('');
+          }
+
+          if (parsed.error) {
+            throw new Error(parsed.message || '生成失败');
+          }
+        });
+        pending = remainder;
+
+        if (streamDone) {
+          break;
+        }
+      }
+
+      if (updatedOutline.length > 0) {
+        const outlineJson = { outline: updatedOutline };
+        onOutlineGenerated(outlineJson);
+        message.success('二三级目录生成完成');
+
+        const allIds = new Set<string>();
+        const collectIds = (items: OutlineItem[]) => {
+          items.forEach(item => {
+            allIds.add(item.id);
+            if (item.children) {
+              collectIds(item.children);
+            }
+          });
+        };
+        collectIds(outlineJson.outline || []);
+        setExpandedItems(allIds);
+      }
+    } catch (error: any) {
+      setMsg({ type: 'error', text: error.message || '二三级目录生成失败' });
+      setStreamingContent('');
+    } finally {
+      setGeneratingL2L3(false);
+      setStreamingStageLabel('');
+    }
   };
 
-  // 开始编辑目录项
   const startEditing = (item: OutlineItem) => {
     setEditingItem(item.id);
     setEditTitle(item.title);
     setEditDescription(item.description);
   };
 
-  // 取消编辑
   const cancelEditing = () => {
     setEditingItem(null);
     setEditTitle('');
     setEditDescription('');
   };
 
-  // 保存编辑
   const saveEdit = () => {
     if (!outlineData || !editingItem) return;
 
@@ -238,10 +466,9 @@ const OutlineEdit: React.FC<OutlineEditProps> = ({
 
     onOutlineGenerated(updatedData);
     cancelEditing();
-    setMessage({ type: 'success', text: '目录项更新成功' });
+    message.success('目录项更新成功');
   };
 
-  // 重新分配序号的函数
   const reorderItems = (items: OutlineItem[], parentPrefix: string = ''): OutlineItem[] => {
     return items.map((item, index) => {
       const newId = parentPrefix ? `${parentPrefix}.${index + 1}` : `${index + 1}`;
@@ -253,46 +480,43 @@ const OutlineEdit: React.FC<OutlineEditProps> = ({
     });
   };
 
-  // 删除目录项
   const deleteItem = (itemId: string) => {
     if (!outlineData) return;
 
-    if (window.confirm('确定要删除这个目录项吗？')) {
-      const deleteFromItems = (items: OutlineItem[]): OutlineItem[] => {
-        return items.filter(item => {
-          if (item.id === itemId) {
-            return false;
-          }
-          if (item.children) {
-            item.children = deleteFromItems(item.children);
-          }
-          return true;
-        });
-      };
+    Modal.confirm({
+      title: '删除确认',
+      content: '确定要删除这个目录项吗？',
+      onOk: () => {
+        const deleteFromItems = (items: OutlineItem[]): OutlineItem[] => {
+          return items.filter(item => {
+            if (item.id === itemId) return false;
+            if (item.children) {
+              item.children = deleteFromItems(item.children);
+            }
+            return true;
+          });
+        };
 
-      // 删除项目后重新排序
-      const filteredItems = deleteFromItems(outlineData.outline);
-      const reorderedItems = reorderItems(filteredItems);
+        const filteredItems = deleteFromItems(outlineData.outline);
+        const reorderedItems = reorderItems(filteredItems);
 
-      const updatedData = {
-        ...outlineData,
-        outline: reorderedItems
-      };
+        const updatedData = {
+          ...outlineData,
+          outline: reorderedItems
+        };
 
-      onOutlineGenerated(updatedData);
-      setMessage({ type: 'success', text: '目录项删除成功' });
-    }
+        onOutlineGenerated(updatedData);
+        message.success('目录项删除成功');
+      }
+    });
   };
 
-  // 添加子目录项
   const addChildItem = (parentId: string) => {
     if (!outlineData) return;
 
-    // 查找父项并计算下一个编号
     const findParentAndGetNextId = (items: OutlineItem[], targetParentId: string): string | null => {
       for (const item of items) {
         if (item.id === targetParentId) {
-          // 找到父项，计算下一个子项编号
           const existingChildren = item.children || [];
           let maxChildNum = 0;
           
@@ -348,26 +572,22 @@ const OutlineEdit: React.FC<OutlineEditProps> = ({
 
     onOutlineGenerated(updatedData);
     
-    // 展开父项
     setExpandedItems(prev => {
       const newSet = new Set(prev);
       newSet.add(parentId);
       return newSet;
     });
     
-    // 自动开始编辑新项
     setTimeout(() => {
       startEditing(newItem);
     }, 100);
     
-    setMessage({ type: 'success', text: '子目录添加成功' });
+    message.success('子目录添加成功');
   };
 
-  // 添加根目录项
   const addRootItem = () => {
     if (!outlineData) return;
 
-    // 计算下一个根目录编号
     let maxRootNum = 0;
     outlineData.outline.forEach(item => {
       const idParts = item.id.split('.');
@@ -392,261 +612,496 @@ const OutlineEdit: React.FC<OutlineEditProps> = ({
 
     onOutlineGenerated(updatedData);
     
-    // 自动开始编辑新项
     setTimeout(() => {
       startEditing(newItem);
     }, 100);
     
-    setMessage({ type: 'success', text: '目录项添加成功' });
+    message.success('目录项添加成功');
   };
 
-  const renderOutlineItem = (item: OutlineItem, level: number = 0) => {
-    const hasChildren = item.children && item.children.length > 0;
-    const isExpanded = expandedItems.has(item.id);
-    const isLeaf = !hasChildren;
-    const isEditing = editingItem === item.id;
-
-    return (
-      <div key={item.id} className={`${level > 0 ? 'ml-6' : ''}`}>
-        <div className="group flex items-start space-x-2 py-2 hover:bg-gray-50 rounded px-2">
-          {hasChildren ? (
-            <button
-              onClick={() => toggleExpanded(item.id)}
-              className="mt-1 p-0.5 rounded hover:bg-gray-200"
-            >
-              {isExpanded ? (
-                <ChevronDownIcon className="h-4 w-4 text-gray-400" />
-              ) : (
-                <ChevronRightIcon className="h-4 w-4 text-gray-400" />
-              )}
-            </button>
-          ) : (
-            <DocumentTextIcon className="mt-1 h-4 w-4 text-gray-400" />
-          )}
-          
-          <div className="flex-1 min-w-0">
-            {isEditing ? (
-              // 编辑模式
-              <div className="space-y-2">
-                <input
-                  type="text"
-                  value={editTitle}
-                  onChange={(e) => setEditTitle(e.target.value)}
-                  className="w-full px-2 py-1 border border-gray-300 rounded text-sm"
-                  placeholder="目录标题"
+  const convertToTreeData = (items: OutlineItem[]): DataNode[] => {
+    return items.map(item => {
+      const isLeaf = !item.children || item.children.length === 0;
+      return {
+        key: item.id,
+        title: (
+          <div className="outline-tree-node group flex w-full items-start justify-between gap-4 rounded-2xl border border-slate-200 bg-white px-4 py-3 transition-colors hover:border-sky-200 hover:bg-sky-50/30">
+            <div className="min-w-0 flex-1">
+              <div className="flex flex-wrap items-center gap-2">
+                <Typography.Text strong>{`${item.id} ${item.title}`}</Typography.Text>
+                <ChapterStatusBadge
+                  status={(
+                    item.status ||
+                    (item.content ? 'generated' :
+                     (item.children && item.children.length > 0 ? 'generated' : 'pending'))
+                  ) as ChapterStatus}
+                  size="sm"
                 />
-                <textarea
-                  value={editDescription}
-                  onChange={(e) => setEditDescription(e.target.value)}
-                  rows={2}
-                  className="w-full px-2 py-1 border border-gray-300 rounded text-xs resize-none"
-                  placeholder="目录描述"
-                />
-                <div className="flex space-x-2">
-                  <button
-                    onClick={saveEdit}
-                    className="inline-flex items-center px-2 py-1 border border-transparent text-xs font-medium rounded text-white bg-green-600 hover:bg-green-700"
-                  >
-                    保存
-                  </button>
-                  <button
-                    onClick={cancelEditing}
-                    className="inline-flex items-center px-2 py-1 border border-gray-300 text-xs font-medium rounded text-gray-700 bg-white hover:bg-gray-50"
-                  >
-                    取消
-                  </button>
-                </div>
+                {isLeaf ? <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-500">叶子节点</span> : null}
               </div>
-            ) : (
-              // 正常显示模式
-              <>
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center space-x-2">
-                    <span className={`text-sm font-medium ${
-                      level === 0 ? 'text-blue-600' :
-                      level === 1 ? 'text-green-600' :
-                      'text-gray-700'
-                    }`}>
-                      {item.id} {item.title}
-                    </span>
-                    <ChapterStatusBadge
-                      status={(item.content ? 'generated' : 'pending') as ChapterStatus}
-                      size="sm"
-                    />
-                  </div>
+              <Typography.Text type="secondary" className="mt-1 block">
+                {item.description || '暂无描述'}
+              </Typography.Text>
+            </div>
 
-                  {/* 操作按钮组 */}
-                  <div className="flex items-center space-x-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                    <button
-                      onClick={() => startEditing(item)}
-                      className="p-1 rounded hover:bg-blue-100 text-blue-600"
-                      title="编辑"
-                    >
-                      <PencilIcon className="h-3 w-3" />
-                    </button>
-                    <button
-                      onClick={() => addChildItem(item.id)}
-                      className="p-1 rounded hover:bg-green-100 text-green-600"
-                      title="添加子目录"
-                    >
-                      <PlusIcon className="h-3 w-3" />
-                    </button>
-                    <button
-                      onClick={() => deleteItem(item.id)}
-                      className="p-1 rounded hover:bg-red-100 text-red-600"
-                      title="删除"
-                    >
-                      <TrashIcon className="h-3 w-3" />
-                    </button>
-                  </div>
-                </div>
-                <p className="text-xs text-gray-500 mt-1">{item.description}</p>
-                
-                {/* 显示生成的内容（如果有） */}
-                {item.content && isLeaf && (
-                  <div className="mt-2 p-3 bg-gray-50 rounded-md border-l-4 border-blue-200">
-                    <div className="text-xs text-gray-600 whitespace-pre-wrap">{item.content}</div>
-                  </div>
-                )}
-              </>
-            )}
+            <Space className="outline-tree-actions shrink-0" style={{ visibility: editingItem === item.id ? 'hidden' : undefined }}>
+              <Button type="text" icon={<EditOutlined />} size="small" onClick={(e) => { e.stopPropagation(); startEditing(item); }} title="编辑" />
+              <Button type="text" icon={<PlusOutlined />} size="small" onClick={(e) => { e.stopPropagation(); addChildItem(item.id); }} title="添加子目录" style={{ color: '#16a34a' }} />
+              <Button type="text" danger icon={<DeleteOutlined />} size="small" onClick={(e) => { e.stopPropagation(); deleteItem(item.id); }} title="删除" />
+            </Space>
           </div>
-        </div>
-        
-        {hasChildren && isExpanded && (
-          <div>
-            {item.children!.map(child => renderOutlineItem(child, level + 1))}
-          </div>
-        )}
-      </div>
-    );
+        ),
+        children: item.children ? convertToTreeData(item.children) : undefined,
+      };
+    });
   };
+
+  const treeData = outlineData?.outline ? convertToTreeData(outlineData.outline) : [];
 
   return (
-    <div className="max-w-6xl mx-auto space-y-6">
-      {/* 操作按钮 */}
-      <div className="bg-white rounded-lg shadow p-6">
-        <h2 className="text-xl font-semibold text-gray-900 mb-4">📋 目录管理</h2>
-        
-        <div className="flex space-x-4">
-          {/* 方案扩写按钮 */}
-          <div className="relative">
-            <input
-              type="file"
-              id="expand-file-upload"
-              accept=".pdf,.doc,.docx"
-              onChange={handleExpandUpload}
-              className="hidden"
-              disabled={uploadedExpand}
-            />
-            <label
-              htmlFor="expand-file-upload"
-              className={`inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white cursor-pointer ${
-                uploadedExpand
-                  ? 'bg-gray-400 cursor-not-allowed'
-                  : 'bg-green-600 hover:bg-green-700'
-              } focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500`}
-            >
-              {uploadedExpand ? (
-                <>
-                  <div className="animate-spin -ml-1 mr-3 h-4 w-4 text-white">
-                    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24">
-                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                    </svg>
+    <div className="w-full pb-16">
+      <style>{`
+        .outline-tree-node:hover .outline-tree-actions {
+          visibility: visible !important;
+        }
+        .outline-tree-actions {
+          visibility: hidden;
+        }
+        .outline-tree-panel .ant-tree-list-holder-inner > .ant-tree-treenode {
+          padding: 6px 0;
+        }
+        .outline-tree-panel .ant-tree-indent-unit {
+          width: 18px;
+        }
+      `}</style>
+
+      <div className="grid gap-6 xl:grid-cols-[380px_minmax(0,1fr)]">
+        <ProCard
+          title="目录生成流程"
+          subTitle="按顺序补充资料、生成目录并进入正文写作。"
+          headerBordered
+          className="h-full"
+        >
+          <div className="flex flex-col gap-4">
+            <div className="rounded-3xl border border-slate-200 bg-slate-50 p-4">
+              <div className="flex items-start gap-3">
+                <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-emerald-100 text-sm font-semibold text-emerald-700">
+                  1
+                </span>
+                <div className="min-w-0 flex-1">
+                  <Typography.Text strong className="block">补充技术方案</Typography.Text>
+                  <Typography.Text type="secondary" className="mt-1 block">
+                    可选上传现有方案，帮助目录生成更贴近你的投标材料。
+                  </Typography.Text>
+                  <div className="mt-4">
+                    <Upload
+                      accept=".pdf,.doc,.docx"
+                      showUploadList={false}
+                      customRequest={({ file }) => handleExpandUpload({ target: { files: [file] } } as any)}
+                      disabled={uploadedExpand || isBusy}
+                    >
+                      <Button
+                        size="large"
+                        icon={uploadedExpand ? <CheckCircleOutlined /> : <UploadOutlined />}
+                        disabled={uploadedExpand || isBusy}
+                      >
+                        {uploadedExpand ? '已上传方案扩写' : '上传补充文件'}
+                      </Button>
+                    </Upload>
                   </div>
-                  正在分析...
-                </>
-              ) : (
-                '方案扩写'
-              )}
-            </label>
-          </div>
-
-          <button
-            onClick={handleGenerateOutline}
-            disabled={generating || !projectOverview || !techRequirements}
-            className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:bg-gray-400"
-          >
-            {generating ? (
-              <>
-                <div className="animate-spin -ml-1 mr-3 h-4 w-4 text-white">
-                  <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24">
-                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                  </svg>
+                  {expandFile ? (
+                    <div className="mt-3 rounded-2xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-700">
+                      已上传：{expandFile.name}
+                    </div>
+                  ) : null}
                 </div>
-                正在生成目录...
-              </>
-            ) : (
-              '生成目录结构'
+              </div>
+            </div>
+
+            <div className="rounded-3xl border border-slate-200 bg-white p-4 shadow-sm">
+              <div className="flex items-start gap-3">
+                <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-sky-100 text-sm font-semibold text-sky-700">
+                  2
+                </span>
+                <div className="min-w-0 flex-1">
+                  <Typography.Text strong className="block">生成一级目录</Typography.Text>
+                  <Typography.Text type="secondary" className="mt-1 block">
+                    先搭出章节主骨架，确认投标结构和核心模块。
+                  </Typography.Text>
+                  <div className="mt-4">
+                    <Button
+                      type="primary"
+                      size="large"
+                      onClick={handleGenerateL1Outline}
+                      disabled={isBusy || !projectOverview || !techRequirements}
+                      icon={generatingL1 ? <LoadingOutlined /> : <OrderedListOutlined />}
+                    >
+                      {generatingL1 ? '正在生成一级目录...' : '开始生成'}
+                    </Button>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div className="rounded-3xl border border-slate-200 bg-white p-4 shadow-sm">
+              <div className="flex items-start gap-3">
+                <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-violet-100 text-sm font-semibold text-violet-700">
+                  3
+                </span>
+                <div className="min-w-0 flex-1">
+                  <Typography.Text strong className="block">生成二三级目录</Typography.Text>
+                  <Typography.Text type="secondary" className="mt-1 block">
+                    在一级目录基础上细化章节层级，形成可直接写作的完整结构。
+                  </Typography.Text>
+                  <div className="mt-4">
+                    <Button
+                      size="large"
+                      onClick={handleGenerateL2L3Outline}
+                      disabled={isBusy || !projectOverview || !techRequirements || !hasOutline}
+                      icon={generatingL2L3 ? <LoadingOutlined /> : <BranchesOutlined />}
+                      className="!border-violet-200 !text-violet-700 hover:!border-violet-300 hover:!text-violet-800"
+                    >
+                      {generatingL2L3 ? '正在细化目录...' : '继续细化'}
+                    </Button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </ProCard>
+
+        <div className="flex flex-col gap-6">
+          <ProCard
+            title="目录状态总览"
+            subTitle="这里汇总当前结构、生成进度和下一步入口。"
+            headerBordered
+            className="h-full"
+            extra={(
+              <Button onClick={handleOpenRatingChecklist} disabled={!projectId}>
+                评分响应清单
+              </Button>
             )}
-          </button>
+          >
+            <div className="grid gap-4 md:grid-cols-4">
+              <div className="rounded-3xl border border-slate-200 bg-slate-50 px-4 py-4">
+                <Typography.Text type="secondary">一级章节</Typography.Text>
+                <div className="mt-2 text-3xl font-semibold text-slate-900">{outlineStats.topLevel}</div>
+              </div>
+              <div className="rounded-3xl border border-slate-200 bg-slate-50 px-4 py-4">
+                <Typography.Text type="secondary">总目录项</Typography.Text>
+                <div className="mt-2 text-3xl font-semibold text-slate-900">{outlineStats.total}</div>
+              </div>
+              <div className="rounded-3xl border border-slate-200 bg-slate-50 px-4 py-4">
+                <Typography.Text type="secondary">已成型节点</Typography.Text>
+                <div className="mt-2 text-3xl font-semibold text-slate-900">{outlineStats.generated}</div>
+              </div>
+              <div className="rounded-3xl border border-slate-200 bg-slate-50 px-4 py-4">
+                <Typography.Text type="secondary">可写章节</Typography.Text>
+                <div className="mt-2 text-3xl font-semibold text-slate-900">{outlineStats.leaf}</div>
+              </div>
+            </div>
 
+            <div className="mt-5 grid gap-4 lg:grid-cols-[minmax(0,1fr)_320px]">
+              <div className="rounded-3xl border border-slate-200 bg-white px-5 py-5">
+                <div className="mb-4 flex items-center justify-between gap-3">
+                  <div>
+                    <Typography.Text strong className="block">当前目录预览</Typography.Text>
+                    <Typography.Text type="secondary">
+                      先确认一级结构，再决定是否继续展开细分章节。
+                    </Typography.Text>
+                  </div>
+                  <span className="rounded-full bg-slate-100 px-3 py-1 text-xs text-slate-500">
+                    {hasOutline ? '已生成结构' : '尚未生成'}
+                  </span>
+                </div>
+
+                {topLevelPreview.length > 0 ? (
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    {topLevelPreview.map((item) => (
+                      <div key={item.id} className="rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3">
+                        <div className="flex items-center gap-2">
+                          <span className="rounded-full bg-white px-2 py-0.5 text-xs font-medium text-slate-500">
+                            {item.id}
+                          </span>
+                          <Typography.Text strong>{item.title}</Typography.Text>
+                        </div>
+                        <Typography.Text type="secondary" className="mt-2 block">
+                          {item.description || '生成后可继续补充说明。'}
+                        </Typography.Text>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="rounded-3xl border border-dashed border-slate-300 bg-slate-50 px-5 py-10 text-center">
+                    <FolderOpenOutlined className="text-2xl text-slate-400" />
+                    <Typography.Text className="mt-3 block text-base font-medium text-slate-700">
+                      先生成一级目录，结构会在这里展开
+                    </Typography.Text>
+                    <Typography.Text type="secondary" className="mt-2 block">
+                      目录生成完成后，你可以直接在下方树形结构里继续编辑和补充。
+                    </Typography.Text>
+                  </div>
+                )}
+              </div>
+
+              <div className="rounded-[28px] border border-sky-100 bg-[linear-gradient(180deg,#f3f9ff_0%,#eef7ff_100%)] px-5 py-5">
+                <Typography.Text strong className="block text-slate-900">下一步入口</Typography.Text>
+                <Typography.Text type="secondary" className="mt-2 block">
+                  目录结构确认后，直接进入正文编辑。步骤导航也可以随时切换。
+                </Typography.Text>
+
+                <div className="mt-5 flex flex-col gap-3">
+                  <div className="rounded-2xl bg-white/80 px-4 py-3">
+                    <Typography.Text strong className="block">
+                      {canContinue ? '目录结构已可用于写作' : '正文编辑暂未解锁'}
+                    </Typography.Text>
+                    <Typography.Text type="secondary" className="mt-1 block">
+                      {canContinue
+                        ? '继续写章节正文，系统会沿用当前 Provider 和模型设置。'
+                        : '至少生成一级目录后，再进入正文编辑会更顺畅。'}
+                    </Typography.Text>
+                  </div>
+
+                  {canContinue ? (
+                    <Button type="primary" size="large" icon={<ArrowRightOutlined />} onClick={onContinue}>
+                      进入正文编辑
+                    </Button>
+                  ) : (
+                    <Button size="large" disabled icon={<ArrowRightOutlined />}>
+                      完成目录生成后可进入
+                    </Button>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            {!projectOverview && !techRequirements ? (
+              <Alert
+                className="mt-5"
+                message="请先在“标书解析”步骤完成文档分析，再生成目录。"
+                type="warning"
+                showIcon
+              />
+            ) : null}
+
+            {(isBusy && streamingContent) ? (
+              <div className="mt-5 rounded-3xl border border-sky-200 bg-sky-50 px-5 py-4">
+                <div className="flex items-center gap-2 text-sm font-medium text-sky-700">
+                  <CheckCircleFilled />
+                  {streamingStageLabel || '正在生成目录'}
+                </div>
+                <pre className="mt-3 max-h-[220px] overflow-y-auto whitespace-pre-wrap break-words text-sm leading-6 text-sky-900">
+                  {streamingContent}
+                </pre>
+              </div>
+            ) : null}
+
+            {msg ? (
+              <Alert className="mt-5" message={msg.text} type={msg.type} showIcon />
+            ) : null}
+          </ProCard>
+
+          <ProCard
+            title="目录结构与编辑"
+            subTitle="生成后可直接增删目录项、修改标题和说明。"
+            headerBordered
+            extra={
+              <div className="flex flex-wrap items-center gap-2">
+                <Button
+                  icon={<NodeExpandOutlined />}
+                  onClick={() => setExpandedItems(outlineData?.outline ? collectOutlineIds(outlineData.outline) : new Set())}
+                  disabled={!hasOutline}
+                >
+                  展开全部
+                </Button>
+                <Button icon={<CompressOutlined />} onClick={() => setExpandedItems(new Set())} disabled={!hasOutline}>
+                  收起全部
+                </Button>
+                <Button type="primary" icon={<PlusOutlined />} onClick={addRootItem} disabled={!hasOutline}>
+                  添加目录项
+                </Button>
+              </div>
+            }
+          >
+            {hasOutline ? (
+              <div className="outline-tree-panel max-h-[720px] overflow-y-auto rounded-[28px] border border-slate-200 bg-slate-50 p-4">
+                <Tree
+                  treeData={treeData}
+                  defaultExpandAll
+                  expandedKeys={Array.from(expandedItems)}
+                  onExpand={(keys) => setExpandedItems(new Set(keys as string[]))}
+                  blockNode
+                  selectable={false}
+                  showLine={{ showLeafIcon: false }}
+                />
+              </div>
+            ) : (
+              <div className="rounded-[28px] border border-dashed border-slate-300 bg-slate-50 px-6 py-16 text-center">
+                <OrderedListOutlined className="text-3xl text-slate-400" />
+                <Typography.Text className="mt-3 block text-base font-medium text-slate-700">
+                  目录结构还没有生成
+                </Typography.Text>
+                <Typography.Text type="secondary" className="mt-2 block">
+                  先在左侧按顺序生成目录，完成后这里会变成可编辑的结构树。
+                </Typography.Text>
+                <div className="mt-5">
+                  <Button
+                    type="primary"
+                    onClick={handleGenerateL1Outline}
+                    disabled={isBusy || !projectOverview || !techRequirements}
+                    icon={generatingL1 ? <LoadingOutlined /> : <OrderedListOutlined />}
+                  >
+                    从一级目录开始
+                  </Button>
+                </div>
+              </div>
+            )}
+          </ProCard>
         </div>
-
-        {/* 显示已上传的方案扩写文件 */}
-        {expandFile && (
-          <div className="mt-4 p-3 bg-green-50 border border-green-200 rounded-md">
-            <div className="flex items-center">
-              <DocumentTextIcon className="h-5 w-5 text-green-600 mr-2" />
-              <span className="text-sm text-green-800">
-                已上传方案扩写文件：<span className="font-medium">{expandFile.name}</span>
-              </span>
-            </div>
-          </div>
-        )}
-
-        {!projectOverview && !techRequirements && (
-          <div className="mt-4 p-4 bg-yellow-50 border border-yellow-200 rounded-md">
-            <p className="text-sm text-yellow-800">
-              请先在"标书解析"步骤中完成文档分析，获取项目概述和技术评分要求。
-            </p>
-          </div>
-        )}
-
-        {/* 流式生成内容显示 */}
-        {generating && streamingContent && (
-          <div className="mt-4 p-4 bg-blue-50 border border-blue-200 rounded-md">
-            <h4 className="text-sm font-medium text-blue-800 mb-2">正在生成目录结构...</h4>
-            <div className="bg-white p-3 rounded border max-h-48 overflow-y-auto">
-              <pre className="text-xs text-gray-700 whitespace-pre-wrap font-mono">
-                {streamingContent}
-              </pre>
-            </div>
-          </div>
-        )}
       </div>
 
-      {/* 目录结构显示 */}
-      {outlineData && (
-        <div className="bg-white rounded-lg shadow p-6">
-          <div className="flex items-center justify-between mb-4">
-            <h3 className="text-lg font-medium text-gray-900">目录结构</h3>
-            <button
-              onClick={addRootItem}
-              className="inline-flex items-center px-3 py-1 border border-transparent text-sm font-medium rounded-md text-white bg-blue-600 hover:bg-blue-700"
-            >
-              <PlusIcon className="h-4 w-4 mr-1" />
-              添加目录项
-            </button>
+      <Modal
+        title="评分响应清单"
+        open={showRatingChecklist}
+        width={920}
+        onCancel={() => setShowRatingChecklist(false)}
+        footer={[
+          <Button
+            key="refresh"
+            onClick={() => {
+              void fetchRatingChecklist();
+            }}
+            loading={isLoadingRatingChecklist}
+          >
+            重新生成
+          </Button>,
+          <Button key="close" type="primary" onClick={() => setShowRatingChecklist(false)}>
+            关闭
+          </Button>,
+        ]}
+      >
+        {isLoadingRatingChecklist ? (
+          <div style={{ padding: '48px 0', textAlign: 'center' }}>
+            <Spin size="large" />
           </div>
-          <div className="border rounded-lg p-4 max-h-96 overflow-y-auto">
-            {(outlineData.outline || []).map(item => renderOutlineItem(item))}
-          </div>
-        </div>
-      )}
+        ) : ratingChecklist?.items?.length ? (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 16, maxHeight: '70vh', overflowY: 'auto', paddingRight: 4 }}>
+            <Alert
+              type="info"
+              showIcon
+              message={`共生成 ${ratingChecklist.items.length} 条评分项响应建议，可用于核对目录覆盖范围与后续正文写作重点。`}
+            />
 
-      {/* 消息提示 */}
-      {message && (
-        <div className={`p-4 rounded-md ${
-          message.type === 'success' 
-            ? 'bg-green-100 text-green-700 border border-green-200' 
-            : 'bg-red-100 text-red-700 border border-red-200'
-        }`}>
-          {message.text}
-        </div>
-      )}
+            {ratingChecklist.items.map((item, index) => (
+              <div
+                key={`${item.rating_item}-${index}`}
+                style={{
+                  border: '1px solid #e5e7eb',
+                  borderRadius: 16,
+                  padding: 16,
+                  background: '#fff',
+                }}
+              >
+                <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, marginBottom: 12, alignItems: 'flex-start' }}>
+                  <div>
+                    <Typography.Text strong style={{ fontSize: 15 }}>
+                      {index + 1}. {item.rating_item}
+                    </Typography.Text>
+                    <Typography.Text type="secondary" style={{ display: 'block', marginTop: 4 }}>
+                      建议优先映射到目录主职责明确、能直接承接评分要点的章节中。
+                    </Typography.Text>
+                  </div>
+                  <Tag color="blue">{item.score || '未标注分值'}</Tag>
+                </div>
+
+                {item.response_targets?.length ? (
+                  <div style={{ marginBottom: 12 }}>
+                    <Typography.Text strong>响应目标</Typography.Text>
+                    <div style={{ marginTop: 8, display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                      {item.response_targets.map((target) => (
+                        <Tag key={target} color="geekblue">
+                          {target}
+                        </Tag>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
+
+                {item.evidence_suggestions?.length ? (
+                  <div style={{ marginBottom: 12 }}>
+                    <Typography.Text strong>建议佐证</Typography.Text>
+                    <div style={{ marginTop: 8, display: 'grid', gap: 6 }}>
+                      {item.evidence_suggestions.map((evidence, evidenceIndex) => (
+                        <Typography.Text key={`${evidence}-${evidenceIndex}`} type="secondary">
+                          • {evidence}
+                        </Typography.Text>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
+
+                {item.writing_focus ? (
+                  <div style={{ marginBottom: item.risk_points?.length ? 12 : 0 }}>
+                    <Typography.Text strong>写作重点</Typography.Text>
+                    <Typography.Paragraph style={{ marginTop: 8, marginBottom: 0 }}>
+                      {item.writing_focus}
+                    </Typography.Paragraph>
+                  </div>
+                ) : null}
+
+                {item.risk_points?.length ? (
+                  <div>
+                    <Typography.Text strong style={{ color: '#cf1322' }}>
+                      失分风险
+                    </Typography.Text>
+                    <div style={{ marginTop: 8, display: 'grid', gap: 6 }}>
+                      {item.risk_points.map((risk, riskIndex) => (
+                        <Typography.Text key={`${risk}-${riskIndex}`} style={{ color: '#cf1322' }}>
+                          • {risk}
+                        </Typography.Text>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
+              </div>
+            ))}
+          </div>
+        ) : (
+          <Alert
+            type="warning"
+            showIcon
+            message="暂未生成评分响应清单"
+            description="请确认项目已经完成标书解析，并且技术评分要求已成功保存。"
+          />
+        )}
+      </Modal>
+
+      <Modal
+        title="编辑目录项"
+        open={!!editingItem}
+        onOk={saveEdit}
+        onCancel={cancelEditing}
+        okText="保存"
+        cancelText="取消"
+      >
+        <Form layout="vertical">
+          <Form.Item label="目录标题">
+            <Input 
+              value={editTitle} 
+              onChange={(e) => setEditTitle(e.target.value)} 
+              placeholder="请输入目录标题"
+            />
+          </Form.Item>
+          <Form.Item label="目录描述">
+            <Input.TextArea 
+              value={editDescription} 
+              onChange={(e) => setEditDescription(e.target.value)} 
+              rows={4}
+              placeholder="请输入目录描述"
+            />
+          </Form.Item>
+        </Form>
+      </Modal>
     </div>
   );
 };

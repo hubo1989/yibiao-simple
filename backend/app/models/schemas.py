@@ -21,9 +21,20 @@ class ConfigResponse(BaseModel):
 
 class ModelListResponse(BaseModel):
     """模型列表响应"""
-    models: List[str]
+    models: List[str] = []
+    providers: List["ProviderModelOption"] = []
+    default_provider_config_id: Optional[str] = None
     success: bool
     message: str = ""
+
+
+class ProviderModelOption(BaseModel):
+    """单个 provider 的可用模型列表"""
+    config_id: str
+    provider: str
+    models: List[str]
+    default_model: str
+    is_default: bool = False
 
 
 class FileUploadResponse(BaseModel):
@@ -45,6 +56,7 @@ class AnalysisRequest(BaseModel):
     file_content: str = Field(..., description="文档内容")
     analysis_type: AnalysisType = Field(..., description="分析类型")
     model_name: Optional[str] = Field(None, description="可选的模型名称，覆盖默认配置")
+    provider_config_id: Optional[str] = Field(None, description="可选的 Provider 配置 ID，覆盖默认配置")
 
 
 class OutlineItem(BaseModel):
@@ -73,6 +85,7 @@ class OutlineRequest(BaseModel):
     old_outline: Optional[str] = Field(None, description="上传的方案扩写文件解析出的旧目录JSON")
     old_document: Optional[str] = Field(None, description="上传的方案扩写文件解析出的旧文档")
     model_name: Optional[str] = Field(None, description="可选的模型名称，覆盖默认配置")
+    provider_config_id: Optional[str] = Field(None, description="可选的 Provider 配置 ID，覆盖默认配置")
 
 class ContentGenerationRequest(BaseModel):
     """内容生成请求"""
@@ -87,6 +100,7 @@ class ChapterContentRequest(BaseModel):
     sibling_chapters: Optional[List[Dict[str, Any]]] = Field(None, description="同级章节列表")
     project_overview: str = Field("", description="项目概述")
     model_name: Optional[str] = Field(None, description="可选的模型名称，覆盖默认配置")
+    provider_config_id: Optional[str] = Field(None, description="可选的 Provider 配置 ID，覆盖默认配置")
 
 
 class ErrorResponse(BaseModel):
@@ -117,6 +131,7 @@ class ProjectAnalysisRequest(BaseModel):
     project_id: str = Field(..., description="项目ID")
     analysis_type: AnalysisType = Field(..., description="分析类型")
     model_name: Optional[str] = Field(None, description="可选的模型名称，覆盖默认配置")
+    provider_config_id: Optional[str] = Field(None, description="可选的 Provider 配置 ID，覆盖默认配置")
 
 
 # ============ 项目上下文版本的目录和内容生成 Schema ============
@@ -125,6 +140,8 @@ class ProjectOutlineRequest(BaseModel):
     """基于项目的目录生成请求"""
     project_id: str = Field(..., description="项目ID")
     model_name: Optional[str] = Field(None, description="可选的模型名称，覆盖默认配置")
+    provider_config_id: Optional[str] = Field(None, description="可选的 Provider 配置 ID，覆盖默认配置")
+    outline_data: Optional[Dict[str, Any]] = Field(None, description="可选的目录数据，用于兜底（当数据库中没有数据时使用前端数据）")
 
 
 class ProjectContentGenerateRequest(BaseModel):
@@ -132,6 +149,7 @@ class ProjectContentGenerateRequest(BaseModel):
     project_id: str = Field(..., description="项目ID")
     chapter_id: str = Field(..., description="章节ID")
     model_name: Optional[str] = Field(None, description="可选的模型名称，覆盖默认配置")
+    provider_config_id: Optional[str] = Field(None, description="可选的 Provider 配置 ID，覆盖默认配置")
 
 
 class ChapterCreatedResponse(BaseModel):
@@ -148,3 +166,101 @@ class ProjectOutlineResponse(BaseModel):
     project_id: str
     chapters: List[ChapterCreatedResponse]
     total_count: int
+
+
+# ============ 知识库相关 Schema ============
+
+class KnowledgeDocType(str, Enum):
+    """知识库文档类型"""
+    HISTORY_BID = "history_bid"      # 历史标书
+    COMPANY_INFO = "company_info"    # 企业资料
+    CASE_FRAGMENT = "case_fragment"  # 案例片段
+    OTHER = "other"                  # 其他
+
+
+class KnowledgeScope(str, Enum):
+    """知识库范围"""
+    GLOBAL = "global"          # 全局
+    ENTERPRISE = "enterprise"  # 企业私有
+    USER = "user"              # 用户私有
+
+
+class KnowledgeContentSource(str, Enum):
+    """知识库内容来源"""
+    FILE = "file"      # 文件上传
+    MANUAL = "manual"  # 手动输入
+
+
+class KnowledgeDocCreate(BaseModel):
+    """创建知识库文档请求"""
+    title: str = Field(..., description="标题")
+    doc_type: KnowledgeDocType = Field(..., description="文档类型")
+    scope: KnowledgeScope = Field(..., description="数据范围")
+    content_source: KnowledgeContentSource = Field(..., description="内容来源")
+    content: Optional[str] = Field(None, description="手动输入的内容（content_source=manual 时必填）")
+    tags: Optional[List[str]] = Field(default_factory=list, description="标签列表")
+    keywords: Optional[List[str]] = Field(default_factory=list, description="关键词列表")
+    category: Optional[str] = Field(None, description="分类")
+
+
+class KnowledgeDocUpdate(BaseModel):
+    """更新知识库文档请求"""
+    title: Optional[str] = Field(None, description="标题")
+    doc_type: Optional[KnowledgeDocType] = Field(None, description="文档类型")
+    scope: Optional[KnowledgeScope] = Field(None, description="数据范围")
+    tags: Optional[List[str]] = Field(None, description="标签列表")
+    keywords: Optional[List[str]] = Field(None, description="关键词列表")
+    category: Optional[str] = Field(None, description="分类")
+
+
+class KnowledgeDocResponse(BaseModel):
+    """知识库文档响应"""
+    id: str
+    title: str
+    doc_type: str
+    scope: str
+    owner_id: Optional[str] = None
+    content_source: str
+    file_type: Optional[str] = None
+    pageindex_status: str
+    pageindex_error: Optional[str] = None
+    tags: List[str] = []
+    keywords: List[str] = []
+    category: Optional[str] = None
+    usage_count: int = 0
+    last_used_at: Optional[str] = None
+    created_at: str
+    updated_at: str
+
+
+class KnowledgeSearchRequest(BaseModel):
+    """知识库检索请求"""
+    chapter_title: str = Field(..., description="章节标题")
+    chapter_description: Optional[str] = Field("", description="章节描述")
+    parent_chapters: Optional[List[Dict[str, Any]]] = Field(default_factory=list, description="上级章节信息")
+    project_overview: str = Field(..., description="项目概述")
+    top_k: int = Field(5, description="返回前K个最相关的结果")
+
+
+class KnowledgeSearchResult(BaseModel):
+    """知识库检索结果"""
+    id: str
+    title: str
+    doc_type: str
+    relevance_score: float = Field(..., description="相关性得分（0-1）")
+    matched_nodes: List[Dict[str, Any]] = Field(default_factory=list, description="匹配的树节点")
+    content_preview: str = Field(..., description="内容预览")
+
+
+class KnowledgeSearchResponse(BaseModel):
+    """知识库检索响应"""
+    results: List[KnowledgeSearchResult]
+    total: int
+
+
+class ContentGenerateWithKnowledgeRequest(BaseModel):
+    """带知识库的内容生成请求"""
+    project_id: str = Field(..., description="项目ID")
+    chapter_id: str = Field(..., description="章节ID")
+    knowledge_ids: List[str] = Field(default_factory=list, description="选中的知识库ID列表")
+    model_name: Optional[str] = Field(None, description="可选的模型名称，覆盖默认配置")

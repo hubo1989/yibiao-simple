@@ -11,12 +11,10 @@ import type {
   AuthContextType,
   UserRole,
 } from '../types/auth';
-import { authApi, setAuthToken, clearAuthToken, getStoredToken, getStoredRefreshToken, setStoredTokens, clearStoredTokens } from '../services/api';
+import { authApi, setAuthToken, clearAuthToken, getStoredToken, setStoredTokens, clearStoredTokens } from '../services/api';
 
 const AuthContext = createContext<AuthContextType | null>(null);
 
-const TOKEN_KEY = 'auth_token';
-const REFRESH_TOKEN_KEY = 'refresh_token';
 const USER_KEY = 'auth_user';
 
 export function getStoredUser(): User | null {

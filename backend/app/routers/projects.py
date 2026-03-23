@@ -38,6 +38,11 @@ from ..schemas.project import (
     ConsistencyCheckRequest,
     ConsistencyCheckResponse,
     ContradictionItem,
+    RatingChecklistItem,
+    RatingChecklistResponse,
+    ClauseResponseRequest,
+    ClauseResponseResult,
+    ChapterReverseEnhanceResponse,
 )
 from ..schemas.prompt import (
     ProjectPromptConfig,
@@ -637,6 +642,119 @@ async def check_project_consistency(
     )
 
 
+# ==================== 高分投标专用接口 ====================
+
+@router.post(
+    "/{project_id}/rating-response-checklist",
+    response_model=RatingChecklistResponse,
+    status_code=status.HTTP_200_OK,
+)
+async def generate_rating_response_checklist(
+    project_id: uuid.UUID,
+    current_user: Annotated[User, Depends(get_current_active_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """按项目评分要求生成响应清单"""
+    project = await get_project_for_user(project_id, current_user.id, db)
+
+    if not project.tech_requirements:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="项目缺少技术评分要求，无法生成响应清单",
+        )
+
+    openai_service = OpenAIService(db=db, project_id=project_id)
+    result_text = await openai_service.generate_rating_response_checklist(
+        overview=project.project_overview or "",
+        requirements=project.tech_requirements or "",
+    )
+
+    try:
+        items = json.loads(result_text)
+    except json.JSONDecodeError as e:
+        logger.error(f"评分项响应清单 JSON 解析失败: {e}; content={result_text[:500]}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="AI 返回的评分响应清单格式无效，请重试",
+        )
+
+    return RatingChecklistResponse(
+        items=[RatingChecklistItem(**item) for item in items]
+    )
+
+
+@router.post(
+    "/{project_id}/chapters/{chapter_id}/reverse-enhance",
+    response_model=ChapterReverseEnhanceResponse,
+    status_code=status.HTTP_200_OK,
+)
+async def reverse_enhance_project_chapter(
+    project_id: uuid.UUID,
+    chapter_id: uuid.UUID,
+    current_user: Annotated[User, Depends(get_current_active_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """根据评分点对指定章节进行反向补强分析"""
+    project = await get_project_for_user(project_id, current_user.id, db)
+
+    chapter_result = await db.execute(
+        select(Chapter).where(
+            and_(Chapter.id == chapter_id, Chapter.project_id == project_id)
+        )
+    )
+    chapter = chapter_result.scalar_one_or_none()
+    if not chapter:
+        raise HTTPException(status_code=404, detail="章节不存在")
+
+    if not project.tech_requirements:
+        raise HTTPException(status_code=400, detail="项目缺少技术评分要求")
+    if not chapter.content or not chapter.content.strip():
+        raise HTTPException(status_code=400, detail="章节内容为空，无法补强")
+
+    openai_service = OpenAIService(db=db, project_id=project_id)
+    result_text = await openai_service.reverse_enhance_chapter(
+        chapter_title=chapter.title,
+        chapter_content=chapter.content,
+        tech_requirements=project.tech_requirements,
+        project_overview=project.project_overview,
+    )
+
+    try:
+        result_data = json.loads(result_text)
+    except json.JSONDecodeError as e:
+        logger.error(f"章节反向补强 JSON 解析失败: {e}; content={result_text[:500]}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="AI 返回的章节补强结果格式无效，请重试",
+        )
+
+    return ChapterReverseEnhanceResponse(**result_data)
+
+
+@router.post(
+    "/{project_id}/clause-response",
+    response_model=ClauseResponseResult,
+    status_code=status.HTTP_200_OK,
+)
+async def generate_clause_response(
+    project_id: uuid.UUID,
+    request: ClauseResponseRequest,
+    current_user: Annotated[User, Depends(get_current_active_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """生成技术参数/条款逐条响应正文"""
+    project = await get_project_for_user(project_id, current_user.id, db)
+
+    openai_service = OpenAIService(db=db, project_id=project_id)
+    content = await openai_service.generate_clause_response(
+        clause_text=request.clause_text,
+        project_overview=project.project_overview,
+        knowledge_context=request.knowledge_context,
+    )
+
+    return ClauseResponseResult(content=content.strip())
+
+
 # ==================== 章节重写接口 ====================
 
 class RewriteChapterRequest(BaseModel):
@@ -787,8 +905,7 @@ async def set_project_prompt(
         await prompt_service.set_project_prompt(
             project_id=project_id,
             scene_key=scene_key,
-            system_prompt=data.system_prompt,
-            user_prompt_template=data.user_prompt_template,
+            prompt=data.prompt,
         )
 
         # 返回更新后的配置

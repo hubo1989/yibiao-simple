@@ -3,27 +3,28 @@
  * 仅管理员可见
  */
 import React, { useState, useEffect, useCallback } from 'react';
-import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
-import { adminApi } from '../services/api';
+import { adminApi, requestLogApi } from '../services/api';
 import type {
   AdminUser,
   AdminUserCreate,
   AdminUserUpdate,
   ApiKeyConfig,
   ApiKeyConfigCreate,
+  ApiKeyConfigUpdate,
+  ApiKeyModelConfig,
   OperationLogSummary,
   OperationLogQuery,
   UsageStats,
   ActionType,
-  ACTION_TYPE_LABELS,
 } from '../types/admin';
 import type { UserRole } from '../types/auth';
 import type { PromptResponse, PromptCategory } from '../types/prompt';
 import { promptApi } from '../services/api';
 import PromptEditor from '../components/PromptEditor';
+import { useLayoutHeader } from '../layouts/layoutHeader';
 
-type TabType = 'stats' | 'users' | 'keys' | 'logs' | 'prompts';
+type TabType = 'stats' | 'users' | 'keys' | 'logs' | 'prompts' | 'requestLogs';
 
 const ROLE_LABELS: Record<UserRole, string> = {
   admin: '管理员',
@@ -31,9 +32,83 @@ const ROLE_LABELS: Record<UserRole, string> = {
   reviewer: '审核员',
 };
 
+const DEFAULT_KEY_MODEL_ID = 'gpt-3.5-turbo';
+
+const createEmptyModelConfig = (): ApiKeyModelConfig => ({
+  model_id: '',
+  use_for_generation: false,
+  use_for_indexing: false,
+});
+
+const createDefaultModelConfig = (): ApiKeyModelConfig => ({
+  model_id: DEFAULT_KEY_MODEL_ID,
+  use_for_generation: true,
+  use_for_indexing: true,
+});
+
+const normalizeKeyModelConfigs = (modelConfigs: ApiKeyModelConfig[]): ApiKeyModelConfig[] => {
+  const seen = new Set<string>();
+  const cleaned = modelConfigs.reduce<ApiKeyModelConfig[]>((accumulator, config) => {
+    const modelId = config.model_id.trim();
+    if (!modelId || seen.has(modelId)) {
+      return accumulator;
+    }
+    seen.add(modelId);
+    accumulator.push({ ...config, model_id: modelId });
+    return accumulator;
+  }, []);
+
+  if (!cleaned.length) {
+    return [];
+  }
+
+  let hasGenerationModel = false;
+  let hasIndexModel = false;
+  const normalized = cleaned.map((config) => {
+    const nextConfig = { ...config };
+
+    if (nextConfig.use_for_generation) {
+      if (hasGenerationModel) {
+        nextConfig.use_for_generation = false;
+      } else {
+        hasGenerationModel = true;
+      }
+    }
+
+    if (nextConfig.use_for_indexing) {
+      if (hasIndexModel) {
+        nextConfig.use_for_indexing = false;
+      } else {
+        hasIndexModel = true;
+      }
+    }
+
+    return nextConfig;
+  });
+
+  if (!hasGenerationModel) {
+    normalized[0].use_for_generation = true;
+  }
+  if (!hasIndexModel) {
+    const generationIndex = normalized.findIndex((config) => config.use_for_generation);
+    normalized[generationIndex >= 0 ? generationIndex : 0].use_for_indexing = true;
+  }
+
+  return normalized;
+};
+
+const createEmptyKeyForm = (): ApiKeyConfigCreate => ({
+  provider: '',
+  api_key: '',
+  base_url: '',
+  model_name: DEFAULT_KEY_MODEL_ID,
+  model_configs: [createDefaultModelConfig()],
+  is_default: false,
+});
+
 const Admin: React.FC = () => {
-  const navigate = useNavigate();
-  const { user, logout } = useAuth();
+  const { user } = useAuth();
+  const { setLayoutHeader } = useLayoutHeader();
   const [activeTab, setActiveTab] = useState<TabType>('stats');
 
   // 统计数据
@@ -62,13 +137,8 @@ const Admin: React.FC = () => {
   const [apiKeys, setApiKeys] = useState<ApiKeyConfig[]>([]);
   const [apiKeysLoading, setApiKeysLoading] = useState(false);
   const [showKeyModal, setShowKeyModal] = useState(false);
-  const [keyForm, setKeyForm] = useState<ApiKeyConfigCreate>({
-    provider: '',
-    api_key: '',
-    base_url: '',
-    model_name: 'gpt-3.5-turbo',
-    is_default: false,
-  });
+  const [editingKey, setEditingKey] = useState<ApiKeyConfig | null>(null);
+  const [keyForm, setKeyForm] = useState<ApiKeyConfigCreate>(createEmptyKeyForm());
 
   // 操作日志
   const [logs, setLogs] = useState<OperationLogSummary[]>([]);
@@ -82,7 +152,6 @@ const Admin: React.FC = () => {
   const [promptsLoading, setPromptsLoading] = useState(false);
   const [promptCategoryFilter, setPromptCategoryFilter] = useState<PromptCategory | ''>('');
   const [expandedPrompt, setExpandedPrompt] = useState<string | null>(null);
-  const [promptsPage, setPromptsPage] = useState(1);
 
   // 加载统计数据
   const loadStats = useCallback(async () => {
@@ -174,6 +243,55 @@ const Admin: React.FC = () => {
     if (activeTab === 'prompts') loadPrompts();
   }, [activeTab, loadPrompts]);
 
+  useEffect(() => {
+    const tabs: Array<{ key: TabType; label: string }> = [
+      { key: 'stats', label: '统计面板' },
+      { key: 'users', label: '用户管理' },
+      { key: 'keys', label: '密钥管理' },
+      { key: 'logs', label: '操作日志' },
+      { key: 'requestLogs', label: '请求记录' },
+      { key: 'prompts', label: '提示词配置' },
+    ];
+
+    setLayoutHeader({
+      content: (
+        <div className="flex min-w-0 items-center gap-4 py-2">
+          <h1 className="shrink-0 text-[18px] font-semibold tracking-tight text-slate-900">系统设置</h1>
+          <span className="h-5 w-px shrink-0 bg-slate-200" />
+          <span className="truncate text-sm text-slate-500">
+            统一维护用户、Provider、日志与提示词配置
+          </span>
+        </div>
+      ),
+      subContent: (
+        <div className="flex items-center gap-2 overflow-x-auto py-3">
+          {tabs.map((tab) => {
+            const active = tab.key === activeTab;
+            return (
+              <button
+                key={tab.key}
+                type="button"
+                onClick={() => setActiveTab(tab.key)}
+                className={[
+                  'whitespace-nowrap rounded-full border px-4 py-2 text-sm font-medium transition-colors',
+                  active
+                    ? 'border-sky-200 bg-sky-50 text-sky-700'
+                    : 'border-transparent bg-transparent text-slate-500 hover:border-slate-200 hover:bg-slate-50 hover:text-slate-800',
+                ].join(' ')}
+              >
+                {tab.label}
+              </button>
+            );
+          })}
+        </div>
+      ),
+    });
+
+    return () => {
+      setLayoutHeader(null);
+    };
+  }, [activeTab, setLayoutHeader]);
+
   // 用户操作
   const handleCreateUser = async () => {
     try {
@@ -264,18 +382,133 @@ const Admin: React.FC = () => {
   };
 
   // API Key 操作
-  const handleCreateApiKey = async () => {
+  const closeKeyModal = () => {
+    setShowKeyModal(false);
+    resetKeyForm();
+  };
+
+  const openCreateKeyModal = () => {
+    setEditingKey(null);
+    resetKeyForm();
+    setShowKeyModal(true);
+  };
+
+  const openEditKeyModal = (key: ApiKeyConfig) => {
+    setEditingKey(key);
+    setKeyForm({
+      provider: key.provider,
+      api_key: '',
+      base_url: key.base_url || '',
+      model_name: key.generation_model_name || key.model_name,
+      model_configs: key.model_configs.length
+        ? key.model_configs.map((config) => ({ ...config }))
+        : [
+            {
+              model_id: key.model_name,
+              use_for_generation: true,
+              use_for_indexing: true,
+            },
+          ],
+      is_default: key.is_default,
+    });
+    setShowKeyModal(true);
+  };
+
+  const handleSaveApiKey = async () => {
+    const normalizedModelConfigs = normalizeKeyModelConfigs(keyForm.model_configs);
+
+    if (!keyForm.provider.trim()) {
+      alert('请输入提供商名称');
+      return;
+    }
+    if (!editingKey && !keyForm.api_key.trim()) {
+      alert('请输入 API Key');
+      return;
+    }
+    if (!normalizedModelConfigs.length) {
+      alert('请至少配置一个模型 ID');
+      return;
+    }
+
+    const modelName = normalizedModelConfigs.find((config) => config.use_for_generation)?.model_id
+      || normalizedModelConfigs[0].model_id;
+
     try {
       setSaving(true);
-      await adminApi.createApiKey(keyForm);
-      setShowKeyModal(false);
-      resetKeyForm();
+
+      if (editingKey) {
+        const payload: ApiKeyConfigUpdate = {
+          provider: keyForm.provider.trim(),
+          api_key: keyForm.api_key.trim() || undefined,
+          base_url: keyForm.base_url?.trim() ?? '',
+          model_name: modelName,
+          model_configs: normalizedModelConfigs,
+          is_default: !!keyForm.is_default,
+        };
+        await adminApi.updateApiKey(editingKey.id, payload);
+      } else {
+        await adminApi.createApiKey({
+          provider: keyForm.provider.trim(),
+          api_key: keyForm.api_key.trim(),
+          base_url: keyForm.base_url?.trim() || undefined,
+          model_name: modelName,
+          model_configs: normalizedModelConfigs,
+          is_default: !!keyForm.is_default,
+        });
+      }
+
+      closeKeyModal();
       loadApiKeys();
     } catch (err: any) {
-      alert(err.response?.data?.detail || '创建 API Key 失败');
+      alert(err.response?.data?.detail || (editingKey ? '更新 API Key 失败' : '创建 API Key 失败'));
     } finally {
       setSaving(false);
     }
+  };
+
+  const handleModelIdChange = (index: number, modelId: string) => {
+    setKeyForm((previous) => ({
+      ...previous,
+      model_configs: previous.model_configs.map((config, currentIndex) => (
+        currentIndex === index ? { ...config, model_id: modelId } : config
+      )),
+    }));
+  };
+
+  const handleModelUsageChange = (
+    index: number,
+    field: 'use_for_generation' | 'use_for_indexing',
+    checked: boolean,
+  ) => {
+    setKeyForm((previous) => ({
+      ...previous,
+      model_configs: previous.model_configs.map((config, currentIndex) => {
+        if (currentIndex === index) {
+          return { ...config, [field]: checked };
+        }
+        if (checked) {
+          return { ...config, [field]: false };
+        }
+        return config;
+      }),
+    }));
+  };
+
+  const handleAddModelConfig = () => {
+    setKeyForm((previous) => ({
+      ...previous,
+      model_configs: [...previous.model_configs, createEmptyModelConfig()],
+    }));
+  };
+
+  const handleRemoveModelConfig = (index: number) => {
+    setKeyForm((previous) => {
+      const nextModelConfigs = previous.model_configs.filter((_, currentIndex) => currentIndex !== index);
+      return {
+        ...previous,
+        model_configs: nextModelConfigs.length ? nextModelConfigs : [createEmptyModelConfig()],
+      };
+    });
   };
 
   const handleDeleteApiKey = async (id: string) => {
@@ -299,13 +532,8 @@ const Admin: React.FC = () => {
   };
 
   const resetKeyForm = () => {
-    setKeyForm({
-      provider: '',
-      api_key: '',
-      base_url: '',
-      model_name: 'gpt-3.5-turbo',
-      is_default: false,
-    });
+    setEditingKey(null);
+    setKeyForm(createEmptyKeyForm());
   };
 
   // 日志筛选
@@ -317,11 +545,6 @@ const Admin: React.FC = () => {
   const formatDate = (dateStr: string) => {
     const date = new Date(dateStr);
     return date.toLocaleString('zh-CN');
-  };
-
-  const handleLogout = () => {
-    logout();
-    navigate('/login');
   };
 
   // 统计卡片组件
@@ -342,61 +565,9 @@ const Admin: React.FC = () => {
   );
 
   return (
-    <div className="min-h-screen bg-gray-50">
-      {/* 顶部导航栏 */}
-      <header className="bg-white shadow-sm">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex justify-between items-center h-16">
-            <div className="flex items-center space-x-4">
-              <button
-                onClick={() => navigate('/')}
-                className="text-gray-500 hover:text-gray-700"
-              >
-                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 19l-7-7m0 0l7-7m-7 7h18" />
-                </svg>
-              </button>
-              <h1 className="text-xl font-bold text-gray-900">后台管理</h1>
-            </div>
-            <div className="flex items-center space-x-4">
-              <span className="text-sm text-gray-600">{user?.username}</span>
-              <button
-                onClick={handleLogout}
-                className="inline-flex items-center px-3 py-1.5 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50"
-              >
-                退出登录
-              </button>
-            </div>
-          </div>
-        </div>
-      </header>
-
-      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        {/* Tab 导航 */}
-        <div className="border-b border-gray-200 mb-6">
-          <nav className="-mb-px flex space-x-8">
-            {[
-              { key: 'stats', label: '统计面板' },
-              { key: 'users', label: '用户管理' },
-              { key: 'keys', label: '密钥管理' },
-              { key: 'logs', label: '操作日志' },
-              { key: 'prompts', label: '提示词配置' },
-            ].map((tab) => (
-              <button
-                key={tab.key}
-                onClick={() => setActiveTab(tab.key as TabType)}
-                className={`py-4 px-1 border-b-2 font-medium text-sm ${
-                  activeTab === tab.key
-                    ? 'border-blue-500 text-blue-600'
-                    : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
-                }`}
-              >
-                {tab.label}
-              </button>
-            ))}
-          </nav>
-        </div>
-
+    <>
+      <div className="min-h-full bg-gray-50">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         {/* 统计面板 */}
         {activeTab === 'stats' && (
           <div>
@@ -598,12 +769,12 @@ const Admin: React.FC = () => {
         {activeTab === 'keys' && (
           <div>
             <div className="flex justify-between items-center mb-6">
-              <h2 className="text-lg font-medium text-gray-900">API Key 列表</h2>
+              <div>
+                <h2 className="text-lg font-medium text-gray-900">API Key 列表</h2>
+                <p className="text-sm text-gray-500 mt-1">单个提供商可配置多个模型，并分别指定生成模型与索引模型。</p>
+              </div>
               <button
-                onClick={() => {
-                  resetKeyForm();
-                  setShowKeyModal(true);
-                }}
+                onClick={openCreateKeyModal}
                 className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md text-white bg-blue-600 hover:bg-blue-700"
               >
                 <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -628,7 +799,7 @@ const Admin: React.FC = () => {
                     <tr>
                       <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">提供商</th>
                       <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">API Key</th>
-                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">模型</th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">模型配置</th>
                       <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">状态</th>
                       <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">操作</th>
                     </tr>
@@ -636,10 +807,33 @@ const Admin: React.FC = () => {
                   <tbody className="bg-white divide-y divide-gray-200">
                     {apiKeys.map((key) => (
                       <tr key={key.id}>
-                        <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">{key.provider}</td>
-                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 font-mono">{key.api_key_masked}</td>
-                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{key.model_name}</td>
-                        <td className="px-6 py-4 whitespace-nowrap">
+                        <td className="px-6 py-4 align-top text-sm font-medium text-gray-900">{key.provider}</td>
+                        <td className="px-6 py-4 align-top text-sm text-gray-500 font-mono">{key.api_key_masked}</td>
+                        <td className="px-6 py-4 align-top text-sm text-gray-500">
+                          <div className="space-y-2">
+                            <div className="text-sm text-gray-900">
+                              <span className="font-medium">生成：</span>
+                              {key.generation_model_name}
+                            </div>
+                            <div className="text-sm text-gray-900">
+                              <span className="font-medium">索引：</span>
+                              {key.index_model_name}
+                            </div>
+                            <div className="flex flex-wrap gap-2">
+                              {key.model_configs.map((modelConfig) => (
+                                <span
+                                  key={`${key.id}-${modelConfig.model_id}`}
+                                  className="inline-flex items-center gap-1 rounded-full bg-gray-100 px-2.5 py-1 text-xs text-gray-700"
+                                >
+                                  <span>{modelConfig.model_id}</span>
+                                  {modelConfig.use_for_generation && <span className="text-blue-600">生成</span>}
+                                  {modelConfig.use_for_indexing && <span className="text-emerald-600">索引</span>}
+                                </span>
+                              ))}
+                            </div>
+                          </div>
+                        </td>
+                        <td className="px-6 py-4 align-top whitespace-nowrap">
                           {key.is_default ? (
                             <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800">
                               默认
@@ -650,21 +844,29 @@ const Admin: React.FC = () => {
                             </span>
                           )}
                         </td>
-                        <td className="px-6 py-4 whitespace-nowrap text-sm space-x-2">
-                          {!key.is_default && (
+                        <td className="px-6 py-4 align-top whitespace-nowrap text-sm">
+                          <div className="flex items-center gap-3">
                             <button
-                              onClick={() => handleSetDefaultKey(key.id)}
-                              className="text-blue-600 hover:text-blue-900"
+                              onClick={() => openEditKeyModal(key)}
+                              className="text-gray-700 hover:text-gray-900"
                             >
-                              设为默认
+                              修改
                             </button>
-                          )}
-                          <button
-                            onClick={() => handleDeleteApiKey(key.id)}
-                            className="text-red-600 hover:text-red-900"
-                          >
-                            删除
-                          </button>
+                            {!key.is_default && (
+                              <button
+                                onClick={() => handleSetDefaultKey(key.id)}
+                                className="text-blue-600 hover:text-blue-900"
+                              >
+                                设为默认
+                              </button>
+                            )}
+                            <button
+                              onClick={() => handleDeleteApiKey(key.id)}
+                              className="text-red-600 hover:text-red-900"
+                            >
+                              删除
+                            </button>
+                          </div>
                         </td>
                       </tr>
                     ))}
@@ -925,7 +1127,11 @@ const Admin: React.FC = () => {
             )}
           </div>
         )}
-      </main>
+
+        {/* 请求记录 */}
+        {activeTab === 'requestLogs' && <RequestLogsTab />}
+      </div>
+      </div>
 
       {/* 用户创建/编辑弹窗 */}
       {showUserModal && (
@@ -1049,57 +1255,108 @@ const Admin: React.FC = () => {
         </div>
       )}
 
-      {/* API Key 创建弹窗 */}
+      {/* API Key 创建/修改弹窗 */}
       {showKeyModal && (
         <div className="fixed inset-0 z-50 overflow-y-auto">
           <div className="flex min-h-screen items-center justify-center p-4">
-            <div className="fixed inset-0 bg-black bg-opacity-50" onClick={() => setShowKeyModal(false)}></div>
-            <div className="relative bg-white rounded-lg shadow-xl max-w-md w-full p-6">
-              <h3 className="text-lg font-semibold text-gray-900 mb-4">新增 API Key</h3>
-              <div className="space-y-4">
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">提供商</label>
-                  <input
-                    type="text"
-                    value={keyForm.provider}
-                    onChange={(e) => setKeyForm({ ...keyForm, provider: e.target.value })}
-                    placeholder="如: OpenAI, Azure"
-                    className="w-full px-3 py-2 border border-gray-300 rounded-md"
-                  />
+            <div className="fixed inset-0 bg-black bg-opacity-50" onClick={closeKeyModal}></div>
+            <div className="relative bg-white rounded-lg shadow-xl max-w-3xl w-full p-6">
+              <h3 className="text-lg font-semibold text-gray-900 mb-2">{editingKey ? '修改 API Key' : '新增 API Key'}</h3>
+              <p className="text-sm text-gray-500 mb-6">可为同一提供商维护多个模型 ID，并分别指定生成模型与索引模型。</p>
+              <div className="space-y-5">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">提供商</label>
+                    <input
+                      type="text"
+                      value={keyForm.provider}
+                      onChange={(e) => setKeyForm({ ...keyForm, provider: e.target.value })}
+                      placeholder="如: OpenAI, Azure"
+                      className="w-full px-3 py-2 border border-gray-300 rounded-md"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Base URL (可选)</label>
+                    <input
+                      type="text"
+                      value={keyForm.base_url || ''}
+                      onChange={(e) => setKeyForm({ ...keyForm, base_url: e.target.value })}
+                      placeholder="自定义 API 地址"
+                      className="w-full px-3 py-2 border border-gray-300 rounded-md"
+                    />
+                  </div>
                 </div>
+
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">API Key</label>
                   <input
                     type="password"
                     value={keyForm.api_key}
                     onChange={(e) => setKeyForm({ ...keyForm, api_key: e.target.value })}
+                    placeholder={editingKey ? '留空表示保持当前密钥不变' : '请输入 API Key'}
                     className="w-full px-3 py-2 border border-gray-300 rounded-md"
                   />
                 </div>
+
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Base URL (可选)</label>
-                  <input
-                    type="text"
-                    value={keyForm.base_url || ''}
-                    onChange={(e) => setKeyForm({ ...keyForm, base_url: e.target.value })}
-                    placeholder="自定义 API 地址"
-                    className="w-full px-3 py-2 border border-gray-300 rounded-md"
-                  />
+                  <div className="flex items-center justify-between mb-3">
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700">模型配置</label>
+                      <p className="text-xs text-gray-500 mt-1">保存时会自动保证只有一个生成模型和一个索引模型；若未勾选，则默认取第一条模型。</p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={handleAddModelConfig}
+                      className="inline-flex items-center px-3 py-1.5 text-sm font-medium rounded-md border border-gray-300 text-gray-700 hover:bg-gray-50"
+                    >
+                      新增模型
+                    </button>
+                  </div>
+                  <div className="space-y-3">
+                    {keyForm.model_configs.map((modelConfig, index) => (
+                      <div key={`model-config-${index}`} className="grid grid-cols-1 md:grid-cols-[minmax(0,1fr)_110px_110px_72px] gap-3 items-center rounded-lg border border-gray-200 p-3">
+                        <input
+                          type="text"
+                          value={modelConfig.model_id}
+                          onChange={(e) => handleModelIdChange(index, e.target.value)}
+                          placeholder="请输入模型 ID"
+                          className="w-full px-3 py-2 border border-gray-300 rounded-md"
+                        />
+                        <label className="flex items-center justify-center gap-2 text-sm text-gray-700">
+                          <input
+                            type="checkbox"
+                            checked={modelConfig.use_for_generation}
+                            onChange={(e) => handleModelUsageChange(index, 'use_for_generation', e.target.checked)}
+                            className="h-4 w-4 text-blue-600 border-gray-300 rounded"
+                          />
+                          生成
+                        </label>
+                        <label className="flex items-center justify-center gap-2 text-sm text-gray-700">
+                          <input
+                            type="checkbox"
+                            checked={modelConfig.use_for_indexing}
+                            onChange={(e) => handleModelUsageChange(index, 'use_for_indexing', e.target.checked)}
+                            className="h-4 w-4 text-emerald-600 border-gray-300 rounded"
+                          />
+                          索引
+                        </label>
+                        <button
+                          type="button"
+                          onClick={() => handleRemoveModelConfig(index)}
+                          className="text-sm text-red-600 hover:text-red-900"
+                        >
+                          删除
+                        </button>
+                      </div>
+                    ))}
+                  </div>
                 </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">默认模型</label>
-                  <input
-                    type="text"
-                    value={keyForm.model_name || ''}
-                    onChange={(e) => setKeyForm({ ...keyForm, model_name: e.target.value })}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-md"
-                  />
-                </div>
+
                 <div className="flex items-center">
                   <input
                     type="checkbox"
                     id="isDefault"
-                    checked={keyForm.is_default}
+                    checked={!!keyForm.is_default}
                     onChange={(e) => setKeyForm({ ...keyForm, is_default: e.target.checked })}
                     className="h-4 w-4 text-blue-600 border-gray-300 rounded"
                   />
@@ -1108,19 +1365,415 @@ const Admin: React.FC = () => {
               </div>
               <div className="flex justify-end space-x-3 mt-6">
                 <button
-                  onClick={() => setShowKeyModal(false)}
+                  onClick={closeKeyModal}
                   className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50"
                 >
                   取消
                 </button>
                 <button
-                  onClick={handleCreateApiKey}
-                  disabled={saving || !keyForm.provider || !keyForm.api_key}
+                  onClick={handleSaveApiKey}
+                  disabled={saving || !keyForm.provider.trim() || (!editingKey && !keyForm.api_key.trim()) || !keyForm.model_configs.some((config) => config.model_id.trim())}
                   className="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-md hover:bg-blue-700 disabled:opacity-50"
                 >
-                  {saving ? '创建中...' : '创建'}
+                  {saving ? (editingKey ? '保存中...' : '创建中...') : (editingKey ? '保存修改' : '创建')}
                 </button>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+    </>
+  );
+};
+
+// 请求记录标签页组件
+const RequestLogsTab: React.FC = () => {
+  const [logs, setLogs] = useState<any[]>([]);
+  const [stats, setStats] = useState<any>(null);
+  const [loading, setLoading] = useState(true);
+  const [selectedLog, setSelectedLog] = useState<any>(null);
+  
+  const [filters, setFilters] = useState<any>({
+    page: 1,
+    page_size: 20,
+  });
+  
+  const [totalPages, setTotalPages] = useState(1);
+  const [total, setTotal] = useState(0);
+
+  const loadLogs = useCallback(async () => {
+    try {
+      setLoading(true);
+      const response = await requestLogApi.list(filters);
+      setLogs(response.items);
+      setTotal(response.total);
+      setTotalPages(response.total_pages);
+    } catch (err) {
+      console.error('加载请求日志失败:', err);
+    } finally {
+      setLoading(false);
+    }
+  }, [filters]);
+
+  const loadStats = useCallback(async () => {
+    try {
+      const statsData = await requestLogApi.getStats();
+      setStats(statsData);
+    } catch (err) {
+      console.error('加载统计数据失败:', err);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadLogs();
+    loadStats();
+  }, [loadLogs, loadStats]);
+
+  const formatTime = (dateStr: string) => {
+    const date = new Date(dateStr);
+    return date.toLocaleString('zh-CN', {
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+    });
+  };
+
+  const formatDuration = (ms: number) => {
+    if (ms < 1000) return `${ms}ms`;
+    return `${(ms / 1000).toFixed(2)}s`;
+  };
+
+  const getStatusColor = (code: number) => {
+    if (code >= 200 && code < 300) return 'text-green-600 bg-green-100';
+    if (code >= 400 && code < 500) return 'text-yellow-600 bg-yellow-100';
+    if (code >= 500) return 'text-red-600 bg-red-100';
+    return 'text-gray-600 bg-gray-100';
+  };
+
+  const getMethodColor = (method: string) => {
+    switch (method.toUpperCase()) {
+      case 'GET': return 'text-blue-600 bg-blue-100';
+      case 'POST': return 'text-green-600 bg-green-100';
+      case 'PUT': return 'text-yellow-600 bg-yellow-100';
+      case 'DELETE': return 'text-red-600 bg-red-100';
+      default: return 'text-gray-600 bg-gray-100';
+    }
+  };
+
+  return (
+    <div>
+      {/* 统计卡片 */}
+      {stats && (
+        <div className="grid grid-cols-1 md:grid-cols-5 gap-4 mb-6">
+          <div className="bg-white rounded-lg shadow p-4">
+            <p className="text-sm text-gray-500">总请求数</p>
+            <p className="text-2xl font-bold text-gray-900">{stats.total_requests}</p>
+          </div>
+          <div className="bg-white rounded-lg shadow p-4">
+            <p className="text-sm text-gray-500">成功率</p>
+            <p className="text-2xl font-bold text-green-600">{stats.success_rate.toFixed(1)}%</p>
+          </div>
+          <div className="bg-white rounded-lg shadow p-4">
+            <p className="text-sm text-gray-500">平均耗时</p>
+            <p className="text-2xl font-bold text-gray-900">{formatDuration(stats.avg_duration_ms)}</p>
+          </div>
+          <div className="bg-white rounded-lg shadow p-4">
+            <p className="text-sm text-gray-500">客户端错误</p>
+            <p className="text-2xl font-bold text-yellow-600">{stats.client_errors}</p>
+          </div>
+          <div className="bg-white rounded-lg shadow p-4">
+            <p className="text-sm text-gray-500">服务端错误</p>
+            <p className="text-2xl font-bold text-red-600">{stats.server_errors}</p>
+          </div>
+        </div>
+      )}
+
+      {/* 过滤器 */}
+      <div className="bg-white rounded-lg shadow mb-6 p-4">
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">请求方法</label>
+            <select
+              value={filters.method || ''}
+              onChange={(e) => setFilters({ ...filters, method: e.target.value || undefined, page: 1 })}
+              className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+            >
+              <option value="">全部</option>
+              <option value="GET">GET</option>
+              <option value="POST">POST</option>
+              <option value="PUT">PUT</option>
+              <option value="DELETE">DELETE</option>
+            </select>
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">状态码</label>
+            <select
+              value={filters.status_code || ''}
+              onChange={(e) => setFilters({ ...filters, status_code: e.target.value ? parseInt(e.target.value) : undefined, page: 1 })}
+              className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+            >
+              <option value="">全部</option>
+              <option value="200">2xx 成功</option>
+              <option value="400">4xx 客户端错误</option>
+              <option value="500">5xx 服务端错误</option>
+            </select>
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">路径搜索</label>
+            <input
+              type="text"
+              value={filters.path || ''}
+              onChange={(e) => setFilters({ ...filters, path: e.target.value || undefined, page: 1 })}
+              placeholder="输入路径关键词"
+              className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+            />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">错误过滤</label>
+            <select
+              value={filters.has_error === undefined ? '' : filters.has_error ? 'true' : 'false'}
+              onChange={(e) => setFilters({ 
+                ...filters, 
+                has_error: e.target.value === '' ? undefined : e.target.value === 'true',
+                page: 1 
+              })}
+              className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+            >
+              <option value="">全部</option>
+              <option value="true">仅错误</option>
+              <option value="false">仅成功</option>
+            </select>
+          </div>
+        </div>
+      </div>
+
+      {/* 日志列表 */}
+      <div className="bg-white rounded-lg shadow">
+        {loading ? (
+          <div className="flex justify-center py-12">
+            <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
+          </div>
+        ) : logs.length === 0 ? (
+          <div className="text-center py-12 text-gray-500">
+            暂无请求记录
+          </div>
+        ) : (
+          <>
+            <div className="overflow-x-auto">
+              <table className="min-w-full divide-y divide-gray-200">
+                <thead className="bg-gray-50">
+                  <tr>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">时间</th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">方法</th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">路径</th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">状态码</th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">耗时</th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">用户</th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">操作</th>
+                  </tr>
+                </thead>
+                <tbody className="bg-white divide-y divide-gray-200">
+                  {logs.map((log) => (
+                    <tr key={log.id} className="hover:bg-gray-50">
+                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                        {formatTime(log.created_at)}
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap">
+                        <span className={`px-2 py-1 text-xs font-medium rounded ${getMethodColor(log.method)}`}>
+                          {log.method}
+                        </span>
+                      </td>
+                      <td className="px-6 py-4 text-sm text-gray-900 max-w-xs truncate" title={log.path}>
+                        {log.path}
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap">
+                        <span className={`px-2 py-1 text-xs font-medium rounded ${getStatusColor(log.status_code)}`}>
+                          {log.status_code}
+                        </span>
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                        {formatDuration(log.duration_ms)}
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                        {log.username || '-'}
+                      </td>
+                      <td className="px-6 py-4 whitespace-nowrap text-sm">
+                        <button
+                          onClick={() => setSelectedLog(log)}
+                          className="text-blue-600 hover:text-blue-900"
+                        >
+                          查看详情
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            {/* 分页 */}
+            <div className="bg-white px-4 py-3 flex items-center justify-between border-t border-gray-200 sm:px-6">
+              <div className="flex-1 flex justify-between sm:hidden">
+                <button
+                  onClick={() => setFilters({ ...filters, page: (filters.page || 1) - 1 })}
+                  disabled={(filters.page || 1) <= 1}
+                  className="relative inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 disabled:opacity-50"
+                >
+                  上一页
+                </button>
+                <button
+                  onClick={() => setFilters({ ...filters, page: (filters.page || 1) + 1 })}
+                  disabled={(filters.page || 1) >= totalPages}
+                  className="ml-3 relative inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 disabled:opacity-50"
+                >
+                  下一页
+                </button>
+              </div>
+              <div className="hidden sm:flex-1 sm:flex sm:items-center sm:justify-between">
+                <div>
+                  <p className="text-sm text-gray-700">
+                    显示第 <span className="font-medium">{((filters.page || 1) - 1) * (filters.page_size || 20) + 1}</span> 到{' '}
+                    <span className="font-medium">{Math.min((filters.page || 1) * (filters.page_size || 20), total)}</span> 条，
+                    共 <span className="font-medium">{total}</span> 条记录
+                  </p>
+                </div>
+                <div>
+                  <nav className="relative z-0 inline-flex rounded-md shadow-sm -space-x-px">
+                    <button
+                      onClick={() => setFilters({ ...filters, page: (filters.page || 1) - 1 })}
+                      disabled={(filters.page || 1) <= 1}
+                      className="relative inline-flex items-center px-2 py-2 rounded-l-md border border-gray-300 bg-white text-sm font-medium text-gray-500 hover:bg-gray-50 disabled:opacity-50"
+                    >
+                      上一页
+                    </button>
+                    {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
+                      let pageNum: number;
+                      if (totalPages <= 5) {
+                        pageNum = i + 1;
+                      } else {
+                        const currentPage = filters.page || 1;
+                        if (currentPage <= 3) {
+                          pageNum = i + 1;
+                        } else if (currentPage >= totalPages - 2) {
+                          pageNum = totalPages - 4 + i;
+                        } else {
+                          pageNum = currentPage - 2 + i;
+                        }
+                      }
+                      return (
+                        <button
+                          key={pageNum}
+                          onClick={() => setFilters({ ...filters, page: pageNum })}
+                          className={`relative inline-flex items-center px-4 py-2 border text-sm font-medium ${
+                            pageNum === (filters.page || 1)
+                              ? 'z-10 bg-blue-50 border-blue-500 text-blue-600'
+                              : 'bg-white border-gray-300 text-gray-500 hover:bg-gray-50'
+                          }`}
+                        >
+                          {pageNum}
+                        </button>
+                      );
+                    })}
+                    <button
+                      onClick={() => setFilters({ ...filters, page: (filters.page || 1) + 1 })}
+                      disabled={(filters.page || 1) >= totalPages}
+                      className="relative inline-flex items-center px-2 py-2 rounded-r-md border border-gray-300 bg-white text-sm font-medium text-gray-500 hover:bg-gray-50 disabled:opacity-50"
+                    >
+                      下一页
+                    </button>
+                  </nav>
+                </div>
+              </div>
+            </div>
+          </>
+        )}
+      </div>
+
+      {/* 详情弹窗 */}
+      {selectedLog && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-lg max-w-4xl w-full max-h-[90vh] overflow-hidden flex flex-col">
+            <div className="px-6 py-4 border-b border-gray-200 flex justify-between items-center">
+              <h3 className="text-lg font-medium text-gray-900">请求详情</h3>
+              <button
+                onClick={() => setSelectedLog(null)}
+                className="text-gray-400 hover:text-gray-600"
+              >
+                <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+            <div className="flex-1 overflow-y-auto px-6 py-4 space-y-4">
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <p className="text-sm font-medium text-gray-500">请求方法</p>
+                  <p className="mt-1 text-sm text-gray-900">{selectedLog.method}</p>
+                </div>
+                <div>
+                  <p className="text-sm font-medium text-gray-500">状态码</p>
+                  <p className="mt-1 text-sm text-gray-900">{selectedLog.status_code}</p>
+                </div>
+                <div>
+                  <p className="text-sm font-medium text-gray-500">请求路径</p>
+                  <p className="mt-1 text-sm text-gray-900 break-all">{selectedLog.path}</p>
+                </div>
+                <div>
+                  <p className="text-sm font-medium text-gray-500">耗时</p>
+                  <p className="mt-1 text-sm text-gray-900">{formatDuration(selectedLog.duration_ms)}</p>
+                </div>
+                <div>
+                  <p className="text-sm font-medium text-gray-500">用户</p>
+                  <p className="mt-1 text-sm text-gray-900">{selectedLog.username || '未认证'}</p>
+                </div>
+                <div>
+                  <p className="text-sm font-medium text-gray-500">IP 地址</p>
+                  <p className="mt-1 text-sm text-gray-900">{selectedLog.ip_address || '-'}</p>
+                </div>
+                <div className="col-span-2">
+                  <p className="text-sm font-medium text-gray-500">时间</p>
+                  <p className="mt-1 text-sm text-gray-900">{formatTime(selectedLog.created_at)}</p>
+                </div>
+              </div>
+
+              {Object.keys(selectedLog.query_params).length > 0 && (
+                <div>
+                  <p className="text-sm font-medium text-gray-500 mb-2">查询参数</p>
+                  <pre className="bg-gray-50 rounded p-3 text-xs overflow-x-auto">
+                    {JSON.stringify(selectedLog.query_params, null, 2)}
+                  </pre>
+                </div>
+              )}
+
+              {selectedLog.request_body && (
+                <div>
+                  <p className="text-sm font-medium text-gray-500 mb-2">请求体</p>
+                  <pre className="bg-gray-50 rounded p-3 text-xs overflow-x-auto max-h-60">
+                    {JSON.stringify(selectedLog.request_body, null, 2)}
+                  </pre>
+                </div>
+              )}
+
+              {selectedLog.response_body && (
+                <div>
+                  <p className="text-sm font-medium text-gray-500 mb-2">响应体</p>
+                  <pre className="bg-gray-50 rounded p-3 text-xs overflow-x-auto max-h-60">
+                    {JSON.stringify(selectedLog.response_body, null, 2)}
+                  </pre>
+                </div>
+              )}
+
+              {selectedLog.error_message && (
+                <div>
+                  <p className="text-sm font-medium text-red-500 mb-2">错误信息</p>
+                  <pre className="bg-red-50 rounded p-3 text-xs overflow-x-auto text-red-900">
+                    {selectedLog.error_message}
+                  </pre>
+                </div>
+              )}
             </div>
           </div>
         </div>

@@ -54,6 +54,18 @@ class Chapter(Base):
         Text, nullable=True,
         comment="章节内容"
     )
+    rating_item: Mapped[str | None] = mapped_column(
+        Text, nullable=True,
+        comment="当前章节绑定的评分项原文或摘要"
+    )
+    chapter_role: Mapped[str | None] = mapped_column(
+        Text, nullable=True,
+        comment="当前章节主职责定位"
+    )
+    avoid_overlap: Mapped[str | None] = mapped_column(
+        Text, nullable=True,
+        comment="当前章节与其他章节的去重边界"
+    )
     status: Mapped[ChapterStatus] = mapped_column(
         Enum(ChapterStatus, name="chapter_status", native_enum=False, length=20),
         nullable=False,

@@ -12,8 +12,8 @@ import starlette.middleware.cors
 
 from .config import settings
 from .db.database import engine
-from .routers import config, document, outline, content, search, expand, auth, admin, projects, versions, chapters, comments, templates, knowledge
-from .middleware import AuditMiddleware
+from .routers import config, document, outline, content, search, expand, auth, admin, projects, versions, chapters, comments, templates, knowledge, request_logs
+from .middleware import AuditMiddleware, RequestLoggingMiddleware
 
 
 @asynccontextmanager
@@ -44,6 +44,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# 添加请求日志中间件
+app.add_middleware(RequestLoggingMiddleware)
+
 # 添加审计日志中间件
 app.add_middleware(AuditMiddleware)
 
@@ -62,6 +65,7 @@ app.include_router(outline.router)
 app.include_router(content.router)
 app.include_router(search.router)
 app.include_router(expand.router)
+app.include_router(request_logs.router)
 
 # 健康检查端点
 @app.get("/health")

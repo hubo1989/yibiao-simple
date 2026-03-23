@@ -5,7 +5,6 @@ import axios, { AxiosError } from 'axios';
 import type { User, LoginRequest, RegisterRequest, Token } from '../types/auth';
 import type { ProjectSummary, Project, ProjectCreate, ProjectProgress, ProjectMember } from '../types/project';
 import type {
-  VersionSummary,
   VersionResponse,
   VersionList,
   VersionDiffResponse,
@@ -16,10 +15,16 @@ import type {
   LockResponse,
   StatusUpdateResponse,
   ChapterStatus,
+  ProjectChapterListResponse,
 } from '../types/chapter';
 import type { Comment, CommentListResponse, CommentCreateRequest } from '../types/comment';
-import type { ProofreadResult } from '../types/proofread';
 import type { ConsistencyCheckResponse } from '../types/consistency';
+import type {
+  RatingChecklistResponse,
+  ClauseResponseRequest,
+  ClauseResponseResult,
+  ChapterReverseEnhanceResponse,
+} from '../types/bid';
 import type {
   AdminUser,
   AdminUserListResponse,
@@ -29,6 +34,7 @@ import type {
   ApiKeyConfig,
   ApiKeyConfigListResponse,
   ApiKeyConfigCreate,
+  ApiKeyConfigUpdate,
   OperationLogListResponse,
   OperationLogQuery,
   UsageStats,
@@ -37,13 +43,18 @@ import type {
   PromptResponse,
   PromptListResponse,
   PromptUpdate,
-  PromptVersionResponse,
   PromptVersionListResponse,
   PromptRollbackRequest,
   ProjectPromptConfig,
   ProjectPromptConfigListResponse,
   ProjectPromptOverride,
 } from '../types/prompt';
+import type {
+  RequestLog,
+  RequestLogListResponse,
+  RequestLogQuery,
+  RequestStats,
+} from '../types/requestLog';
 
 const API_BASE_URL = process.env.REACT_APP_API_URL || 'http://localhost:8000';
 
@@ -276,6 +287,7 @@ export interface AnalysisRequest {
   file_content: string;
   analysis_type: 'overview' | 'requirements';
   model_name?: string;
+  provider_config_id?: string;
 }
 
 export interface OutlineRequest {
@@ -285,6 +297,7 @@ export interface OutlineRequest {
   old_outline?: string;
   old_document?: string;
   model_name?: string;
+  provider_config_id?: string;
 }
 
 export interface ContentGenerationRequest {
@@ -298,13 +311,30 @@ export interface ChapterContentRequest {
   sibling_chapters?: any[];
   project_overview: string;
   model_name?: string;
+  provider_config_id?: string;
+}
+
+export interface ProviderModelsOption {
+  config_id: string;
+  provider: string;
+  models: string[];
+  default_model: string;
+  is_default: boolean;
+}
+
+export interface ProviderModelsResponse {
+  models: string[];
+  providers: ProviderModelsOption[];
+  default_provider_config_id?: string | null;
+  success: boolean;
+  message: string;
 }
 
 // 配置相关API
 export const configApi = {
   // 获取可用模型（从数据库读取配置，无需传参）
   getModels: () =>
-    api.post('/api/config/models'),
+    api.post<ProviderModelsResponse>('/api/config/models'),
 };
 
 // 文档相关API
@@ -344,7 +374,15 @@ export const documentApi = {
   },
 
   // 流式分析项目文档（保存到数据库）
-  analyzeProjectStream: (data: { project_id: string; analysis_type: 'overview' | 'requirements'; model_name?: string }, token?: string) => {
+  analyzeProjectStream: (
+    data: {
+      project_id: string;
+      analysis_type: 'overview' | 'requirements';
+      model_name?: string;
+      provider_config_id?: string;
+    },
+    token?: string,
+  ) => {
     return authenticatedFetch(`${API_BASE_URL}/api/document/analyze-project-stream`, {
       method: 'POST',
       headers: {
@@ -395,7 +433,7 @@ export const outlineApi = {
   },
 
   // 流式生成项目目录（保存到数据库）
-  generateProjectOutlineStream: (data: { project_id: string; model_name?: string }, token?: string) => {
+  generateProjectOutlineStream: (data: { project_id: string; model_name?: string; provider_config_id?: string }, token?: string) => {
     return authenticatedFetch(`${API_BASE_URL}/api/outline/generate-project-stream`, {
       method: 'POST',
       headers: {
@@ -403,6 +441,36 @@ export const outlineApi = {
       },
       body: JSON.stringify(data),
     }, token);
+  },
+
+  // 流式生成项目一级目录
+  generateProjectOutlineL1Stream: (data: { project_id: string; model_name?: string; provider_config_id?: string }, token?: string) => {
+    return authenticatedFetch(`${API_BASE_URL}/api/outline/generate-project-l1-stream`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(data),
+    }, token);
+  },
+
+  // 流式生成项目二三级目录
+  generateProjectOutlineL2L3Stream: (
+    data: { project_id: string; model_name?: string; provider_config_id?: string; outline_data?: any },
+    token?: string,
+  ) => {
+    return authenticatedFetch(`${API_BASE_URL}/api/outline/generate-project-l2l3-stream`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(data),
+    }, token);
+  },
+
+  getProjectChapters: async (projectId: string): Promise<ProjectChapterListResponse> => {
+    const response = await api.get<ProjectChapterListResponse>(`/api/outline/project-chapters/${projectId}`);
+    return response.data;
   },
 
 };
@@ -605,6 +673,34 @@ export const consistencyApi = {
     );
     return response.data;
   },
+
+  generateRatingChecklist: async (projectId: string): Promise<RatingChecklistResponse> => {
+    const response = await api.post<RatingChecklistResponse>(
+      `/api/projects/${projectId}/rating-response-checklist`
+    );
+    return response.data;
+  },
+
+  reverseEnhanceChapter: async (
+    projectId: string,
+    chapterId: string
+  ): Promise<ChapterReverseEnhanceResponse> => {
+    const response = await api.post<ChapterReverseEnhanceResponse>(
+      `/api/projects/${projectId}/chapters/${chapterId}/reverse-enhance`
+    );
+    return response.data;
+  },
+
+  generateClauseResponse: async (
+    projectId: string,
+    data: ClauseResponseRequest
+  ): Promise<ClauseResponseResult> => {
+    const response = await api.post<ClauseResponseResult>(
+      `/api/projects/${projectId}/clause-response`,
+      data
+    );
+    return response.data;
+  },
 };
 
 // 后台管理相关 API
@@ -653,6 +749,12 @@ export const adminApi = {
   // 创建 API Key
   createApiKey: async (data: ApiKeyConfigCreate): Promise<ApiKeyConfig> => {
     const response = await api.post<ApiKeyConfig>('/api/admin/api-keys', data);
+    return response.data;
+  },
+
+  // 更新 API Key
+  updateApiKey: async (configId: string, data: ApiKeyConfigUpdate): Promise<ApiKeyConfig> => {
+    const response = await api.put<ApiKeyConfig>(`/api/admin/api-keys/${configId}`, data);
     return response.data;
   },
 
@@ -748,6 +850,30 @@ export const promptApi = {
   // 删除项目级提示词覆盖
   deleteProjectPrompt: async (projectId: string, sceneKey: string): Promise<ProjectPromptConfig> => {
     const response = await api.delete<ProjectPromptConfig>(`/api/projects/${projectId}/prompts/${sceneKey}`);
+    return response.data;
+  },
+};
+
+// ==================== 请求日志 API ====================
+
+export const requestLogApi = {
+  // 获取请求日志列表
+  list: async (params?: RequestLogQuery): Promise<RequestLogListResponse> => {
+    const response = await api.get<RequestLogListResponse>('/api/request-logs', { params });
+    return response.data;
+  },
+
+  // 获取请求日志详情
+  get: async (logId: string): Promise<RequestLog> => {
+    const response = await api.get<RequestLog>(`/api/request-logs/${logId}`);
+    return response.data;
+  },
+
+  // 获取请求统计
+  getStats: async (startTime?: string, endTime?: string): Promise<RequestStats> => {
+    const response = await api.get<RequestStats>('/api/request-logs/stats/summary', {
+      params: { start_time: startTime, end_time: endTime },
+    });
     return response.data;
   },
 };

@@ -70,6 +70,17 @@ class TestProjectAnalysisRequestSchema:
         )
         assert request.project_id == "invalid-uuid"
 
+    def test_accepts_provider_config_id(self) -> None:
+        """支持传入指定 provider 配置"""
+        project_id = uuid.uuid4()
+        provider_id = uuid.uuid4()
+        request = ProjectAnalysisRequest(
+            project_id=str(project_id),
+            analysis_type=AnalysisType.OVERVIEW,
+            provider_config_id=str(provider_id),
+        )
+        assert request.provider_config_id == str(provider_id)
+
 
 class TestAnalysisTypeEnum:
     """测试 AnalysisType 枚举"""

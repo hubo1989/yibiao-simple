@@ -1,0 +1,3 @@
+[submodule "backend/PageIndex"]
+	path = backend/PageIndex
+	url = https://github.com/VectifyAI/PageIndex.git

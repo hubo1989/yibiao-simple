@@ -16,9 +16,6 @@ import type {
   ProofreadIssue,
   ProofreadResult,
   IssueSeverity,
-  IssueCategory,
-  ISSUE_SEVERITY_CONFIG,
-  ISSUE_CATEGORY_CONFIG,
 } from '../types/proofread';
 import {
   ISSUE_SEVERITY_CONFIG as severityConfig,

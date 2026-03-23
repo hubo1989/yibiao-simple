@@ -2,6 +2,7 @@
 import uuid
 
 import pytest
+from pydantic import ValidationError
 
 from app.utils.encryption import encryption_service
 
@@ -91,6 +92,66 @@ class TestApiKeyConfigModel:
         assert config.is_default is False
         assert config.base_url is None
 
+    def test_model_supports_multiple_model_configs(self) -> None:
+        """支持配置多个模型，并分别选择生成/索引用途"""
+        from app.models.api_key_config import ApiKeyConfig
+
+        config = ApiKeyConfig(
+            provider="openai",
+            api_key_encrypted="encrypted_key",
+            model_name="legacy-model",
+            is_default=False,
+        )
+        config.set_model_configs([
+            {
+                "model_id": "gpt-4.1",
+                "use_for_generation": True,
+                "use_for_indexing": False,
+            },
+            {
+                "model_id": "text-embedding-3-large",
+                "use_for_generation": False,
+                "use_for_indexing": True,
+            },
+        ])
+
+        assert config.model_name == "gpt-4.1"
+        assert config.get_generation_model_name() == "gpt-4.1"
+        assert config.get_index_model_name() == "text-embedding-3-large"
+        assert config.get_model_configs() == [
+            {
+                "model_id": "gpt-4.1",
+                "use_for_generation": True,
+                "use_for_indexing": False,
+            },
+            {
+                "model_id": "text-embedding-3-large",
+                "use_for_generation": False,
+                "use_for_indexing": True,
+            },
+        ]
+
+    def test_model_falls_back_to_legacy_model_name(self) -> None:
+        """旧数据未配置多模型时仍兼容"""
+        from app.models.api_key_config import ApiKeyConfig
+
+        config = ApiKeyConfig(
+            provider="anthropic",
+            api_key_encrypted="encrypted_key",
+            model_name="claude-3-7-sonnet",
+            is_default=False,
+        )
+
+        assert config.get_model_configs() == [
+            {
+                "model_id": "claude-3-7-sonnet",
+                "use_for_generation": True,
+                "use_for_indexing": True,
+            }
+        ]
+        assert config.get_generation_model_name() == "claude-3-7-sonnet"
+        assert config.get_index_model_name() == "claude-3-7-sonnet"
+
 
 class TestApiKeyConfigSchemas:
     """API Key 配置 Schema 测试"""
@@ -103,14 +164,27 @@ class TestApiKeyConfigSchemas:
             provider="openai",
             api_key="sk-test-key",
             base_url="https://api.openai.com/v1",
-            model_name="gpt-4",
+            model_configs=[
+                {
+                    "model_id": "gpt-4.1",
+                    "use_for_generation": True,
+                    "use_for_indexing": False,
+                },
+                {
+                    "model_id": "text-embedding-3-large",
+                    "use_for_generation": False,
+                    "use_for_indexing": True,
+                },
+            ],
             is_default=True,
         )
 
         assert data.provider == "openai"
         assert data.api_key == "sk-test-key"
         assert data.base_url == "https://api.openai.com/v1"
-        assert data.model_name == "gpt-4"
+        assert len(data.model_configs) == 2
+        assert data.generation_model_name == "gpt-4.1"
+        assert data.index_model_name == "text-embedding-3-large"
         assert data.is_default is True
 
     def test_create_schema_minimal(self) -> None:
@@ -126,7 +200,31 @@ class TestApiKeyConfigSchemas:
         assert data.api_key == "sk-ant-test"
         assert data.base_url is None
         assert data.model_name == "gpt-3.5-turbo"
+        assert data.generation_model_name == "gpt-3.5-turbo"
+        assert data.index_model_name == "gpt-3.5-turbo"
         assert data.is_default is False
+
+    def test_create_schema_rejects_multiple_generation_models(self) -> None:
+        """同一配置不能同时指定多个生成模型"""
+        from app.schemas.api_key_config import ApiKeyConfigCreate
+
+        with pytest.raises(ValidationError):
+            ApiKeyConfigCreate(
+                provider="openai",
+                api_key="sk-test-key",
+                model_configs=[
+                    {
+                        "model_id": "gpt-4.1",
+                        "use_for_generation": True,
+                        "use_for_indexing": False,
+                    },
+                    {
+                        "model_id": "gpt-4o",
+                        "use_for_generation": True,
+                        "use_for_indexing": False,
+                    },
+                ],
+            )
 
     def test_update_schema_all_optional(self) -> None:
         """测试更新 Schema 所有字段可选"""
@@ -138,6 +236,7 @@ class TestApiKeyConfigSchemas:
         assert data.api_key is None
         assert data.base_url is None
         assert data.model_name is None
+        assert data.model_configs is None
         assert data.is_default is None
 
     def test_response_schema(self) -> None:
@@ -155,6 +254,20 @@ class TestApiKeyConfigSchemas:
             api_key_masked="sk-t****1234",
             base_url="https://api.openai.com/v1",
             model_name="gpt-4",
+            model_configs=[
+                {
+                    "model_id": "gpt-4",
+                    "use_for_generation": True,
+                    "use_for_indexing": False,
+                },
+                {
+                    "model_id": "text-embedding-3-large",
+                    "use_for_generation": False,
+                    "use_for_indexing": True,
+                },
+            ],
+            generation_model_name="gpt-4",
+            index_model_name="text-embedding-3-large",
             is_default=True,
             created_by=user_id,
             created_at=now,
@@ -163,7 +276,51 @@ class TestApiKeyConfigSchemas:
 
         assert data.id == config_id
         assert data.api_key_masked == "sk-t****1234"
+        assert data.generation_model_name == "gpt-4"
+        assert data.index_model_name == "text-embedding-3-large"
         assert data.created_by == user_id
+
+
+class TestApiKeyConfigResponseTransform:
+    """API Key 配置响应转换测试"""
+
+    def test_config_to_response_includes_model_configs(self) -> None:
+        """响应转换包含多模型信息和用途摘要"""
+        from app.models.api_key_config import ApiKeyConfig
+        from app.routers.admin import config_to_response
+
+        from datetime import datetime, timezone
+
+        encrypted_key = encryption_service.encrypt("sk-test-api-key-12345678")
+        config = ApiKeyConfig(
+            id=uuid.uuid4(),
+            provider="openai",
+            api_key_encrypted=encrypted_key,
+            base_url="https://api.openai.com/v1",
+            model_name="gpt-4.1",
+            is_default=True,
+            created_at=datetime.now(timezone.utc),
+            updated_at=datetime.now(timezone.utc),
+        )
+        config.set_model_configs([
+            {
+                "model_id": "gpt-4.1",
+                "use_for_generation": True,
+                "use_for_indexing": False,
+            },
+            {
+                "model_id": "text-embedding-3-large",
+                "use_for_generation": False,
+                "use_for_indexing": True,
+            },
+        ])
+
+        response = config_to_response(config)
+
+        assert response.api_key_masked == "sk-t****5678"
+        assert response.generation_model_name == "gpt-4.1"
+        assert response.index_model_name == "text-embedding-3-large"
+        assert len(response.model_configs) == 2
 
 
 class TestMaskApiKey:

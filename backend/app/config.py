@@ -1,9 +1,10 @@
 """应用配置管理"""
 
 try:
-    from pydantic_settings import BaseSettings
+    from pydantic_settings import BaseSettings, SettingsConfigDict
 except ImportError:
     from pydantic import BaseSettings
+    SettingsConfigDict = dict  # type: ignore[assignment]
 from typing import Optional, List, Union
 import os
 import secrets
@@ -35,6 +36,11 @@ def parse_cors_origins(value: Union[str, List[str], None]) -> List[str]:
 
 class Settings(BaseSettings):
     """应用设置"""
+
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_parse_none_str="",
+    )
 
     app_name: str = "AI写标书助手"
     app_version: str = "2.0.0"
@@ -92,11 +98,6 @@ class Settings(BaseSettings):
         cors_env = os.getenv("CORS_ORIGINS")
         if cors_env:
             self.cors_origins = parse_cors_origins(cors_env)
-
-    class Config:
-        env_file = ".env"
-        env_parse_none_str = ""
-
 
 # 全局设置实例
 settings = Settings()

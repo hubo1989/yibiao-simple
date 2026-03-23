@@ -25,6 +25,9 @@ class ChapterUpdate(BaseModel):
     chapter_number: str | None = Field(None, min_length=1, max_length=50)
     title: str | None = Field(None, min_length=1, max_length=500)
     content: str | None = None
+    rating_item: str | None = None
+    chapter_role: str | None = None
+    avoid_overlap: str | None = None
     status: ChapterStatus | None = None
     order_index: int | None = Field(None, ge=0)
     locked_by: uuid.UUID | None = None
@@ -42,6 +45,9 @@ class ChapterResponse(ChapterBase):
     project_id: uuid.UUID
     parent_id: uuid.UUID | None
     content: str | None
+    rating_item: str | None = None
+    chapter_role: str | None = None
+    avoid_overlap: str | None = None
     status: ChapterStatus
     order_index: int
     locked_by: uuid.UUID | None
@@ -59,6 +65,9 @@ class ChapterSummary(BaseModel):
     parent_id: uuid.UUID | None
     chapter_number: str
     title: str
+    rating_item: str | None = None
+    chapter_role: str | None = None
+    avoid_overlap: str | None = None
     status: ChapterStatus
     order_index: int
     locked_by: uuid.UUID | None

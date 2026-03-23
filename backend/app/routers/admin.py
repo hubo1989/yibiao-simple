@@ -60,9 +60,9 @@ def mask_api_key(api_key: str) -> str:
 
 def config_to_response(config: ApiKeyConfig) -> ApiKeyConfigResponse:
     """将 ORM 模型转换为响应模型（Key 脱敏）"""
-    # 解密 API Key 后再脱敏
     decrypted_key = encryption_service.decrypt(config.api_key_encrypted)
     masked_key = mask_api_key(decrypted_key)
+    model_configs = config.get_model_configs()
 
     return ApiKeyConfigResponse(
         id=config.id,
@@ -70,6 +70,9 @@ def config_to_response(config: ApiKeyConfig) -> ApiKeyConfigResponse:
         api_key_masked=masked_key,
         base_url=config.base_url,
         model_name=config.model_name,
+        model_configs=model_configs,
+        generation_model_name=config.get_generation_model_name(),
+        index_model_name=config.get_index_model_name(),
         is_default=config.is_default,
         created_by=config.created_by,
         created_at=config.created_at,
@@ -105,6 +108,7 @@ async def create_api_key_config(
         is_default=data.is_default,
         created_by=current_user.id,
     )
+    new_config.set_model_configs([item.model_dump() for item in data.model_configs])
 
     db.add(new_config)
     await db.flush()
@@ -135,6 +139,59 @@ async def list_api_key_configs(
         items=[config_to_response(config) for config in configs],
         total=total,
     )
+
+
+@router.put("/api-keys/{config_id}", response_model=ApiKeyConfigResponse)
+async def update_api_key_config(
+    config_id: uuid.UUID,
+    data: ApiKeyConfigUpdate,
+    current_user: Annotated[User, Depends(require_admin)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """更新 API Key 配置（仅管理员）"""
+    result = await db.execute(
+        select(ApiKeyConfig).where(ApiKeyConfig.id == config_id)
+    )
+    config = result.scalar_one_or_none()
+
+    if not config:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="API Key 配置不存在",
+        )
+
+    if data.provider is not None:
+        config.provider = data.provider
+    if data.api_key is not None:
+        config.api_key_encrypted = encryption_service.encrypt(data.api_key)
+    if data.base_url is not None:
+        config.base_url = data.base_url or None
+    if data.model_configs is not None or data.model_name is not None:
+        if data.model_configs is not None:
+            config.set_model_configs([item.model_dump() for item in data.model_configs])
+        else:
+            config.set_model_configs([
+                {
+                    "model_id": data.model_name,
+                    "use_for_generation": True,
+                    "use_for_indexing": True,
+                }
+            ])
+
+    if data.is_default is not None:
+        if data.is_default:
+            result = await db.execute(
+                select(ApiKeyConfig).where(ApiKeyConfig.is_default == True)
+            )
+            existing_defaults = result.scalars().all()
+            for default_config in existing_defaults:
+                default_config.is_default = False
+        config.is_default = data.is_default
+
+    await db.flush()
+    await db.refresh(config)
+
+    return config_to_response(config)
 
 
 @router.delete("/api-keys/{config_id}", status_code=status.HTTP_204_NO_CONTENT)

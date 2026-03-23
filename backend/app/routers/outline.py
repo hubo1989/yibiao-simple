@@ -3,7 +3,10 @@
 import uuid
 import json
 import asyncio
+import logging
 from typing import Annotated, Any
+
+logger = logging.getLogger(__name__)
 
 from fastapi import APIRouter, HTTPException, Depends, status
 from sqlalchemy import select, delete, and_, exists, func
@@ -24,6 +27,7 @@ from ..models.version import ProjectVersion, ChangeType
 from ..db.database import get_db
 from ..services.openai_service import OpenAIService
 from ..services.prompt_service import PromptService
+from ..services.knowledge_retrieval_service import KnowledgeRetrievalService
 from ..utils import prompt_manager
 from ..utils.sse import sse_response
 from ..auth.dependencies import require_editor
@@ -44,7 +48,12 @@ async def generate_outline(
     try:
         # 创建OpenAI服务实例，从数据库加载配置
         openai_service = OpenAIService(db=db)
-        await openai_service._ensure_initialized()
+        if request.provider_config_id:
+            configured = await openai_service.use_config_by_id(request.provider_config_id)
+            if not configured:
+                raise HTTPException(status_code=404, detail="所选 Provider 配置不存在")
+        else:
+            await openai_service._ensure_initialized()
 
         if not openai_service.api_key:
             raise HTTPException(status_code=400, detail="请先配置OpenAI API密钥")
@@ -112,7 +121,12 @@ async def generate_outline_stream(
     try:
         # 创建OpenAI服务实例，从数据库加载配置
         openai_service = OpenAIService(db=db)
-        await openai_service._ensure_initialized()
+        if request.provider_config_id:
+            configured = await openai_service.use_config_by_id(request.provider_config_id)
+            if not configured:
+                raise HTTPException(status_code=404, detail="所选 Provider 配置不存在")
+        else:
+            await openai_service._ensure_initialized()
 
         if not openai_service.api_key:
             raise HTTPException(status_code=400, detail="请先配置OpenAI API密钥")
@@ -243,6 +257,9 @@ async def _create_chapters_from_outline(
             content=item.get(
                 "description"
             ),  # 描述暂时存到 content，后续生成内容时会覆盖
+            rating_item=item.get("rating_item"),
+            chapter_role=item.get("chapter_role"),
+            avoid_overlap=item.get("avoid_overlap"),
             status=ChapterStatus.PENDING,
             order_index=order_start + idx,
         )
@@ -261,6 +278,311 @@ async def _create_chapters_from_outline(
     return created_chapters
 
 
+@router.post("/generate-project-l1-stream")
+async def generate_project_outline_l1_stream(
+    request: ProjectOutlineRequest,
+    current_user: Annotated[User, Depends(require_editor)] = None,
+    db: Annotated[AsyncSession, Depends(get_db)] = None,
+):
+    """
+    流式生成项目一级目录结构，保存到 chapters 表
+
+    - 验证用户是项目的 editor 或 admin
+    - 只生成一级目录
+    """
+    try:
+        # 验证 project_id 格式
+        try:
+            project_uuid = uuid.UUID(request.project_id)
+        except ValueError:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="无效的项目ID格式",
+            )
+
+        # 验证用户权限
+        project, _ = await _verify_project_editor(project_uuid, current_user.id, db)
+
+        # 检查项目是否有分析结果
+        if not project.project_overview or not project.tech_requirements:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="项目尚未完成文档分析，请先分析招标文件",
+            )
+
+        # 创建OpenAI服务实例，从数据库加载配置
+        openai_service = OpenAIService(db=db, project_id=project_uuid)
+        if request.provider_config_id:
+            configured = await openai_service.use_config_by_id(request.provider_config_id)
+            if not configured:
+                raise HTTPException(status_code=404, detail="所选 Provider 配置不存在")
+        else:
+            await openai_service._ensure_initialized()
+
+        if not openai_service.api_key:
+            raise HTTPException(status_code=400, detail="请先配置OpenAI API密钥")
+
+        # 如果前端传了模型名称，覆盖默认模型
+        if request.model_name:
+            openai_service.set_model(request.model_name)
+
+        async def generate():
+            # 使用 prompt_manager 生成一级目录
+            system_prompt, user_prompt = prompt_manager.generate_outline_prompt(
+                project.project_overview,
+                project.tech_requirements,
+            )
+
+            messages = [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ]
+
+            collected_result = []
+            
+            # 流式返回目录生成结果
+            async for chunk in openai_service.stream_chat_completion(
+                messages, temperature=0.7
+            ):
+                collected_result.append(chunk)
+                yield f"data: {json.dumps({'chunk': chunk}, ensure_ascii=False)}\n\n"
+
+            # 发送结束信号
+            yield "data: [DONE]\n\n"
+
+            # 解析并保存到数据库
+            try:
+                full_content = "".join(collected_result)
+                
+                # 清理Markdown代码块格式
+                if "```json" in full_content:
+                    # 提取 ```json 和 ``` 之间的内容
+                    import re
+                    json_match = re.search(r'```json\s*(.*?)\s*```', full_content, re.DOTALL)
+                    if json_match:
+                        full_content = json_match.group(1)
+                elif "```" in full_content:
+                    # 提取 ``` 和 ``` 之间的内容
+                    import re
+                    json_match = re.search(r'```\s*(.*?)\s*```', full_content, re.DOTALL)
+                    if json_match:
+                        full_content = json_match.group(1)
+                
+                outline_data = json.loads(full_content.strip())
+                outline_items = outline_data.get("outline", [])
+
+                if outline_items:
+                    # 先删除项目现有的所有章节
+                    await db.execute(
+                        delete(Chapter).where(Chapter.project_id == project_uuid)
+                    )
+
+                    # 创建新章节
+                    created_chapters = await _create_chapters_from_outline(
+                        db, project_uuid, outline_items
+                    )
+
+                    # 创建版本快照
+                    version_number = await _get_next_version_number(db, project_uuid)
+                    snapshot_data = {
+                        "outline": outline_items,
+                        "total_chapters": len(created_chapters),
+                    }
+                    version = ProjectVersion(
+                        project_id=project_uuid,
+                        chapter_id=None,
+                        version_number=version_number,
+                        snapshot_data=snapshot_data,
+                        change_type=ChangeType.AI_GENERATE,
+                        change_summary="AI 生成一级目录",
+                        created_by=current_user.id,
+                    )
+                    db.add(version)
+                    await db.flush()
+                    await db.commit()
+
+            except Exception as e:
+                print(f"保存一级目录到数据库失败: {e}")
+                await db.rollback()
+
+        return sse_response(generate())
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"一级目录生成失败: {str(e)}",
+        )
+
+
+@router.post("/generate-project-l2l3-stream")
+async def generate_project_outline_l2l3_stream(
+    request: ProjectOutlineRequest,
+    current_user: Annotated[User, Depends(require_editor)] = None,
+    db: Annotated[AsyncSession, Depends(get_db)] = None,
+):
+    """
+    流式生成项目二三级目录结构，基于现有的一级目录
+
+    - 验证用户是项目的 editor 或 admin
+    - 需要先有一级目录
+    """
+    try:
+        # 验证 project_id 格式
+        try:
+            project_uuid = uuid.UUID(request.project_id)
+        except ValueError:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="无效的项目ID格式",
+            )
+
+        # 验证用户权限
+        project, _ = await _verify_project_editor(project_uuid, current_user.id, db)
+
+        # 检查项目是否有分析结果
+        if not project.project_overview or not project.tech_requirements:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="项目尚未完成文档分析，请先分析招标文件",
+            )
+
+        # 检查是否有一级目录
+        existing_chapters = await db.execute(
+            select(Chapter).where(
+                and_(
+                    Chapter.project_id == project_uuid,
+                    Chapter.parent_id.is_(None)
+                )
+            )
+        )
+        l1_chapters = existing_chapters.scalars().all()
+        
+        # 兜底逻辑：如果数据库没有数据，使用前端传递的数据
+        use_frontend_data = False
+        if not l1_chapters:
+            if request.outline_data and request.outline_data.get("outline"):
+                use_frontend_data = True
+            else:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="请先生成一级目录",
+                )
+
+        # 创建OpenAI服务实例，从数据库加载配置
+        openai_service = OpenAIService(db=db, project_id=project_uuid)
+        if request.provider_config_id:
+            configured = await openai_service.use_config_by_id(request.provider_config_id)
+            if not configured:
+                raise HTTPException(status_code=404, detail="所选 Provider 配置不存在")
+        else:
+            await openai_service._ensure_initialized()
+
+        if not openai_service.api_key:
+            raise HTTPException(status_code=400, detail="请先配置OpenAI API密钥")
+
+        # 如果前端传了模型名称，覆盖默认模型
+        if request.model_name:
+            openai_service.set_model(request.model_name)
+
+        async def generate():
+            # 构造一级目录数据（优先使用数据库数据，兜底使用前端数据）
+            if use_frontend_data and request.outline_data:
+                level_l1 = [
+                    {
+                        "rating_item": item.get("title", ""),
+                        "new_title": item.get("title", "")
+                    }
+                    for item in request.outline_data.get("outline", [])
+                ]
+            else:
+                level_l1 = [
+                    {
+                        "rating_item": chapter.title,
+                        "new_title": chapter.title
+                    }
+                    for chapter in l1_chapters
+                ]
+            
+            # 使用 generate_outline_v2 的逻辑生成二三级目录
+            try:
+                from ..services.openai_service import calculate_nodes_distribution, get_random_indexes
+                
+                expected_word_count = 100000
+                leaf_node_count = expected_word_count // 1500
+                index1, index2 = get_random_indexes(len(level_l1))
+                nodes_distribution = calculate_nodes_distribution(
+                    len(level_l1), (index1, index2), leaf_node_count
+                )
+
+                # 顺序生成每个一级节点的二三级目录，并流式返回每个章节（避免数据库会话并发问题）
+                outline = []
+                for i, level1_node in enumerate(level_l1):
+                    # 生成一个章节
+                    result = await openai_service.process_level1_node(
+                        i, level1_node, nodes_distribution, level_l1,
+                        project.project_overview, project.tech_requirements
+                    )
+                    outline.append(result)
+                    
+                    # 立即流式返回这个章节
+                    chapter_json = json.dumps(result, ensure_ascii=False)
+                    yield f"data: {json.dumps({'type': 'chapter', 'index': i, 'total': len(level_l1), 'data': result}, ensure_ascii=False)}\n\n"
+
+                # 发送完成信号
+                outline_result = {"outline": outline}
+                yield f"data: {json.dumps({'type': 'complete', 'data': outline_result}, ensure_ascii=False)}\n\n"
+                yield "data: [DONE]\n\n"
+
+                # 保存到数据库
+                outline_items = outline_result.get("outline", [])
+                if outline_items:
+                    # 先删除项目现有的所有章节
+                    await db.execute(
+                        delete(Chapter).where(Chapter.project_id == project_uuid)
+                    )
+
+                    # 创建新章节
+                    created_chapters = await _create_chapters_from_outline(
+                        db, project_uuid, outline_items
+                    )
+
+                    # 创建版本快照
+                    version_number = await _get_next_version_number(db, project_uuid)
+                    snapshot_data = {
+                        "outline": outline_items,
+                        "total_chapters": len(created_chapters),
+                    }
+                    version = ProjectVersion(
+                        project_id=project_uuid,
+                        chapter_id=None,
+                        version_number=version_number,
+                        snapshot_data=snapshot_data,
+                        change_type=ChangeType.AI_GENERATE,
+                        change_summary="AI 生成二三级目录",
+                        created_by=current_user.id,
+                    )
+                    db.add(version)
+                    await db.flush()
+
+            except Exception as e:
+                error_msg = f"生成二三级目录失败: {str(e)}"
+                print(error_msg)
+                yield f"data: {json.dumps({'error': True, 'message': error_msg}, ensure_ascii=False)}\n\n"
+                yield "data: [DONE]\n\n"
+
+        return sse_response(generate())
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"二三级目录生成失败: {str(e)}",
+        )
+
+
 @router.post("/generate-project-stream")
 async def generate_project_outline_stream(
     request: ProjectOutlineRequest,
@@ -268,7 +590,7 @@ async def generate_project_outline_stream(
     db: Annotated[AsyncSession, Depends(get_db)] = None,
 ):
     """
-    流式生成项目目录结构，保存到 chapters 表
+    流式生成项目完整目录结构（一级+二三级），保存到 chapters 表
 
     - 验证用户是项目的 editor 或 admin
     - 生成完成后创建版本快照
@@ -294,8 +616,13 @@ async def generate_project_outline_stream(
             )
 
         # 创建OpenAI服务实例，从数据库加载配置
-        openai_service = OpenAIService(db=db)
-        await openai_service._ensure_initialized()
+        openai_service = OpenAIService(db=db, project_id=project_uuid)
+        if request.provider_config_id:
+            configured = await openai_service.use_config_by_id(request.provider_config_id)
+            if not configured:
+                raise HTTPException(status_code=404, detail="所选 Provider 配置不存在")
+        else:
+            await openai_service._ensure_initialized()
 
         if not openai_service.api_key:
             raise HTTPException(status_code=400, detail="请先配置OpenAI API密钥")
@@ -304,64 +631,27 @@ async def generate_project_outline_stream(
         if request.model_name:
             openai_service.set_model(request.model_name)
 
-        # 用于收集完整结果的变量
-        collected_result: list[str] = []
-
         async def generate():
-            nonlocal collected_result
-
-            system_prompt, user_prompt = prompt_manager.generate_outline_prompt(
-                project.project_overview,
-                project.tech_requirements,
-            )
-
-            messages = [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
-            ]
-
-            # 流式返回目录生成结果，同时收集完整结果
-            async for chunk in openai_service.stream_chat_completion(
-                messages, temperature=0.7, response_format={"type": "json_object"}
-            ):
-                collected_result.append(chunk)
-                yield f"data: {json.dumps({'chunk': chunk}, ensure_ascii=False)}\n\n"
-
-            # 发送结束信号
-            yield "data: [DONE]\n\n"
-
-            # 解析完整结果并保存到数据库
+            # 使用 generate_outline_v2 生成完整的三级目录结构
             try:
-                full_content = "".join(collected_result)
-                outline_data = json.loads(full_content)
-                outline_items = outline_data.get("outline", [])
-
-                if not outline_items and "answer" in outline_data:
-                    answer = outline_data["answer"]
-                    if isinstance(answer, list):
-                        outline_items = [
-                            {
-                                "id": str(i + 1),
-                                "title": item,
-                                "description": "",
-                                "children": [],
-                            }
-                            for i, item in enumerate(answer)
-                            if isinstance(item, str)
-                        ]
-                    elif isinstance(answer, str):
-                        lines = [
-                            line.strip() for line in answer.split("\n") if line.strip()
-                        ]
-                        outline_items = [
-                            {
-                                "id": str(i + 1),
-                                "title": line,
-                                "description": "",
-                                "children": [],
-                            }
-                            for i, line in enumerate(lines)
-                        ]
+                outline_result = await openai_service.generate_outline_v2(
+                    overview=project.project_overview,
+                    requirements=project.tech_requirements
+                )
+                
+                # 流式返回完整的目录结构
+                outline_json = json.dumps(outline_result, ensure_ascii=False)
+                chunk_size = 128
+                for i in range(0, len(outline_json), chunk_size):
+                    piece = outline_json[i : i + chunk_size]
+                    yield f"data: {json.dumps({'chunk': piece}, ensure_ascii=False)}\n\n"
+                    await asyncio.sleep(0.01)
+                
+                # 发送结束信号
+                yield "data: [DONE]\n\n"
+                
+                # 保存到数据库
+                outline_items = outline_result.get("outline", [])
 
                 if outline_items:
                     # 先删除项目现有的所有章节
@@ -393,9 +683,9 @@ async def generate_project_outline_stream(
 
                     await db.flush()
 
-            except (json.JSONDecodeError, KeyError) as e:
-                # 解析失败但不影响已返回的流式结果
-                print(f"解析目录结果失败: {e}")
+            except Exception as e:
+                # 保存失败但不影响已返回的流式结果
+                print(f"保存目录到数据库失败: {e}")
 
         return sse_response(generate())
 
@@ -489,7 +779,12 @@ async def generate_project_content_stream(
 
         # 创建OpenAI服务实例，从数据库加载配置
         openai_service = OpenAIService(db=db)
-        await openai_service._ensure_initialized()
+        if request.provider_config_id:
+            configured = await openai_service.use_config_by_id(request.provider_config_id)
+            if not configured:
+                raise HTTPException(status_code=404, detail="所选 Provider 配置不存在")
+        else:
+            await openai_service._ensure_initialized()
 
         if not openai_service.api_key:
             raise HTTPException(status_code=400, detail="请先配置OpenAI API密钥")
@@ -542,6 +837,40 @@ async def generate_project_content_stream(
         # 用于收集完整结果的变量
         collected_result: list[str] = []
 
+        # 知识库检索：获取相关知识库内容
+        knowledge_context = ""
+        try:
+            retrieval_service = KnowledgeRetrievalService(db, openai_service)
+            knowledge_results = await retrieval_service.search_relevant_knowledge(
+                chapter_title=chapter.title,
+                chapter_description=chapter.content or "",
+                parent_chapters=[
+                    {"title": p["title"], "description": ""}
+                    for p in (parent_chapters or [])
+                ],
+                project_overview=project.project_overview or "",
+                user_id=current_user.id,
+                top_k=4
+            )
+
+            if knowledge_results:
+                knowledge_parts = []
+                for idx, result in enumerate(knowledge_results, start=1):
+                    doc_type = result.get("doc_type") or "unknown"
+                    doc_type_label = {
+                        "history_bid": "历史标书风格",
+                        "company_info": "企业资料/能力",
+                    }.get(doc_type, doc_type)
+                    content = result.get("content") or result.get("content_preview") or ""
+                    reasoning = result.get("reasoning") or ""
+                    knowledge_parts.append(
+                        f"[{idx}] 类型: {doc_type_label}\n标题: {result['title']}\n相关性: {reasoning}\n内容:\n{content}"
+                    )
+                knowledge_context = "\n\n---\n\n".join(knowledge_parts)
+                logger.info(f"为章节 {chapter.title} 检索到 {len(knowledge_results)} 条知识库内容")
+        except Exception as e:
+            logger.warning(f"知识库检索失败，跳过: {str(e)}")
+
         # 使用 PromptService 获取提示词
         prompt_service = PromptService(db)
         prompt, _ = await prompt_service.get_prompt("chapter_content", project_uuid)
@@ -557,17 +886,38 @@ async def generate_project_content_stream(
             for s in (sibling_chapters or [])
         ]
 
+        chapter_role = getattr(chapter, "chapter_role", "") or chapter.content or ""
+        chapter_rating_focus = getattr(chapter, "rating_item", "") or ""
+        adjacent_boundary = getattr(chapter, "avoid_overlap", "") or ""
+
+        if sibling_chapters_formatted and not adjacent_boundary:
+            sibling_titles = "；".join([
+                f"{item['id']} {item['title']}" for item in sibling_chapters_formatted if item.get("title") != chapter.title
+            ])
+            if sibling_titles:
+                adjacent_boundary = f"避免重复展开以下同级章节已承担或可能承担的内容：{sibling_titles}"
+
         # 渲染用户提示词模板
+        template_vars = {
+            "project_overview": project.project_overview or "暂无",
+            "tech_requirements": project.tech_requirements or "",
+            "chapter_rating_focus": chapter_rating_focus,
+            "chapter_role": chapter_role,
+            "adjacent_boundary": adjacent_boundary,
+            "parent_chapters": parent_chapters_formatted,
+            "sibling_chapters": sibling_chapters_formatted,
+            "chapter_id": str(chapter.id),
+            "chapter_title": chapter.title,
+            "chapter_description": chapter.content or "",
+        }
+
+        # 如果有知识库上下文，添加到模板变量
+        if knowledge_context:
+            template_vars["knowledge_context"] = knowledge_context
+        
         user_prompt = prompt_service.render_prompt(
             user_template,
-            {
-                "project_overview": project.project_overview or "暂无",
-                "parent_chapters": parent_chapters_formatted,
-                "sibling_chapters": sibling_chapters_formatted,
-                "chapter_id": str(chapter.id),
-                "chapter_title": chapter.title,
-                "chapter_description": chapter.content or "",
-            },
+            template_vars,
         )
 
         messages = [

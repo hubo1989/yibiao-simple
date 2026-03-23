@@ -1,87 +1,154 @@
 /**
- * 配置面板组件
- * 注：API Key 和模型配置已移至后台管理，普通用户无需配置
- * 模型列表会缓存到本地，只有用户主动点击才重新获取
+ * 项目基础配置面板
+ * 注：API Key 和 provider 供给已移至后台管理，项目成员只需选择当前浏览器默认 provider 与模型
  */
-import React, { useState, useEffect } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { configApi } from '../services/api';
+import {
+  loadModelCache,
+  saveModelCache,
+  type ProviderModelOption,
+} from '../utils/modelCache';
 
-// 缓存 key
-const MODEL_CACHE_KEY = 'yibiao:model_cache';
-
-interface ModelCache {
-  models: string[];
-  currentModel: string;
-  timestamp: number;
+interface ProviderModelsResponse {
+  success: boolean;
+  message: string;
+  models?: string[];
+  default_provider_config_id?: string | null;
+  providers?: Array<{
+    config_id: string;
+    provider: string;
+    models: string[];
+    default_model: string;
+    is_default: boolean;
+  }>;
 }
 
-// 从缓存加载模型配置
-const loadModelCache = (): ModelCache | null => {
-  try {
-    const raw = localStorage.getItem(MODEL_CACHE_KEY);
-    return raw ? JSON.parse(raw) : null;
-  } catch {
-    return null;
+const normalizeProviders = ({
+  providers,
+  models,
+}: Pick<ProviderModelsResponse, 'providers' | 'models'>): ProviderModelOption[] => {
+  const normalizedProviders = (providers || []).map((item) => ({
+    configId: item.config_id,
+    provider: item.provider,
+    models: item.models || [],
+    defaultModel: item.default_model || item.models?.[0] || '',
+    isDefault: item.is_default,
+  }));
+
+  if (normalizedProviders.length > 0) {
+    return normalizedProviders;
   }
+
+  const fallbackModels = (models || []).filter(Boolean);
+  if (fallbackModels.length === 0) {
+    return [];
+  }
+
+  return [{
+    configId: '',
+    provider: '默认配置',
+    models: fallbackModels,
+    defaultModel: fallbackModels[0],
+    isDefault: true,
+  }];
 };
 
-// 保存模型配置到缓存
-const saveModelCache = (models: string[], currentModel: string) => {
-  try {
-    localStorage.setItem(MODEL_CACHE_KEY, JSON.stringify({
-      models,
-      currentModel,
-      timestamp: Date.now(),
-    }));
-  } catch (e) {
-    console.warn('保存模型缓存失败:', e);
+const getPreferredProviderId = (
+  providers: ProviderModelOption[],
+  currentProviderId: string,
+  defaultProviderId?: string | null,
+): string => {
+  if (currentProviderId && providers.some((item) => item.configId === currentProviderId)) {
+    return currentProviderId;
   }
+  if (defaultProviderId && providers.some((item) => item.configId === defaultProviderId)) {
+    return defaultProviderId;
+  }
+  return providers[0]?.configId || '';
 };
+
+const getProviderModel = (providers: ProviderModelOption[], providerId: string): ProviderModelOption | null => (
+  providers.find((item) => item.configId === providerId) || providers[0] || null
+);
 
 const ConfigPanel: React.FC = () => {
-  const [models, setModels] = useState<string[]>([]);
+  const [providers, setProviders] = useState<ProviderModelOption[]>([]);
+  const [currentProviderId, setCurrentProviderId] = useState<string>('');
   const [currentModel, setCurrentModel] = useState<string>('');
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
-  // 组件加载时从缓存读取模型配置
   useEffect(() => {
     const cache = loadModelCache();
     if (cache) {
-      setModels(cache.models);
+      setProviders(cache.providers);
+      setCurrentProviderId(cache.currentProviderId);
       setCurrentModel(cache.currentModel);
     }
   }, []);
 
-  // 当模型选择变化时保存到缓存
   useEffect(() => {
-    if (models.length > 0 && currentModel) {
-      saveModelCache(models, currentModel);
+    if (providers.length > 0 && currentModel) {
+      try {
+        saveModelCache(providers, currentProviderId, currentModel);
+      } catch (e) {
+        console.warn('保存模型缓存失败:', e);
+      }
     }
-  }, [models, currentModel]);
+  }, [providers, currentProviderId, currentModel]);
+
+  const activeProvider = useMemo(
+    () => getProviderModel(providers, currentProviderId),
+    [providers, currentProviderId],
+  );
+
+  const handleProviderChange = (providerId: string) => {
+    const provider = getProviderModel(providers, providerId);
+    setCurrentProviderId(providerId);
+    if (!provider) {
+      setCurrentModel('');
+      return;
+    }
+
+    const nextModel = provider.models.includes(currentModel)
+      ? currentModel
+      : (provider.defaultModel || provider.models[0] || '');
+    setCurrentModel(nextModel);
+  };
 
   const handleGetModels = async () => {
     try {
       setLoading(true);
       const response = await configApi.getModels();
+      const data = response.data as ProviderModelsResponse;
 
-      if (response.data.success) {
-        const newModels = response.data.models;
-        setModels(newModels);
-        // 保留之前选择的模型（如果仍在列表中），否则选择第一个
-        if (newModels.length > 0) {
-          if (currentModel && newModels.includes(currentModel)) {
-            // 保持当前选择
-          } else {
-            setCurrentModel(newModels[0]);
-          }
-        }
-        setMessage({ type: 'success', text: `获取到 ${newModels.length} 个模型` });
+      if (data.success) {
+        const nextProviders = normalizeProviders(data);
+        const nextProviderId = getPreferredProviderId(
+          nextProviders,
+          currentProviderId,
+          data.default_provider_config_id,
+        );
+        const nextProvider = getProviderModel(nextProviders, nextProviderId);
+        const nextModel = nextProvider
+          ? (nextProvider.models.includes(currentModel)
+            ? currentModel
+            : (nextProvider.defaultModel || nextProvider.models[0] || ''))
+          : '';
+
+        setProviders(nextProviders);
+        setCurrentProviderId(nextProviderId);
+        setCurrentModel(nextModel);
+        setMessage({
+          type: 'success',
+          text: `获取到 ${nextProviders.length} 个 Provider`,
+        });
         setTimeout(() => setMessage(null), 3000);
       } else {
-        setMessage({ type: 'error', text: response.data.message });
+        setMessage({ type: 'error', text: data.message });
       }
-    } catch (error) {
+    } catch {
       setMessage({ type: 'error', text: '获取模型列表失败' });
     } finally {
       setLoading(false);
@@ -89,50 +156,84 @@ const ConfigPanel: React.FC = () => {
   };
 
   return (
-    <div className="bg-white shadow-sm border-r border-gray-200 w-80 p-6 overflow-y-auto">
-      <div className="space-y-6">
-        {/* 标题 */}
-        <div>
-          <h1 className="text-2xl font-bold text-gray-900">AI写标书助手</h1>
-          <hr className="mt-4 border-gray-200" />
-        </div>
+    <section className="bg-white shadow rounded-lg">
+      <div className="px-6 py-4 border-b border-gray-200">
+        <h2 className="text-lg font-medium text-gray-900">拉卡拉标书智能体配置</h2>
+        <p className="mt-1 text-sm text-gray-500">
+          Provider 与模型选择会缓存到当前浏览器，供标书解析、目录生成与正文扩写流程复用。
+        </p>
+      </div>
 
-        {/* 模型信息 */}
+      <div className="px-6 py-5 space-y-6">
         <div>
-          <h3 className="text-base font-medium text-gray-900 mb-3">🤖 模型信息</h3>
+          <div className="flex items-center justify-between gap-3 mb-3">
+            <h3 className="text-base font-medium text-gray-900">模型信息</h3>
+            {providers.length > 0 && (
+              <span className="inline-flex items-center rounded-full bg-blue-50 px-2.5 py-1 text-xs font-medium text-blue-700">
+                已缓存 {providers.length} 个 Provider
+              </span>
+            )}
+          </div>
 
           <button
             onClick={handleGetModels}
             disabled={loading}
-            className="w-full mb-3 inline-flex justify-center items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500 disabled:bg-gray-100"
+            className="w-full inline-flex justify-center items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500 disabled:bg-gray-100"
           >
-            {loading ? '获取中...' : '🔄 重新获取模型列表'}
+            {loading ? '获取中...' : '重新获取模型列表'}
           </button>
 
-          {models.length > 0 && (
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
-                可用模型
-              </label>
-              <select
-                value={currentModel}
-                onChange={(e) => setCurrentModel(e.target.value)}
-                className="w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm"
-              >
-                {models.map((model) => (
-                  <option key={model} value={model}>
-                    {model}
-                  </option>
-                ))}
-              </select>
-              <p className="mt-2 text-xs text-gray-500">
-                模型列表已缓存。如需更新，请点击上方按钮重新获取。
-              </p>
+          {activeProvider ? (
+            <div className="mt-4 space-y-4">
+              <div>
+                <label htmlFor="provider-select" className="block text-sm font-medium text-gray-700 mb-1">
+                  当前 Provider
+                </label>
+                <select
+                  id="provider-select"
+                  value={currentProviderId}
+                  onChange={(e) => handleProviderChange(e.target.value)}
+                  className="w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm"
+                >
+                  {providers.map((provider) => (
+                    <option key={provider.configId} value={provider.configId}>
+                      {provider.provider}{provider.isDefault ? '（默认）' : ''}
+                    </option>
+                  ))}
+                </select>
+                <p className="mt-2 text-xs text-gray-500">
+                  当管理员配置了多个 Provider 时，可在这里切换当前编写流程使用的服务源。
+                </p>
+              </div>
+
+              <div>
+                <label htmlFor="model-select" className="block text-sm font-medium text-gray-700 mb-1">
+                  当前默认模型
+                </label>
+                <select
+                  id="model-select"
+                  value={currentModel}
+                  onChange={(e) => setCurrentModel(e.target.value)}
+                  className="w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm"
+                >
+                  {activeProvider.models.map((model) => (
+                    <option key={model} value={model}>
+                      {model}
+                    </option>
+                  ))}
+                </select>
+                <p className="mt-2 text-xs text-gray-500">
+                  {activeProvider.provider} 下的模型列表已缓存。若后台配置有更新，请重新获取。
+                </p>
+              </div>
             </div>
+          ) : (
+            <p className="mt-4 text-sm text-gray-500">
+              暂未读取 Provider 与模型列表。点击上方按钮后，可切换当前浏览器默认使用的 Provider 与模型。
+            </p>
           )}
         </div>
 
-        {/* 消息提示 */}
         {message && (
           <div className={`p-3 rounded-md text-sm ${
             message.type === 'success'
@@ -143,53 +244,16 @@ const ConfigPanel: React.FC = () => {
           </div>
         )}
 
-        {/* 使用说明 */}
         <div className="border-t border-gray-200 pt-4">
-          <h3 className="text-sm font-medium text-gray-900 mb-2">📋 使用说明</h3>
-          <div className="text-sm text-gray-600 space-y-1">
-            <p>1. 管理员在后台配置 API Key</p>
-            <p>2. 按步骤完成标书编写流程</p>
-          </div>
-        </div>
-
-        {/* 底部图标链接 */}
-        <div className="border-t border-gray-200 pt-4">
-          <div className="flex items-center justify-center space-x-4">
-            {/* GitHub图标 */}
-            <a
-              href="https://github.com/yibiaoai/yibiao-simple"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="text-gray-500 hover:text-gray-700 transition-colors"
-              title="GitHub"
-            >
-              <svg className="w-6 h-6" fill="currentColor" viewBox="0 0 24 24">
-                <path d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.30.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"/>
-              </svg>
-            </a>
-
-            {/* 易标图标 */}
-            <a
-              href="https://yibiao.pro"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="hover:opacity-75 transition-opacity"
-              title="易标官网"
-            >
-              <img
-                src="/yibiao.png"
-                alt="易标"
-                className="w-6 h-6"
-                onError={(e) => {
-                  console.log('易标logo加载失败');
-                  e.currentTarget.style.display = 'none';
-                }}
-              />
-            </a>
+          <h3 className="text-sm font-medium text-gray-900 mb-2">使用说明</h3>
+          <div className="text-sm text-gray-600 space-y-2">
+            <p>1. 管理员在系统设置中维护 API Key、Provider 和模型供给。</p>
+            <p>2. 这里选中的 Provider 和模型会应用到当前浏览器的编写流程，不区分具体项目文件。</p>
+            <p>3. 若解析或生成前需要切换 Provider，先到项目设置刷新并选择后再继续。</p>
           </div>
         </div>
       </div>
-    </div>
+    </section>
   );
 };
 

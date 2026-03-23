@@ -1,19 +1,32 @@
 """知识库相关 Pydantic schema"""
 import uuid
 from datetime import datetime
-from typing import Literal
+from typing import Literal, List, Optional, Dict, Any
 
 from pydantic import BaseModel, Field
 
 
-# 文档类型枚举
-DocTypeEnum = Literal["qualification", "case", "technical", "other"]
+# 文档类型枚举（更新为新的类型）
+DocTypeEnum = Literal["history_bid", "company_info", "case_fragment", "other"]
+
+# 数据范围枚举
+ScopeEnum = Literal["global", "enterprise", "user"]
+
+# 内容来源枚举
+ContentSourceEnum = Literal["file", "manual"]
+
+# PageIndex 索引状态枚举
+IndexStatusEnum = Literal["pending", "indexing", "completed", "failed"]
 
 
 class KnowledgeDocBase(BaseModel):
     """知识库文档基础字段"""
-    name: str = Field(..., min_length=1, max_length=255, description="文档名称")
+    title: str = Field(..., min_length=1, max_length=500, description="标题")
     doc_type: DocTypeEnum = Field("other", description="文档类型")
+    scope: ScopeEnum = Field("user", description="数据范围")
+    tags: List[str] = Field(default_factory=list, description="标签列表")
+    keywords: List[str] = Field(default_factory=list, description="关键词列表")
+    category: Optional[str] = Field(None, max_length=100, description="分类")
 
 
 class KnowledgeDocCreate(KnowledgeDocBase):

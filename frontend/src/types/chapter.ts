@@ -9,6 +9,9 @@ export interface ChapterContentResponse {
   chapter_number: string;
   title: string;
   content: string | null;
+  rating_item?: string | null;
+  chapter_role?: string | null;
+  avoid_overlap?: string | null;
   status: ChapterStatus;
   locked_by: string | null;
   locked_at: string | null;
@@ -33,6 +36,20 @@ export interface StatusUpdateResponse {
   old_status: string;
   new_status: string;
   message: string;
+}
+
+export interface ProjectChapterReference {
+  id: string;
+  chapter_number: string;
+  title: string;
+  parent_id: string | null;
+  status: ChapterStatus;
+}
+
+export interface ProjectChapterListResponse {
+  project_id: string;
+  chapters: ProjectChapterReference[];
+  total_count: number;
 }
 
 export const CHAPTER_STATUS_LABELS: Record<ChapterStatus, string> = {

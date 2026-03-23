@@ -2,130 +2,115 @@
  * 登录页面
  */
 import React, { useState } from 'react';
-import { useNavigate, Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
+import { LockOutlined, UserOutlined } from '@ant-design/icons';
+import { Alert, Button, Checkbox, Form, Input, Typography, message } from 'antd';
 import { useAuth } from '../contexts/AuthContext';
-import type { LoginRequest } from '../types/auth';
+import AuthShell from '../components/AuthShell';
 
 export default function Login(): React.ReactElement {
   const navigate = useNavigate();
   const { login } = useAuth();
-
-  const [formData, setFormData] = useState<LoginRequest>({
-    username: '',
-    password: '',
-  });
   const [error, setError] = useState<string>('');
-  const [isLoading, setIsLoading] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
-  const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const { name, value } = e.target;
-    setFormData(prev => ({ ...prev, [name]: value }));
+  const handleSubmit = async (values: { username: string; password: string }) => {
     setError('');
-  };
-
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setError('');
-    setIsLoading(true);
-
+    setIsSubmitting(true);
     try {
-      await login(formData);
+      await login({
+        username: values.username,
+        password: values.password,
+      });
+      message.success('登录成功！');
       navigate('/');
     } catch (err: any) {
-      const message = err.response?.data?.detail || '登录失败，请检查用户名和密码';
-      setError(message);
+      const msg = err.response?.data?.detail || '登录失败，请检查用户名和密码';
+      setError(msg);
+      message.error(msg);
     } finally {
-      setIsLoading(false);
+      setIsSubmitting(false);
     }
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gray-50 py-12 px-4 sm:px-6 lg:px-8">
-      <div className="max-w-md w-full space-y-8">
-        <div>
-          <h2 className="mt-6 text-center text-3xl font-extrabold text-gray-900">
-            登录 AI 写标书助手
-          </h2>
-          <p className="mt-2 text-center text-sm text-gray-600">
-            或{' '}
-            <Link to="/register" className="font-medium text-blue-600 hover:text-blue-500">
-              注册新账户
-            </Link>
-          </p>
+    <AuthShell
+      eyebrow="投标协作中台"
+      title="让标书编写从堆任务，变成可追踪的生产流程。"
+      subtitle="拉卡拉标书智能体将文档解析、目录编制、正文协作与审核回溯聚合在同一个企业级工作区里，减少重复沟通与版本失控。"
+      formTitle="登录工作区"
+      formDescription="使用你的正式账户进入系统。当前页面不再展示误导性的演示账号占位信息。"
+      footerPrompt="还没有账户？"
+      footerActionLabel="创建新账户"
+      footerActionTo="/register"
+    >
+      <Form
+        layout="vertical"
+        initialValues={{ autoLogin: true }}
+        onFinish={handleSubmit}
+        requiredMark={false}
+        size="large"
+      >
+        {error ? (
+          <Alert
+            style={{ marginBottom: 20, borderRadius: 14 }}
+            message={error}
+            type="error"
+            showIcon
+          />
+        ) : null}
+
+        <Form.Item
+          label="用户名"
+          name="username"
+          rules={[{ required: true, message: '请输入用户名' }]}
+        >
+          <Input prefix={<UserOutlined />} placeholder="请输入用户名" autoComplete="username" />
+        </Form.Item>
+
+        <Form.Item
+          label="密码"
+          name="password"
+          rules={[{ required: true, message: '请输入密码' }]}
+        >
+          <Input.Password prefix={<LockOutlined />} placeholder="请输入密码" autoComplete="current-password" />
+        </Form.Item>
+
+        <div
+          style={{
+            marginBottom: 24,
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+            gap: 12,
+            flexWrap: 'wrap',
+          }}
+        >
+          <Form.Item name="autoLogin" valuePropName="checked" noStyle>
+            <Checkbox>自动登录</Checkbox>
+          </Form.Item>
+
+          <Button
+            type="link"
+            style={{ paddingInline: 0 }}
+            onClick={() => message.info('忘记密码功能开发中，请联系管理员处理。')}
+          >
+            忘记密码？
+          </Button>
         </div>
 
-        <form className="mt-8 space-y-6" onSubmit={handleSubmit}>
-          {error && (
-            <div className="rounded-md bg-red-50 p-4">
-              <div className="flex">
-                <div className="flex-shrink-0">
-                  <svg className="h-5 w-5 text-red-400" viewBox="0 0 20 20" fill="currentColor">
-                    <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clipRule="evenodd" />
-                  </svg>
-                </div>
-                <div className="ml-3">
-                  <h3 className="text-sm font-medium text-red-800">{error}</h3>
-                </div>
-              </div>
-            </div>
-          )}
+        <Button type="primary" htmlType="submit" block loading={isSubmitting} style={{ height: 48, borderRadius: 14 }}>
+          登录
+        </Button>
 
-          <div className="rounded-md shadow-sm -space-y-px">
-            <div>
-              <label htmlFor="username" className="sr-only">
-                用户名或邮箱
-              </label>
-              <input
-                id="username"
-                name="username"
-                type="text"
-                autoComplete="username"
-                required
-                value={formData.username}
-                onChange={handleChange}
-                className="appearance-none rounded-none relative block w-full px-3 py-2 border border-gray-300 placeholder-gray-500 text-gray-900 rounded-t-md focus:outline-none focus:ring-blue-500 focus:border-blue-500 focus:z-10 sm:text-sm"
-                placeholder="用户名或邮箱"
-              />
-            </div>
-            <div>
-              <label htmlFor="password" className="sr-only">
-                密码
-              </label>
-              <input
-                id="password"
-                name="password"
-                type="password"
-                autoComplete="current-password"
-                required
-                value={formData.password}
-                onChange={handleChange}
-                className="appearance-none rounded-none relative block w-full px-3 py-2 border border-gray-300 placeholder-gray-500 text-gray-900 rounded-b-md focus:outline-none focus:ring-blue-500 focus:border-blue-500 focus:z-10 sm:text-sm"
-                placeholder="密码"
-              />
-            </div>
-          </div>
-
-          <div>
-            <button
-              type="submit"
-              disabled={isLoading}
-              className="group relative w-full flex justify-center py-2 px-4 border border-transparent text-sm font-medium rounded-md text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:bg-blue-400 disabled:cursor-not-allowed"
-            >
-              {isLoading ? (
-                <span className="flex items-center">
-                  <svg className="animate-spin -ml-1 mr-3 h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
-                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                  </svg>
-                  登录中...
-                </span>
-              ) : (
-                '登录'
-              )}
-            </button>
-          </div>
-        </form>
-      </div>
-    </div>
+        <Typography.Paragraph style={{ marginTop: 16, marginBottom: 0, color: 'rgba(15, 23, 42, 0.58)' }}>
+          如需开通测试或正式账号，请联系系统管理员；若你已有邀请链接，也可直接前往
+          <Link to="/register" style={{ marginLeft: 4 }}>
+            注册页
+          </Link>
+          。
+        </Typography.Paragraph>
+      </Form>
+    </AuthShell>
   );
 }
