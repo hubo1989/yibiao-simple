@@ -41,18 +41,30 @@ async def generate_chapter_content(
 
         # 生成单章节内容
         content = ""
-        async for chunk in openai_service._generate_chapter_content(
-            chapter=request.chapter,
-            parent_chapters=request.parent_chapters,
-            sibling_chapters=request.sibling_chapters,
-            project_overview=request.project_overview
-        ):
-            content += chunk
+        if request.rewrite_suggestions:
+            content = await openai_service.rewrite_chapter_with_suggestions(
+                chapter_title=str(request.chapter.get("title") or request.chapter.get("id") or "未命名章节"),
+                chapter_content=request.source_chapter_content or "",
+                suggestions=request.rewrite_suggestions,
+            )
+        else:
+            async for chunk in openai_service._generate_chapter_content(
+                chapter=request.chapter,
+                parent_chapters=request.parent_chapters,
+                sibling_chapters=request.sibling_chapters,
+                project_overview=request.project_overview,
+                project_response_matrix=openai_service._build_project_response_matrix(
+                    request.rating_response_checklist
+                ),
+            ):
+                content += chunk
 
         return {"success": True, "content": content}
 
+    except HTTPException:
+        raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"章节内容生成失败: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"章节内容生成失败: {e}") from e
 
 
 @router.post("/generate-chapter-stream")
@@ -85,15 +97,27 @@ async def generate_chapter_content_stream(
 
                 # 流式生成章节内容
                 full_content = ""
-                async for chunk in openai_service._generate_chapter_content(
-                    chapter=request.chapter,
-                    parent_chapters=request.parent_chapters,
-                    sibling_chapters=request.sibling_chapters,
-                    project_overview=request.project_overview
-                ):
-                    full_content += chunk
-                    # 实时发送内容片段
-                    yield f"data: {json.dumps({'status': 'streaming', 'content': chunk, 'full_content': full_content}, ensure_ascii=False)}\n\n"
+                if request.rewrite_suggestions:
+                    async for chunk in openai_service.rewrite_chapter_with_suggestions_stream(
+                        chapter_title=str(request.chapter.get("title") or request.chapter.get("id") or "未命名章节"),
+                        chapter_content=request.source_chapter_content or "",
+                        suggestions=request.rewrite_suggestions,
+                    ):
+                        full_content += chunk
+                        yield f"data: {json.dumps({'status': 'streaming', 'content': chunk, 'full_content': full_content}, ensure_ascii=False)}\n\n"
+                else:
+                    async for chunk in openai_service._generate_chapter_content(
+                        chapter=request.chapter,
+                        parent_chapters=request.parent_chapters,
+                        sibling_chapters=request.sibling_chapters,
+                        project_overview=request.project_overview,
+                        project_response_matrix=openai_service._build_project_response_matrix(
+                            request.rating_response_checklist
+                        ),
+                    ):
+                        full_content += chunk
+                        # 实时发送内容片段
+                        yield f"data: {json.dumps({'status': 'streaming', 'content': chunk, 'full_content': full_content}, ensure_ascii=False)}\n\n"
 
                 # 发送完成信号
                 yield f"data: {json.dumps({'status': 'completed', 'content': full_content}, ensure_ascii=False)}\n\n"
@@ -107,5 +131,7 @@ async def generate_chapter_content_stream(
 
         return sse_response(generate())
 
+    except HTTPException:
+        raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"章节内容生成失败: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"章节内容生成失败: {e}") from e

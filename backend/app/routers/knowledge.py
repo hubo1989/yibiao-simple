@@ -1,4 +1,5 @@
 """知识库 API 路由 - 支持 PageIndex"""
+import aiofiles
 import os
 import uuid
 import logging
@@ -9,6 +10,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..db.database import get_db
+from ..models.user import UserRole
 from ..models.user import User
 from ..models.knowledge import KnowledgeDoc, DocType, IndexStatus, Scope, ContentSource
 from ..models.schemas import (
@@ -27,6 +29,11 @@ from ..config import settings
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/knowledge", tags=["知识库"])
+
+
+def _can_manage_knowledge_doc(doc: KnowledgeDoc, current_user: User) -> bool:
+    """仅允许管理员或文档所有者管理私有知识库条目。"""
+    return current_user.role == UserRole.ADMIN or doc.owner_id == current_user.id
 
 
 # ============ 文件上传和索引 ============
@@ -633,6 +640,12 @@ async def reindex_knowledge_doc(
             detail="文档不存在",
         )
 
+    if not _can_manage_knowledge_doc(doc, current_user):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="无权重新索引该文档",
+        )
+
     # 检查文件是否存在
     if not doc.file_path or not os.path.exists(doc.file_path):
         raise HTTPException(
@@ -676,6 +689,12 @@ async def delete_knowledge_doc(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="文档不存在",
+        )
+
+    if not _can_manage_knowledge_doc(doc, current_user):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="无权删除该文档",
         )
 
     # 删除文件（包括 PDF 和 DOC 文件）

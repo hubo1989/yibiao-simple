@@ -87,7 +87,7 @@ async def list_request_logs(
                 "/api/knowledge/chat",
             ]
             conditions.append(
-                or_(*[RequestLog.path.ilike(f"{path}%") for path in llm_paths])
+                or_(*[RequestLog.path.ilike(f"{llm_path}%") for llm_path in llm_paths])
             )
 
         # 查询总数

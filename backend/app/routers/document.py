@@ -147,8 +147,10 @@ async def analyze_document_stream(
 
         return sse_response(generate())
 
+    except HTTPException:
+        raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"文档分析失败: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"文档分析失败: {e}") from e
 
 
 @router.post("/export-word")

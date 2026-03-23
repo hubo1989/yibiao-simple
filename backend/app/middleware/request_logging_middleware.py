@@ -136,6 +136,7 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
                         status_code=response.status_code,
                         headers=dict(response.headers),
                         media_type=response.media_type,
+                        background=response.background,
                     )
                     
                     # 尝试解析 JSON 响应

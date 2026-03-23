@@ -27,6 +27,7 @@ def upgrade() -> None:
         op.create_table(
             'knowledge_docs',
             sa.Column('id', postgresql.UUID(as_uuid=True), nullable=False),
+            sa.Column('name', sa.String(500), nullable=False),
             sa.Column('title', sa.String(500), nullable=False),
             sa.Column('doc_type', sa.String(50), nullable=False),
             sa.Column('scope', sa.String(50), nullable=False),
@@ -63,7 +64,12 @@ def upgrade() -> None:
         # 如果表已存在，更新表结构
         # 1. 添加新列
         columns = [col['name'] for col in inspector.get_columns('knowledge_docs')]
-        
+
+        if 'name' not in columns:
+            op.add_column('knowledge_docs', sa.Column('name', sa.String(500), nullable=True))
+            op.execute("UPDATE knowledge_docs SET name = title WHERE name IS NULL")
+            op.alter_column('knowledge_docs', 'name', nullable=False)
+
         if 'title' not in columns:
             op.add_column('knowledge_docs', sa.Column('title', sa.String(500), nullable=True))
             # 将 name 列的数据复制到 title
@@ -205,3 +211,4 @@ def downgrade() -> None:
     op.drop_column('knowledge_docs', 'owner_id')
     op.drop_column('knowledge_docs', 'scope')
     op.drop_column('knowledge_docs', 'title')
+    op.drop_column('knowledge_docs', 'name')

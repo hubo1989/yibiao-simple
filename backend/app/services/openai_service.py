@@ -1,6 +1,6 @@
 """OpenAI服务"""
 import openai
-from typing import Dict, Any, List, AsyncGenerator
+from typing import Dict, Any, List, AsyncGenerator, Callable
 import json
 import asyncio
 import uuid
@@ -73,6 +73,88 @@ CHAPTER_REVERSE_ENHANCE_SCHEMA = {
         }
     ],
     "summary": "简要结论",
+}
+
+CHAPTER_RESPONSE_PLAN_SCHEMA = {
+    "chapter_goal": "本章需要回答的核心评分问题",
+    "response_targets": ["本章必须覆盖的响应点"],
+    "evidence_needed": ["建议准备的证据或验证材料"],
+    "validation_points": ["评审/验收时可检查的落地点"],
+    "boundary_rules": ["与相邻章节的去重边界"],
+}
+
+CLAUSE_RESPONSE_SOURCE_REF_SCHEMA = {
+    "ref_id": "kb_1",
+    "source_type": "knowledge_context",
+    "location": "知识库条目 1 / 标题 / 段落",
+    "quote": "支撑摘录",
+    "relation": "该摘录如何支撑响应判断",
+}
+
+CLAUSE_RESPONSE_ITEM_SCHEMA = {
+    "clause_text": "原条款或子条款",
+    "response_conclusion": "满足|部分满足|待补充|待澄清",
+    "response_description": "响应说明",
+    "support_measures": ["支撑措施/交付方式/保障方式"],
+    "evidence_needed": ["建议补充的证据或验证材料"],
+    "validation_points": ["评审或验收可检查点"],
+    "risk_points": ["仍需注意的风险点"],
+    "source_refs": [CLAUSE_RESPONSE_SOURCE_REF_SCHEMA],
+}
+
+CLAUSE_RESPONSE_SCHEMA = {
+    "clause_text": "输入的条款原文",
+    "summary": "整体响应摘要",
+    "items": [CLAUSE_RESPONSE_ITEM_SCHEMA],
+}
+
+BID_REVIEW_ITEM_SCHEMA = {
+    "rating_item": "评分项名称",
+    "score": 0,
+    "max_score": 0,
+    "coverage_status": "covered|partial|missing|risk",
+    "evidence": "支撑证据或定位",
+    "source_refs": [
+        {
+            "ref_id": "tender_p1|bid_h1|kb_1",
+            "source_type": "tender_document|bid_content|knowledge_context",
+            "location": "第1页/第1章/知识库条目1",
+            "quote": "原文摘录",
+            "relation": "该摘录如何支撑判断",
+        }
+    ],
+    "issues": ["问题1", "问题2"],
+    "suggestions": ["建议1", "建议2"],
+    "rewrite_suggestions": ["可直接用于改写的建议1"],
+    "chapter_targets": ["建议影响的章节标题或编号"],
+    "confidence": "high|medium|low",
+}
+
+BID_REVIEW_SCHEMA = {
+    "summary": "整体复审摘要",
+    "overall_score": 0,
+    "score_max": 100,
+    "coverage_rate": 0,
+    "risk_level": "low|medium|high",
+    "items": [BID_REVIEW_ITEM_SCHEMA],
+}
+
+OUTLINE_EXTRACT_SCHEMA = {
+    "outline": [
+        {
+            "id": "1",
+            "title": "一级章节标题",
+            "description": "章节简述",
+            "children": [
+                {
+                    "id": "1.1",
+                    "title": "二级章节标题",
+                    "description": "章节简述",
+                    "children": [],
+                }
+            ],
+        }
+    ]
 }
 
 
@@ -204,6 +286,234 @@ class OpenAIService:
             f"```json\n{schema_text}\n```"
         )
         return f"{system_prompt.rstrip()}\n\n{contract}"
+
+    @staticmethod
+    def _build_review_input_profile(
+        *,
+        tender_document: str,
+        tender_overview: str,
+        tender_requirements: str,
+        rating_checklist: list[dict[str, Any]],
+        knowledge_context: str,
+        bid_content: str,
+        tender_source_registry: str = "",
+        bid_source_registry: str = "",
+    ) -> str:
+        """构建复审输入摘要，明确告知模型哪些材料已经提供。"""
+        return (
+            "### 输入完整性摘要\n"
+            f"- 招标原文件：已提供，长度 {len(tender_document or '')} 字符\n"
+            f"- 项目概述：已提供，长度 {len(tender_overview or '')} 字符\n"
+            f"- 技术评分要求：已提供，长度 {len(tender_requirements or '')} 字符\n"
+            f"- 评分项清单：已提供，{len(rating_checklist or [])} 项\n"
+            f"- 招标原文定位索引：{'已提供' if (tender_source_registry or '').strip() else '未提供'}，长度 {len(tender_source_registry or '')} 字符\n"
+            f"- 待审标书定位索引：{'已提供' if (bid_source_registry or '').strip() else '未提供'}，长度 {len(bid_source_registry or '')} 字符\n"
+            f"- 知识库上下文：{'已提供' if (knowledge_context or '').strip() else '未提供'}，长度 {len(knowledge_context or '')} 字符\n"
+            f"- 待审标书：已提供，长度 {len(bid_content or '')} 字符\n"
+            "重要：只要上述字段长度大于 0，就不要再输出“未收到/未提供招标原文件、技术评分要求、评分项清单与待审标书”这类结论；"
+            "如需指出不足，只能具体说明某些评分点、章节、证据锚点或来源定位不充分。"
+        )
+
+    @staticmethod
+    def _build_chapter_response_plan(
+        *,
+        chapter_title: str,
+        chapter_description: str,
+        chapter_rating_focus: str,
+        chapter_role: str,
+        adjacent_boundary: str,
+        tech_requirements: str = "",
+        knowledge_context: str = "",
+    ) -> str:
+        """构建章节生成前的响应计划摘要，强化评分响应闭环。"""
+        return (
+            "### 本章响应计划\n"
+            f"- 章节标题：{chapter_title or '未命名章节'}\n"
+            f"- 章节描述：{chapter_description or '无'}\n"
+            f"- 核心评分问题：{chapter_rating_focus or '未指定'}\n"
+            f"- 主职责定位：{chapter_role or '未指定'}\n"
+            f"- 去重边界：{adjacent_boundary or '未指定'}\n"
+            f"- 技术要求上下文长度：{len(tech_requirements or '')}\n"
+            f"- 知识库上下文长度：{len(knowledge_context or '')}\n"
+            "写作要求：先回答评分项想看什么，再写方案动作、落地机制、验证方式，最后补充边界和保障。"
+        )
+
+    @staticmethod
+    def _build_project_response_matrix(rating_checklist: list[dict[str, Any]] | None) -> str:
+        """把评分清单压缩成章节生成可直接使用的响应矩阵。"""
+        items = rating_checklist or []
+        if not items:
+            return ""
+
+        blocks: list[str] = []
+        for index, item in enumerate(items, start=1):
+            if hasattr(item, "model_dump"):
+                item = item.model_dump()
+            if not isinstance(item, dict):
+                continue
+
+            rating_item = str(item.get("rating_item") or f"评分项 {index}").strip()
+            score = str(item.get("score") or "").strip()
+            response_targets = [str(value).strip() for value in (item.get("response_targets") or []) if str(value).strip()]
+            evidence_suggestions = [str(value).strip() for value in (item.get("evidence_suggestions") or []) if str(value).strip()]
+            writing_focus = str(item.get("writing_focus") or "").strip()
+            risk_points = [str(value).strip() for value in (item.get("risk_points") or []) if str(value).strip()]
+
+            lines = [f"[{index}] {rating_item}"]
+            if score:
+                lines.append(f"分值/权重：{score}")
+            if response_targets:
+                lines.append(f"必须覆盖：{'；'.join(response_targets)}")
+            if evidence_suggestions:
+                lines.append(f"建议证据：{'；'.join(evidence_suggestions)}")
+            if writing_focus:
+                lines.append(f"写作重点：{writing_focus}")
+            if risk_points:
+                lines.append(f"易失分点：{'；'.join(risk_points)}")
+            blocks.append("\n".join(lines))
+
+        if not blocks:
+            return ""
+
+        return "### 本项目响应矩阵\n" + "\n\n---\n\n".join(blocks)
+
+    @staticmethod
+    def _build_clause_response_input_profile(
+        *,
+        clause_text: str,
+        project_overview: str,
+        knowledge_context: str,
+        knowledge_source_registry: str,
+    ) -> str:
+        """构建条款逐条响应输入摘要。"""
+        return (
+            "### 输入完整性摘要\n"
+            f"- 项目概述：已提供，长度 {len(project_overview or '')} 字符\n"
+            f"- 条款原文：已提供，长度 {len(clause_text or '')} 字符\n"
+            f"- 知识库上下文：{'已提供' if (knowledge_context or '').strip() else '未提供'}，长度 {len(knowledge_context or '')} 字符\n"
+            f"- 知识库定位索引：{'已提供' if (knowledge_source_registry or '').strip() else '未提供'}，长度 {len(knowledge_source_registry or '')} 字符\n"
+            "重要：如果知识库定位索引已提供，source_refs 必须从索引中回链，不要虚构引用。"
+        )
+
+    @staticmethod
+    def _validate_clause_response_sources(
+        data: Any,
+        *,
+        knowledge_source_registry: str,
+    ) -> tuple[bool, str]:
+        """校验条款响应中的证据锚点是否可回链到知识库索引。"""
+        if not isinstance(data, dict):
+            return False, "条款响应结果必须是对象"
+
+        items = data.get("items", [])
+        if not isinstance(items, list) or not items:
+            return False, "条款响应结果必须包含 items 数组"
+
+        allowed_ref_ids: set[str] = set()
+        for line in (knowledge_source_registry or "").splitlines():
+            line = line.strip()
+            if line.startswith("- "):
+                ref_id = line[2:].split(" | ", 1)[0].strip()
+                if ref_id:
+                    allowed_ref_ids.add(ref_id)
+
+        require_source_refs = bool(allowed_ref_ids)
+
+        for index, item in enumerate(items, start=1):
+            if not isinstance(item, dict):
+                return False, f"第 {index} 个响应项不是对象"
+
+            source_refs = item.get("source_refs")
+            if require_source_refs and (not isinstance(source_refs, list) or not source_refs):
+                return False, f"第 {index} 个响应项缺少 source_refs 证据锚点"
+
+            if not isinstance(source_refs, list):
+                continue
+
+            for ref in source_refs:
+                if not isinstance(ref, dict):
+                    return False, f"第 {index} 个响应项的 source_refs 格式无效"
+                ref_id = str(ref.get("ref_id") or "").strip()
+                source_type = str(ref.get("source_type") or "").strip()
+                location = str(ref.get("location") or "").strip()
+                quote = str(ref.get("quote") or "").strip()
+                relation = str(ref.get("relation") or "").strip()
+
+                if require_source_refs and (not ref_id or ref_id not in allowed_ref_ids):
+                    return False, f"第 {index} 个响应项的证据锚点 {ref_id or '空值'} 不在允许目录中"
+                if source_type not in {"knowledge_context"}:
+                    return False, f"第 {index} 个响应项的证据锚点来源类型无效"
+                if not location:
+                    return False, f"第 {index} 个响应项的证据锚点缺少 location"
+                if not quote:
+                    return False, f"第 {index} 个响应项的证据锚点缺少 quote"
+                if not relation:
+                    return False, f"第 {index} 个响应项的证据锚点缺少 relation"
+
+        return True, ""
+
+    @staticmethod
+    def _render_clause_response_markdown(data: dict[str, Any]) -> str:
+        """把结构化条款响应渲染成正式投标文本。"""
+        clause_text = str(data.get("clause_text") or "").strip()
+        summary = str(data.get("summary") or "").strip()
+        items = data.get("items", [])
+
+        lines: list[str] = []
+        if clause_text:
+            lines.append("## 原条款")
+            lines.append(clause_text)
+            lines.append("")
+
+        if summary:
+            lines.append("## 响应摘要")
+            lines.append(summary)
+            lines.append("")
+
+        for index, item in enumerate(items, start=1):
+            if not isinstance(item, dict):
+                continue
+
+            item_clause_text = str(item.get("clause_text") or clause_text or "").strip()
+            response_conclusion = str(item.get("response_conclusion") or "").strip()
+            response_description = str(item.get("response_description") or "").strip()
+            support_measures = [str(value).strip() for value in (item.get("support_measures") or []) if str(value).strip()]
+            evidence_needed = [str(value).strip() for value in (item.get("evidence_needed") or []) if str(value).strip()]
+            validation_points = [str(value).strip() for value in (item.get("validation_points") or []) if str(value).strip()]
+            risk_points = [str(value).strip() for value in (item.get("risk_points") or []) if str(value).strip()]
+            source_refs = item.get("source_refs", [])
+
+            lines.append(f"### {index}. 条款响应")
+            if item_clause_text:
+                lines.append(f"- 原条款/参数：{item_clause_text}")
+            if response_conclusion:
+                lines.append(f"- 响应结论：{response_conclusion}")
+            if response_description:
+                lines.append(f"- 响应说明：{response_description}")
+            if support_measures:
+                lines.append(f"- 支撑措施：{'；'.join(support_measures)}")
+            if validation_points:
+                lines.append(f"- 验证要点：{'；'.join(validation_points)}")
+            if evidence_needed:
+                lines.append(f"- 需补充证据：{'；'.join(evidence_needed)}")
+            if risk_points:
+                lines.append(f"- 风险提示：{'；'.join(risk_points)}")
+
+            valid_refs = []
+            for ref in source_refs if isinstance(source_refs, list) else []:
+                if isinstance(ref, dict):
+                    ref_id = str(ref.get("ref_id") or "").strip()
+                    location = str(ref.get("location") or "").strip()
+                    quote = str(ref.get("quote") or "").strip()
+                    relation = str(ref.get("relation") or "").strip()
+                    if ref_id and location and quote and relation:
+                        valid_refs.append(f"{ref_id} | {location} | {quote} | {relation}")
+
+            if valid_refs:
+                lines.append(f"- 证据锚点：{'；'.join(valid_refs)}")
+            lines.append("")
+
+        return "\n".join(lines).strip()
     
     async def get_available_models(self) -> List[str]:
         """获取可用的模型列表"""
@@ -277,6 +587,7 @@ class OpenAIService:
         response_format: dict | None = None,
         log_prefix: str = "",
         raise_on_fail: bool = True,
+        validator: Callable[[Any], tuple[bool, str]] | None = None,
     ) -> str:
         """
         通用的带 JSON 结构校验与重试的生成函数。
@@ -296,11 +607,16 @@ class OpenAIService:
             # 定义前缀，用于日志输出
             prefix = f"{log_prefix} " if log_prefix else ""
 
-            # 如果 schema 是 dict，但 AI 返回的是 list，尝试取第一个元素
+            # 如果 schema 期望的是对象，但 AI 返回的是 list，尝试取第一个元素
             content_to_check = full_content
             try:
                 parsed = json.loads(full_content.strip())
-                if isinstance(parsed, list) and len(parsed) > 0:
+                expected_schema = json.loads(schema) if isinstance(schema, str) else schema
+                if (
+                    isinstance(parsed, list)
+                    and len(parsed) > 0
+                    and isinstance(expected_schema, dict)
+                ):
                     # AI 返回的是数组，取第一个元素
                     content_to_check = json.dumps(parsed[0], ensure_ascii=False)
                     print(f"{prefix}AI 返回的是数组，自动取第一个元素")
@@ -310,6 +626,34 @@ class OpenAIService:
             # 首先尝试直接校验
             isok, error_msg = check_json(content_to_check, schema)
             if isok:
+                if validator is not None:
+                    try:
+                        parsed_content = json.loads(content_to_check.strip())
+                    except Exception:
+                        parsed_content = None
+
+                    if parsed_content is not None:
+                        valid, validator_msg = validator(parsed_content)
+                        if not valid:
+                            last_error_msg = validator_msg
+                            if attempt >= max_retries:
+                                print(f"{prefix}业务校验失败，已达到最大重试次数({max_retries})：{last_error_msg}")
+                                if raise_on_fail:
+                                    raise Exception(f"{prefix}业务校验失败: {last_error_msg}")
+                                return full_content
+
+                            attempt += 1
+                            print(f"{prefix}业务校验失败，进行第 {attempt}/{max_retries} 次重试：{last_error_msg}")
+                            messages = messages + [{
+                                "role": "user",
+                                "content": (
+                                    "上一次输出已经通过 JSON 结构校验，但未通过业务校验："
+                                    f"{validator_msg}。"
+                                    "请严格按系统指令重新生成，只输出合法 JSON，不要添加解释。"
+                                ),
+                            }]
+                            await asyncio.sleep(0.5)
+                            continue
                 return content_to_check
 
             # 打印 AI 返回的内容，便于调试
@@ -342,6 +686,7 @@ class OpenAIService:
         outline: Dict[str, Any],
         project_overview: str = "",
         knowledge_context: str = "",
+        project_response_matrix: str = "",
     ) -> Dict[str, Any]:
         """
         为目录结构生成内容
@@ -364,7 +709,7 @@ class OpenAIService:
 
             # 递归处理目录
             await self._process_outline_recursive(
-                result_outline['outline'], [], project_overview, knowledge_context
+                result_outline['outline'], [], project_overview, knowledge_context, project_response_matrix
             )
 
             return result_outline
@@ -378,6 +723,7 @@ class OpenAIService:
         parent_chapters: list = None,
         project_overview: str = "",
         knowledge_context: str = "",
+        project_response_matrix: str = "",
     ):
         """递归处理章节列表"""
         for chapter in chapters:
@@ -409,6 +755,7 @@ class OpenAIService:
                     chapters,  # 同级章节列表
                     project_overview,
                     knowledge_context,
+                    project_response_matrix=project_response_matrix,
                 ):
                     content += chunk
                 if content:
@@ -416,7 +763,11 @@ class OpenAIService:
             else:
                 # 递归处理子章节
                 await self._process_outline_recursive(
-                    chapter['children'], current_parent_chapters, project_overview, knowledge_context
+                    chapter['children'],
+                    current_parent_chapters,
+                    project_overview,
+                    knowledge_context,
+                    project_response_matrix,
                 )
     
     async def _generate_chapter_content(
@@ -427,6 +778,7 @@ class OpenAIService:
         project_overview: str = "",
         knowledge_context: str = "",
         tech_requirements: str = "",
+        project_response_matrix: str = "",
         chapter_rating_focus: str = "",
         chapter_role: str = "",
         adjacent_boundary: str = "",
@@ -455,6 +807,16 @@ class OpenAIService:
             chapter_rating_focus = chapter_rating_focus or chapter.get('rating_item', '') or chapter.get('chapter_rating_focus', '')
             chapter_role = chapter_role or chapter.get('chapter_role', '')
             adjacent_boundary = adjacent_boundary or chapter.get('avoid_overlap', '') or chapter.get('adjacent_boundary', '')
+            project_response_matrix = project_response_matrix or chapter.get('project_response_matrix', '')
+            chapter_response_plan = self._build_chapter_response_plan(
+                chapter_title=chapter_title,
+                chapter_description=chapter_description,
+                chapter_rating_focus=chapter_rating_focus,
+                chapter_role=chapter_role,
+                adjacent_boundary=adjacent_boundary,
+                tech_requirements=tech_requirements,
+                knowledge_context=knowledge_context,
+            )
 
             # 使用 PromptService 获取提示词
             if self._prompt_service:
@@ -470,6 +832,8 @@ class OpenAIService:
                     "chapter_rating_focus": chapter_rating_focus,
                     "chapter_role": chapter_role,
                     "adjacent_boundary": adjacent_boundary,
+                    "chapter_response_plan": chapter_response_plan,
+                    "project_response_matrix": project_response_matrix,
                     "knowledge_context": knowledge_context,
                     "parent_chapters": parent_chapters or [],
                     "sibling_chapters": [s for s in (sibling_chapters or []) if s.get('id') != chapter_id],
@@ -489,6 +853,8 @@ class OpenAIService:
                     "chapter_rating_focus": chapter_rating_focus,
                     "chapter_role": chapter_role,
                     "adjacent_boundary": adjacent_boundary,
+                    "chapter_response_plan": chapter_response_plan,
+                    "project_response_matrix": project_response_matrix,
                     "knowledge_context": knowledge_context,
                     "parent_chapters": parent_chapters or [],
                     "sibling_chapters": [s for s in (sibling_chapters or []) if s.get('id') != chapter_id],
@@ -511,7 +877,12 @@ class OpenAIService:
             print(f"生成章节内容时出错: {str(e)}")
             raise  # 重新抛出异常，而不是 yield 错误字符串
 
-    async def generate_outline_v2(self, overview: str, requirements: str) -> Dict[str, Any]:
+    async def generate_outline_v2(
+        self,
+        overview: str,
+        requirements: str,
+        rating_checklist: list[dict[str, Any]] | None = None,
+    ) -> Dict[str, Any]:
         schema_json = json.dumps([
             {
                 "rating_item": "原评分项",
@@ -520,6 +891,7 @@ class OpenAIService:
                 "avoid_overlap": "与其他章节应避免重复的内容边界",
             }
         ])
+        project_response_matrix = self._build_project_response_matrix(rating_checklist)
 
         # 使用 PromptService 获取提示词
         if self._prompt_service:
@@ -532,6 +904,7 @@ class OpenAIService:
             user_prompt = PromptService.render_prompt(user_template, {
                 "overview": overview,
                 "requirements": requirements,
+                "project_response_matrix": project_response_matrix,
             })
         else:
             # 回退到内置提示词
@@ -543,6 +916,7 @@ class OpenAIService:
             user_prompt = PromptService.render_prompt(user_template, {
                 "overview": overview,
                 "requirements": requirements,
+                "project_response_matrix": project_response_matrix,
             })
 
         messages = [
@@ -583,6 +957,45 @@ class OpenAIService:
 
 
         return {"outline": outline}
+
+    async def extract_outline_from_document(self, document_text: str) -> Dict[str, Any]:
+        """从原始文档中提取目录结构"""
+        if self._prompt_service:
+            prompt, _ = await self._prompt_service.get_prompt(
+                "outline_extract", self._project_id
+            )
+            from .prompt_service import PromptService
+            system_prompt, user_template = PromptService.split_prompt(prompt)
+            system_prompt = self._append_json_output_contract(system_prompt, OUTLINE_EXTRACT_SCHEMA)
+            user_prompt = PromptService.render_prompt(user_template, {
+                "file_content": document_text,
+            })
+        else:
+            from ..utils.builtin_prompts import get_builtin_prompt
+            from .prompt_service import PromptService
+            builtin = get_builtin_prompt("outline_extract")
+            system_prompt, user_template = PromptService.split_prompt(builtin["prompt"])
+            system_prompt = self._append_json_output_contract(system_prompt, OUTLINE_EXTRACT_SCHEMA)
+            user_prompt = PromptService.render_prompt(user_template, {
+                "file_content": document_text,
+            })
+
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ]
+
+        full_content = await self._generate_with_json_check(
+            messages=messages,
+            schema=OUTLINE_EXTRACT_SCHEMA,
+            max_retries=3,
+            temperature=0.6,
+            response_format=None,
+            log_prefix="文档目录提取",
+            raise_on_fail=True,
+        )
+
+        return json.loads(full_content.strip())
 
     async def process_level1_node(self, i, level1_node, nodes_distribution, level_l1, overview, requirements):
         """处理单个一级节点的函数"""
@@ -890,40 +1303,235 @@ class OpenAIService:
             raise_on_fail=True,
         )
 
+    async def review_bid_document(
+        self,
+        tender_document: str,
+        tender_overview: str,
+        tender_requirements: str,
+        rating_checklist: list[dict[str, Any]],
+        knowledge_context: str,
+        bid_content: str,
+        directory_mode: str,
+        tender_source_registry: str = "",
+        bid_source_registry: str = "",
+    ) -> str:
+        """对待审标书生成结构化复审报告（返回 JSON 字符串）"""
+        if self._prompt_service:
+            prompt, _ = await self._prompt_service.get_prompt(
+                "bid_review", self._project_id
+            )
+            from .prompt_service import PromptService
+            system_prompt, user_template = PromptService.split_prompt(prompt)
+            system_prompt = self._append_json_output_contract(system_prompt, BID_REVIEW_SCHEMA)
+            input_profile = self._build_review_input_profile(
+                tender_document=tender_document,
+                tender_overview=tender_overview,
+                tender_requirements=tender_requirements,
+                rating_checklist=rating_checklist,
+                knowledge_context=knowledge_context,
+                bid_content=bid_content,
+                tender_source_registry=tender_source_registry,
+                bid_source_registry=bid_source_registry,
+            )
+            rendered_prompt = PromptService.render_prompt(
+                user_template,
+                {
+                    "tender_document": tender_document,
+                    "tender_overview": tender_overview,
+                    "tender_requirements": tender_requirements,
+                    "rating_checklist": json.dumps(rating_checklist, ensure_ascii=False),
+                    "knowledge_context": knowledge_context,
+                    "bid_content": bid_content,
+                    "directory_mode": directory_mode,
+                    "tender_source_registry": tender_source_registry,
+                    "bid_source_registry": bid_source_registry,
+                },
+            )
+            user_prompt = f"{input_profile}\n\n{rendered_prompt}"
+        else:
+            from ..utils.builtin_prompts import get_builtin_prompt
+            from .prompt_service import PromptService
+            builtin = get_builtin_prompt("bid_review")
+            system_prompt, user_template = PromptService.split_prompt(builtin["prompt"])
+            system_prompt = self._append_json_output_contract(system_prompt, BID_REVIEW_SCHEMA)
+            input_profile = self._build_review_input_profile(
+                tender_document=tender_document,
+                tender_overview=tender_overview,
+                tender_requirements=tender_requirements,
+                rating_checklist=rating_checklist,
+                knowledge_context=knowledge_context,
+                bid_content=bid_content,
+                tender_source_registry=tender_source_registry,
+                bid_source_registry=bid_source_registry,
+            )
+            rendered_prompt = PromptService.render_prompt(
+                user_template,
+                {
+                    "tender_document": tender_document,
+                    "tender_overview": tender_overview,
+                    "tender_requirements": tender_requirements,
+                    "rating_checklist": json.dumps(rating_checklist, ensure_ascii=False),
+                    "knowledge_context": knowledge_context,
+                    "bid_content": bid_content,
+                    "directory_mode": directory_mode,
+                    "tender_source_registry": tender_source_registry,
+                    "bid_source_registry": bid_source_registry,
+                },
+            )
+            user_prompt = f"{input_profile}\n\n{rendered_prompt}"
+
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ]
+
+        return await self._generate_with_json_check(
+            messages=messages,
+            schema=BID_REVIEW_SCHEMA,
+            max_retries=3,
+            temperature=0.3,
+            response_format=None,
+            log_prefix="标书复审",
+            raise_on_fail=True,
+            validator=lambda data: self._validate_bid_review_sources(
+                data,
+                tender_source_registry=tender_source_registry,
+                bid_source_registry=bid_source_registry,
+            ),
+        )
+
+    @staticmethod
+    def _validate_bid_review_sources(
+        data: Any,
+        *,
+        tender_source_registry: str,
+        bid_source_registry: str,
+    ) -> tuple[bool, str]:
+        """校验复审结果中的证据锚点是否可回链到输入目录。"""
+        if not isinstance(data, dict):
+            return False, "复审结果必须是对象"
+
+        items = data.get("items", [])
+        if not isinstance(items, list) or not items:
+            return False, "复审结果必须包含 items 数组"
+
+        allowed_ref_ids: set[str] = set()
+        for registry_text in (tender_source_registry, bid_source_registry):
+            for line in (registry_text or "").splitlines():
+                line = line.strip()
+                if line.startswith("- "):
+                    ref_id = line[2:].split(" | ", 1)[0].strip()
+                    if ref_id:
+                        allowed_ref_ids.add(ref_id)
+
+        if not allowed_ref_ids:
+            return False, "缺少可用于回链的来源锚点目录"
+
+        for index, item in enumerate(items, start=1):
+            if not isinstance(item, dict):
+                return False, f"第 {index} 个评分项不是对象"
+
+            source_refs = item.get("source_refs")
+            if not isinstance(source_refs, list) or not source_refs:
+                return False, f"第 {index} 个评分项缺少 source_refs 证据锚点"
+
+            for ref in source_refs:
+                if not isinstance(ref, dict):
+                    return False, f"第 {index} 个评分项的 source_refs 格式无效"
+                ref_id = str(ref.get("ref_id") or "").strip()
+                source_type = str(ref.get("source_type") or "").strip()
+                location = str(ref.get("location") or "").strip()
+                quote = str(ref.get("quote") or "").strip()
+                relation = str(ref.get("relation") or "").strip()
+
+                if not ref_id or ref_id not in allowed_ref_ids:
+                    return False, f"第 {index} 个评分项的证据锚点 {ref_id or '空值'} 不在允许目录中"
+                if source_type not in {"tender_document", "bid_content", "knowledge_context"}:
+                    return False, f"第 {index} 个评分项的证据锚点来源类型无效"
+                if not location:
+                    return False, f"第 {index} 个评分项的证据锚点缺少 location"
+                if not quote:
+                    return False, f"第 {index} 个评分项的证据锚点缺少 quote"
+                if not relation:
+                    return False, f"第 {index} 个评分项的证据锚点缺少 relation"
+
+        return True, ""
+
     async def generate_clause_response(
         self,
         clause_text: str,
         project_overview: str | None = None,
         knowledge_context: str | None = None,
-    ) -> str:
-        """生成技术参数/条款逐条响应正文"""
+        knowledge_source_registry: str | None = None,
+    ) -> dict[str, Any]:
+        """生成技术参数/条款逐条响应结果"""
+        knowledge_context_text = knowledge_context or ""
+        knowledge_source_registry_text = knowledge_source_registry or ""
         if self._prompt_service:
             prompt, _ = await self._prompt_service.get_prompt(
                 "clause_response_generation", self._project_id
             )
             from .prompt_service import PromptService
             system_prompt, user_template = PromptService.split_prompt(prompt)
+            system_prompt = self._append_json_output_contract(system_prompt, CLAUSE_RESPONSE_SCHEMA)
+            input_profile = self._build_clause_response_input_profile(
+                clause_text=clause_text,
+                project_overview=project_overview or "",
+                knowledge_context=knowledge_context_text,
+                knowledge_source_registry=knowledge_source_registry_text,
+            )
             user_prompt = PromptService.render_prompt(user_template, {
                 "clause_text": clause_text,
                 "project_overview": project_overview or "",
-                "knowledge_context": knowledge_context or "",
+                "knowledge_context": knowledge_context_text,
+                "knowledge_source_registry": knowledge_source_registry_text,
             })
+            user_prompt = f"{input_profile}\n\n{user_prompt}"
         else:
             from ..utils.builtin_prompts import get_builtin_prompt
             from .prompt_service import PromptService
             builtin = get_builtin_prompt("clause_response_generation")
             system_prompt, user_template = PromptService.split_prompt(builtin["prompt"])
+            system_prompt = self._append_json_output_contract(system_prompt, CLAUSE_RESPONSE_SCHEMA)
+            input_profile = self._build_clause_response_input_profile(
+                clause_text=clause_text,
+                project_overview=project_overview or "",
+                knowledge_context=knowledge_context_text,
+                knowledge_source_registry=knowledge_source_registry_text,
+            )
             user_prompt = PromptService.render_prompt(user_template, {
                 "clause_text": clause_text,
                 "project_overview": project_overview or "",
-                "knowledge_context": knowledge_context or "",
+                "knowledge_context": knowledge_context_text,
+                "knowledge_source_registry": knowledge_source_registry_text,
             })
+            user_prompt = f"{input_profile}\n\n{user_prompt}"
 
         messages = [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt}
         ]
-        return await self._collect_stream_text(messages, temperature=0.4)
+        full_content = await self._generate_with_json_check(
+            messages=messages,
+            schema=CLAUSE_RESPONSE_SCHEMA,
+            max_retries=3,
+            temperature=0.4,
+            response_format=None,
+            log_prefix="条款逐条响应",
+            raise_on_fail=True,
+            validator=lambda data: self._validate_clause_response_sources(
+                data,
+                knowledge_source_registry=knowledge_source_registry_text,
+            ),
+        )
+
+        parsed = json.loads(full_content.strip())
+        return {
+            "clause_text": str(parsed.get("clause_text") or clause_text).strip(),
+            "summary": str(parsed.get("summary") or "").strip(),
+            "items": parsed.get("items", []),
+            "content": self._render_clause_response_markdown(parsed),
+        }
 
     async def rewrite_chapter_with_suggestions(
         self,

@@ -1,13 +1,18 @@
+from __future__ import annotations
+
 """请求日志 ORM 模型"""
 import uuid
 from datetime import datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import String, Text, DateTime, ForeignKey, func, Integer
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from ..db.base import Base
+
+if TYPE_CHECKING:
+    from .user import User
 
 
 class RequestLog(Base):

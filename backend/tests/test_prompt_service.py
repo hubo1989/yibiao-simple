@@ -78,6 +78,37 @@ class TestBuiltinPrompts:
         assert "new_title" in prompt
         assert '"outline"' not in prompt
 
+    def test_outline_and_chapter_prompts_accept_response_matrix(self) -> None:
+        """目录与章节提示词应支持注入统一响应矩阵"""
+        outline_prompt = get_builtin_prompt("outline_l1")["prompt"]
+        chapter_prompt = get_builtin_prompt("chapter_content")["prompt"]
+
+        assert "project_response_matrix" in outline_prompt
+        assert "project_response_matrix" in chapter_prompt
+
+
+class TestOpenAIServiceResponseMatrix:
+    """测试项目响应矩阵构建"""
+
+    def test_build_project_response_matrix_contains_rating_fields(self) -> None:
+        matrix = OpenAIService._build_project_response_matrix(
+            [
+                {
+                    "rating_item": "服务能力",
+                    "score": "15分",
+                    "response_targets": ["覆盖服务流程", "明确支撑措施"],
+                    "evidence_suggestions": ["团队配置", "应急预案"],
+                    "writing_focus": "强调响应机制",
+                    "risk_points": ["内容空泛"],
+                }
+            ]
+        )
+
+        assert "服务能力" in matrix
+        assert "覆盖服务流程" in matrix
+        assert "应急预案" in matrix
+        assert "内容空泛" in matrix
+
     def test_key_prompts_include_non_fabrication_and_evidence_guards(self) -> None:
         """关键 prompt 应包含防编造和基于证据判断的约束"""
         chapter_prompt = get_builtin_prompt("chapter_content")["prompt"]
@@ -352,3 +383,54 @@ class TestOpenAIServicePromptContracts:
         assert '"contradictions"' in captured["system_prompt"]
         assert '"overall_consistency"' in captured["system_prompt"]
         assert chunks == ['{"contradictions":[],"summary":"ok","overall_consistency":"consistent"}']
+
+    def test_generate_with_json_check_keeps_list_schema_as_list(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """列表 schema 应保持数组结构，不应被自动拆成单个对象。"""
+        service = OpenAIService(db=None)
+
+        async def fake_collect_stream_text(messages, temperature=0.7, response_format=None):
+            return '[{"rating_item":"服务能力","score":"15分","response_targets":["覆盖服务流程"]}]'
+
+        monkeypatch.setattr(service, "_collect_stream_text", fake_collect_stream_text)
+
+        result = asyncio.run(
+            service._generate_with_json_check(
+                messages=[{"role": "user", "content": "test"}],
+                schema=[{"rating_item": "评分项名称", "score": "分值或权重", "response_targets": ["必须覆盖的响应点"]}],
+                max_retries=0,
+                temperature=0.1,
+                response_format=None,
+                log_prefix="评分响应清单",
+                raise_on_fail=True,
+            )
+        )
+
+        assert result.startswith('[')
+        assert '"rating_item":"服务能力"' in result or '"rating_item": "服务能力"' in result
+
+    def test_generate_with_json_check_keeps_json_string_list_schema_as_list(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """字符串形式的列表 schema 也不应被错误降级成单对象。"""
+        service = OpenAIService(db=None)
+
+        async def fake_collect_stream_text(messages, temperature=0.7, response_format=None):
+            return '[{"rating_item":"服务能力","score":"15分","response_targets":["覆盖服务流程"]}]'
+
+        monkeypatch.setattr(service, "_collect_stream_text", fake_collect_stream_text)
+
+        result = asyncio.run(
+            service._generate_with_json_check(
+                messages=[{"role": "user", "content": "test"}],
+                schema='[{"rating_item":"评分项名称","score":"分值或权重","response_targets":["必须覆盖的响应点"]}]',
+                max_retries=0,
+                temperature=0.1,
+                response_format=None,
+                log_prefix="评分响应清单",
+                raise_on_fail=True,
+            )
+        )
+
+        assert result.startswith('[')
+        assert '"rating_item":"服务能力"' in result or '"rating_item": "服务能力"' in result
