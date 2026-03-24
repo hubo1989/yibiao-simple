@@ -55,6 +55,12 @@ import type {
   RequestLogQuery,
   RequestStats,
 } from '../types/requestLog';
+import type {
+  ChapterMaterialBinding,
+  MaterialAsset,
+  MaterialMatchCandidate,
+  MaterialRequirement,
+} from '../types/material';
 
 const API_BASE_URL = process.env.REACT_APP_API_URL || 'http://localhost:8000';
 
@@ -412,6 +418,78 @@ export const documentApi = {
       },
       body: JSON.stringify(data),
     }, token);
+  },
+};
+
+export const materialApi = {
+  list: async (params?: { category?: string; expired?: boolean; keyword?: string }): Promise<MaterialAsset[]> => {
+    const response = await api.get<MaterialAsset[]>('/api/materials', { params });
+    return response.data;
+  },
+
+  upload: async (formData: FormData): Promise<MaterialAsset> => {
+    const response = await api.post<MaterialAsset>('/api/materials/upload', formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    });
+    return response.data;
+  },
+
+  analyzeRequirements: async (projectId: string): Promise<MaterialRequirement[]> => {
+    const response = await api.post<MaterialRequirement[]>(`/api/projects/${projectId}/material-requirements/analyze`);
+    return response.data;
+  },
+
+  listRequirements: async (projectId: string): Promise<MaterialRequirement[]> => {
+    const response = await api.get<MaterialRequirement[]>(`/api/projects/${projectId}/material-requirements`);
+    return response.data;
+  },
+
+  updateRequirement: async (projectId: string, requirementId: string, payload: Partial<MaterialRequirement>): Promise<MaterialRequirement> => {
+    const response = await api.put<MaterialRequirement>(`/api/projects/${projectId}/material-requirements/${requirementId}`, payload);
+    return response.data;
+  },
+
+  matchRequirement: async (projectId: string, requirementId: string): Promise<MaterialMatchCandidate[]> => {
+    const response = await api.post<MaterialMatchCandidate[]>(`/api/projects/${projectId}/material-requirements/${requirementId}/match`);
+    return response.data;
+  },
+
+  confirmMatch: async (projectId: string, requirementId: string, materialAssetId: string): Promise<MaterialRequirement> => {
+    const response = await api.post<MaterialRequirement>(`/api/projects/${projectId}/material-requirements/${requirementId}/confirm-match`, {
+      material_asset_id: materialAssetId,
+    });
+    return response.data;
+  },
+
+  update: async (id: string, payload: { name?: string; category?: string; description?: string; tags?: string[] | string; review_status?: string; valid_from?: string; valid_until?: string }): Promise<MaterialAsset> => {
+    const response = await api.put<MaterialAsset>(`/api/materials/${id}`, payload);
+    return response.data;
+  },
+
+  delete: async (id: string): Promise<void> => {
+    await api.delete(`/api/materials/${id}`);
+  },
+
+  listBindings: async (projectId: string, chapterId: string): Promise<ChapterMaterialBinding[]> => {
+    const response = await api.get<ChapterMaterialBinding[]>(`/api/projects/${projectId}/chapters/${chapterId}/material-bindings`);
+    return response.data;
+  },
+
+  createBinding: async (
+    projectId: string,
+    chapterId: string,
+    payload: {
+      material_requirement_id?: string | null;
+      material_asset_id: string;
+      anchor_type?: string;
+      anchor_value?: string | null;
+      display_mode?: string;
+      caption?: string | null;
+      sort_index?: number;
+    }
+  ): Promise<ChapterMaterialBinding> => {
+    const response = await api.post<ChapterMaterialBinding>(`/api/projects/${projectId}/chapters/${chapterId}/material-bindings`, payload);
+    return response.data;
   },
 };
 
