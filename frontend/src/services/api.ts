@@ -62,6 +62,15 @@ import type {
   MaterialRequirement,
 } from '../types/material';
 
+/**
+ * 统一提取 API 错误信息，优先使用后端返回的 detail，否则使用兜底中文消息。
+ * 页面层 catch 时只需 `message.error(error.message)` 即可，无需重复解析。
+ */
+function handleApiError(error: unknown, fallback: string): never {
+  const detail = (error as AxiosError<{ detail?: string }>)?.response?.data?.detail;
+  throw new Error(detail || fallback, { cause: error });
+}
+
 const API_BASE_URL = process.env.REACT_APP_API_URL || 'http://localhost:8000';
 
 const TOKEN_KEY = 'auth_token';
@@ -423,56 +432,76 @@ export const documentApi = {
 
 export const materialApi = {
   list: async (params?: { category?: string; expired?: boolean; keyword?: string }): Promise<MaterialAsset[]> => {
-    const response = await api.get<MaterialAsset[]>('/api/materials', { params });
-    return response.data;
+    try {
+      const response = await api.get<MaterialAsset[]>('/api/materials', { params });
+      return response.data;
+    } catch (error) { handleApiError(error, '获取素材列表失败'); }
   },
 
   upload: async (formData: FormData): Promise<MaterialAsset> => {
-    const response = await api.post<MaterialAsset>('/api/materials/upload', formData, {
-      headers: { 'Content-Type': 'multipart/form-data' },
-    });
-    return response.data;
+    try {
+      const response = await api.post<MaterialAsset>('/api/materials/upload', formData, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+      });
+      return response.data;
+    } catch (error) { handleApiError(error, '素材上传失败'); }
   },
 
   analyzeRequirements: async (projectId: string): Promise<MaterialRequirement[]> => {
-    const response = await api.post<MaterialRequirement[]>(`/api/projects/${projectId}/material-requirements/analyze`);
-    return response.data;
+    try {
+      const response = await api.post<MaterialRequirement[]>(`/api/projects/${projectId}/material-requirements/analyze`);
+      return response.data;
+    } catch (error) { handleApiError(error, '分析素材需求失败'); }
   },
 
   listRequirements: async (projectId: string): Promise<MaterialRequirement[]> => {
-    const response = await api.get<MaterialRequirement[]>(`/api/projects/${projectId}/material-requirements`);
-    return response.data;
+    try {
+      const response = await api.get<MaterialRequirement[]>(`/api/projects/${projectId}/material-requirements`);
+      return response.data;
+    } catch (error) { handleApiError(error, '获取素材需求列表失败'); }
   },
 
   updateRequirement: async (projectId: string, requirementId: string, payload: Partial<MaterialRequirement>): Promise<MaterialRequirement> => {
-    const response = await api.put<MaterialRequirement>(`/api/projects/${projectId}/material-requirements/${requirementId}`, payload);
-    return response.data;
+    try {
+      const response = await api.put<MaterialRequirement>(`/api/projects/${projectId}/material-requirements/${requirementId}`, payload);
+      return response.data;
+    } catch (error) { handleApiError(error, '更新素材需求失败'); }
   },
 
   matchRequirement: async (projectId: string, requirementId: string): Promise<MaterialMatchCandidate[]> => {
-    const response = await api.post<MaterialMatchCandidate[]>(`/api/projects/${projectId}/material-requirements/${requirementId}/match`);
-    return response.data;
+    try {
+      const response = await api.post<MaterialMatchCandidate[]>(`/api/projects/${projectId}/material-requirements/${requirementId}/match`);
+      return response.data;
+    } catch (error) { handleApiError(error, '匹配素材失败'); }
   },
 
   confirmMatch: async (projectId: string, requirementId: string, materialAssetId: string): Promise<MaterialRequirement> => {
-    const response = await api.post<MaterialRequirement>(`/api/projects/${projectId}/material-requirements/${requirementId}/confirm-match`, {
-      material_asset_id: materialAssetId,
-    });
-    return response.data;
+    try {
+      const response = await api.post<MaterialRequirement>(`/api/projects/${projectId}/material-requirements/${requirementId}/confirm-match`, {
+        material_asset_id: materialAssetId,
+      });
+      return response.data;
+    } catch (error) { handleApiError(error, '确认素材匹配失败'); }
   },
 
   update: async (id: string, payload: { name?: string; category?: string; description?: string; tags?: string[] | string; review_status?: string; valid_from?: string; valid_until?: string }): Promise<MaterialAsset> => {
-    const response = await api.put<MaterialAsset>(`/api/materials/${id}`, payload);
-    return response.data;
+    try {
+      const response = await api.put<MaterialAsset>(`/api/materials/${id}`, payload);
+      return response.data;
+    } catch (error) { handleApiError(error, '更新素材失败'); }
   },
 
   delete: async (id: string): Promise<void> => {
-    await api.delete(`/api/materials/${id}`);
+    try {
+      await api.delete(`/api/materials/${id}`);
+    } catch (error) { handleApiError(error, '删除素材失败'); }
   },
 
   listBindings: async (projectId: string, chapterId: string): Promise<ChapterMaterialBinding[]> => {
-    const response = await api.get<ChapterMaterialBinding[]>(`/api/projects/${projectId}/chapters/${chapterId}/material-bindings`);
-    return response.data;
+    try {
+      const response = await api.get<ChapterMaterialBinding[]>(`/api/projects/${projectId}/chapters/${chapterId}/material-bindings`);
+      return response.data;
+    } catch (error) { handleApiError(error, '获取素材绑定列表失败'); }
   },
 
   createBinding: async (
@@ -488,8 +517,10 @@ export const materialApi = {
       sort_index?: number;
     }
   ): Promise<ChapterMaterialBinding> => {
-    const response = await api.post<ChapterMaterialBinding>(`/api/projects/${projectId}/chapters/${chapterId}/material-bindings`, payload);
-    return response.data;
+    try {
+      const response = await api.post<ChapterMaterialBinding>(`/api/projects/${projectId}/chapters/${chapterId}/material-bindings`, payload);
+      return response.data;
+    } catch (error) { handleApiError(error, '创建素材绑定失败'); }
   },
 };
 

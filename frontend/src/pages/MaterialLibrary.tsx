@@ -44,7 +44,7 @@ const MaterialLibrary: React.FC = () => {
       });
       setItems(data);
     } catch (error: any) {
-      message.error(error.response?.data?.detail || '加载素材失败');
+      message.error((error as Error).message);
     } finally {
       setLoading(false);
     }
@@ -92,7 +92,7 @@ const MaterialLibrary: React.FC = () => {
       form.resetFields();
       await loadData();
     } catch (error: any) {
-      message.error(error.response?.data?.detail || '素材上传失败');
+      message.error((error as Error).message);
     } finally {
       setUploadSubmitting(false);
     }
@@ -113,7 +113,7 @@ const MaterialLibrary: React.FC = () => {
       editForm.resetFields();
       await loadData();
     } catch (error: any) {
-      message.error(error.response?.data?.detail || '更新失败');
+      message.error((error as Error).message);
     } finally {
       setEditSubmitting(false);
     }
@@ -126,7 +126,7 @@ const MaterialLibrary: React.FC = () => {
       message.success('删除成功');
       await loadData();
     } catch (error: any) {
-      message.error(error.response?.data?.detail || '删除失败');
+      message.error((error as Error).message);
     } finally {
       setDeletingId(null);
     }
