@@ -68,7 +68,7 @@ import type {
  */
 function handleApiError(error: unknown, fallback: string): never {
   const detail = (error as AxiosError<{ detail?: string }>)?.response?.data?.detail;
-  throw new Error(detail || fallback);
+  throw new Error(detail || fallback, { cause: error });
 }
 
 const API_BASE_URL = process.env.REACT_APP_API_URL || 'http://localhost:8000';
