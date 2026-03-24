@@ -32,6 +32,7 @@ const MaterialLibrary: React.FC = () => {
   const [editSubmitting, setEditSubmitting] = useState(false);
   const [editForm] = Form.useForm();
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [uploadSubmitting, setUploadSubmitting] = useState(false);
   const [previewPdf, setPreviewPdf] = useState<string | null>(null);
 
   const loadData = useCallback(async () => {
@@ -69,10 +70,12 @@ const MaterialLibrary: React.FC = () => {
   const filteredItems = useMemo(() => items, [items]);
 
   const handleUpload = async (values: any) => {
+    if (uploadSubmitting) return;
     if (!file) {
       message.warning('请选择要上传的素材文件');
       return;
     }
+    setUploadSubmitting(true);
     const formData = new FormData();
     formData.append('file', file);
     formData.append('name', values.name);
@@ -90,6 +93,8 @@ const MaterialLibrary: React.FC = () => {
       await loadData();
     } catch (error: any) {
       message.error(error.response?.data?.detail || '素材上传失败');
+    } finally {
+      setUploadSubmitting(false);
     }
   };
 
@@ -137,10 +142,7 @@ const MaterialLibrary: React.FC = () => {
                 allowClear
                 placeholder="搜索素材名称或说明"
                 style={{ width: 280 }}
-                onSearch={(value) => {
-                  setKeyword(value);
-                  void loadData();
-                }}
+                onSearch={(value) => setKeyword(value)}
               />
               <Select
                 allowClear
@@ -272,6 +274,7 @@ const MaterialLibrary: React.FC = () => {
         onCancel={() => setShowUpload(false)}
         onOk={() => form.submit()}
         okText="上传"
+        confirmLoading={uploadSubmitting}
       >
         <Form form={form} layout="vertical" onFinish={handleUpload}>
           <Form.Item name="name" label="素材名称" rules={[{ required: true, message: '请输入素材名称' }]}>
@@ -353,7 +356,7 @@ const MaterialLibrary: React.FC = () => {
         <iframe
           src={previewPdf || ''}
           style={{ width: '100%', height: '75vh', border: 'none' }}
-          title="PDF Preview"
+          title="PDF 预览"
         />
       </Modal>
 
