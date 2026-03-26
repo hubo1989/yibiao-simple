@@ -147,11 +147,11 @@ const ReviewIssueItem: React.FC<ReviewIssueItemProps> = ({ dimension, item, onCo
             <Typography.Text strong>{c.description}</Typography.Text>
           </div>
           <div style={{ fontSize: 13, marginBottom: 4 }}>
-            <Typography.Text type="secondary">章节A：</Typography>{c.chapter_a}
+            <Typography.Text type="secondary">章节A：</Typography.Text>{c.chapter_a}
             <Typography.Paragraph style={{ fontSize: 13, margin: '2px 0' }}>{c.detail_a}</Typography.Paragraph>
           </div>
           <div style={{ fontSize: 13, marginBottom: 4 }}>
-            <Typography.Text type="secondary">章节B：</Typography>{c.chapter_b}
+            <Typography.Text type="secondary">章节B：</Typography.Text>{c.chapter_b}
             <Typography.Paragraph style={{ fontSize: 13, margin: '2px 0' }}>{c.detail_b}</Typography.Paragraph>
           </div>
           {c.suggestion && (

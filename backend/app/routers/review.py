@@ -286,6 +286,8 @@ async def execute_review(
                 results = await service.execute_review(
                     task_id=task_id,
                     dimensions=dimensions,
+                    scope=request.scope,
+                    chapter_ids=request.chapter_ids,
                     model_name=request.model_name,
                     provider_config_id=request.provider_config_id,
                     use_knowledge=request.use_knowledge,

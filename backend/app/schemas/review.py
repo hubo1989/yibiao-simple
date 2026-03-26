@@ -106,12 +106,42 @@ class ReviewExecuteRequest(BaseModel):
     knowledge_ids: list[str] | None = Field(None, description="知识库ID列表")
 
 
+class BidFileInfo(BaseModel):
+    """投标文件信息"""
+    filename: str = ""
+    file_size: int = 0
+    paragraph_count: int = 0
+    heading_count: int = 0
+
+
+class ReviewConfig(BaseModel):
+    """审查配置"""
+    dimensions: list[ReviewDimension] = []
+    scope: str = "full"
+    model_name: str | None = None
+
+
+class ResponsivenessResult(BaseModel):
+    """响应性审查结果"""
+    items: list[ResponsivenessItem] = []
+
+
+class ComplianceResult(BaseModel):
+    """合规性审查结果"""
+    items: list[ComplianceItem] = []
+
+
+class ConsistencyResult(BaseModel):
+    """一致性审查结果"""
+    contradictions: list[ConsistencyItem] = []
+
+
 class BidFileUploadResponse(BaseModel):
     """投标文件上传响应"""
     success: bool
     message: str
     task_id: str | None = None
-    file_info: dict | None = None
+    file_info: BidFileInfo | None = None
 
 
 class ReviewHistoryItem(BaseModel):
@@ -135,11 +165,11 @@ class ReviewResultResponse(BaseModel):
     task_id: uuid.UUID
     project_id: uuid.UUID
     status: ReviewTaskStatus
-    config: dict
+    config: ReviewConfig
     summary: ReviewSummary | None = None
-    responsiveness: dict | None = None
-    compliance: dict | None = None
-    consistency: dict | None = None
+    responsiveness: ResponsivenessResult | None = None
+    compliance: ComplianceResult | None = None
+    consistency: ConsistencyResult | None = None
     error_message: str | None = None
     created_at: datetime
 

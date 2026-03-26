@@ -264,8 +264,10 @@ const BidReview: React.FC = () => {
 
   // 复制到剪贴板
   const copyText = (text: string) => {
-    navigator.clipboard.writeText(text);
-    message.success('已复制到剪贴板');
+    navigator.clipboard.writeText(text).then(
+      () => message.success('已复制到剪贴板'),
+      () => message.error('复制失败，请手动复制'),
+    );
   };
 
   if (loading) {

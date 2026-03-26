@@ -220,8 +220,11 @@ class ReviewService:
         responsiveness: dict | None,
         compliance: dict | None,
         consistency: dict | None,
+        failed_dimensions: list[str] | None = None,
     ) -> dict:
         """根据三维度审查结果生成汇总"""
+        failed_dims = set(failed_dimensions or [])
+
         # 响应性统计
         resp_items = responsiveness.get("items", []) if responsiveness else []
         total_score = sum(item.get("max_score", 0) for item in resp_items)
@@ -268,16 +271,45 @@ class ReviewService:
         else:
             risk_level = "low"
 
-        # 综合得分 (响应性得分占70%, 合规+一致性各占15%)
-        if total_score > 0:
-            resp_score_ratio = (earned_score / total_score) * 70
-        else:
-            resp_score_ratio = 70
+        # 综合得分 — 仅对成功执行的维度计分，按实际维度数归一化
+        dim_weights: list[tuple[str, float]] = []
+        if "responsiveness" not in failed_dims:
+            dim_weights.append(("responsiveness", 0.7))
+        if "compliance" not in failed_dims:
+            dim_weights.append(("compliance", 0.15))
+        if "consistency" not in failed_dims:
+            dim_weights.append(("consistency", 0.15))
 
-        comp_pass_count = sum(1 for i in comp_items if i.get("check_result") == "pass")
-        comp_ratio = (comp_pass_count / len(comp_items) * 15) if comp_items else 15
-        consistency_ratio = 15 if not contradictions else max(0, 15 - len(contradictions) * 3)
-        overall_score = min(100, int(resp_score_ratio + comp_ratio + consistency_ratio))
+        if not dim_weights:
+            return {
+                "overall_score": 0,
+                "score_max": 100,
+                "coverage_rate": round(coverage_rate, 2),
+                "risk_level": risk_level,
+                "total_issues": total_issues,
+                "issue_distribution": issue_distribution,
+            }
+
+        # 归一化权重使总和为 1
+        total_weight = sum(w for _, w in dim_weights)
+        normalized = [(name, weight / total_weight) for name, weight in dim_weights]
+
+        score_parts = 0.0
+        for dim_name, weight in normalized:
+            if dim_name == "responsiveness":
+                if total_score > 0:
+                    score_parts += (earned_score / total_score) * weight
+            elif dim_name == "compliance":
+                if comp_items:
+                    pass_count = sum(1 for i in comp_items if i.get("check_result") == "pass")
+                    score_parts += (pass_count / len(comp_items)) * weight
+            elif dim_name == "consistency":
+                if contradictions:
+                    score_parts += max(0, 1 - len(contradictions) * 0.2) * weight
+                else:
+                    score_parts += weight
+
+        overall_score = min(100, int(score_parts * 100))
 
         return {
             "overall_score": overall_score,
@@ -292,6 +324,8 @@ class ReviewService:
         self,
         task_id: uuid.UUID,
         dimensions: list[str],
+        scope: str = "full",
+        chapter_ids: list[str] | None = None,
         model_name: str | None = None,
         provider_config_id: uuid.UUID | None = None,
         use_knowledge: bool = False,
@@ -334,6 +368,10 @@ class ReviewService:
                     query=f"标书审查参考 {project.name}",
                     top_k=10,
                 )
+                # 按 knowledge_ids 过滤
+                if results and knowledge_ids:
+                    kid_set = set(knowledge_ids)
+                    results = [r for r in results if str(r.get('id', '')) in kid_set]
                 if results:
                     knowledge_context = "\n\n".join(
                         f"- {r.get('content', '')}" for r in results[:10]
@@ -375,10 +413,15 @@ class ReviewService:
         resp_result = None
         comp_result = None
         cons_result = None
+        failed_dimensions: list[str] = []
 
         for name, result in zip(dimension_names, results):
             if isinstance(result, Exception):
                 print(f"[Review] {name} 维度执行异常: {result}")
+                failed_dimensions.append(name)
+                continue
+            if result is None:
+                failed_dimensions.append(name)
                 continue
             if name == "responsiveness":
                 resp_result = result
@@ -387,8 +430,21 @@ class ReviewService:
             elif name == "consistency":
                 cons_result = result
 
-        # 生成汇总
-        summary = self.generate_summary(resp_result, comp_result, cons_result)
+        # 全部失败则标记为 FAILED
+        if len(failed_dimensions) == len(dimension_names):
+            task.status = ReviewTaskStatus.FAILED
+            task.error_message = f"全部维度审查失败: {', '.join(failed_dimensions)}"
+            await self.db.commit()
+            raise ValueError(task.error_message)
+
+        # 部分失败标记 partial 状态信息
+        task.error_message = (
+            f"部分维度审查失败: {', '.join(failed_dimensions)}"
+            if failed_dimensions else None
+        )
+
+        # 生成汇总（仅对成功维度计分）
+        summary = self.generate_summary(resp_result, comp_result, cons_result, failed_dimensions)
 
         # 保存结果到数据库
         task.responsiveness_result = resp_result

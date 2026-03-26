@@ -118,7 +118,7 @@ export interface ReviewResultResponse {
   config: {
     dimensions: ReviewDimension[];
     scope: string;
-    model_name: string;
+    model_name: string | null;
   };
   summary: ReviewSummary | null;
   responsiveness: { items: ResponsivenessItem[] } | null;

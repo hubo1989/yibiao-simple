@@ -6,7 +6,7 @@ const { Dragger } = Upload;
 
 interface BidFileUploadProps {
   uploading: boolean;
-  onUpload: (file: File) => Promise<false>;
+  onUpload: (file: File) => Promise<boolean>;
 }
 
 const BidFileUpload: React.FC<BidFileUploadProps> = ({ uploading, onUpload }) => (

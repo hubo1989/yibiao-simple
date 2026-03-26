@@ -25,7 +25,7 @@ const ReviewHistoryDrawer: React.FC<ReviewHistoryDrawerProps> = ({
         renderItem={(item) => (
           <List.Item
             actions={[
-              <Button
+              <Button key="view"
                 type="link"
                 size="small"
                 onClick={() => onSelectItem(item.task_id)}
