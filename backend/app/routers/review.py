@@ -176,17 +176,13 @@ async def upload_bid_file(
 
     # 文件大小校验（50MB）
     max_size = 50 * 1024 * 1024
-    file_size = 0
-    chunks = []
-    async for chunk in file:
-        file_size += len(chunk)
-        if file_size > max_size:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="文件大小超过 50MB 限制",
-            )
-        chunks.append(chunk)
-    file_content_bytes = b"".join(chunks)
+    file_content_bytes = await file.read()
+    file_size = len(file_content_bytes)
+    if file_size > max_size:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="文件大小超过 50MB 限制",
+        )
     await file.seek(0)
 
     # 保存原始文件到磁盘

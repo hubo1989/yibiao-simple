@@ -11,7 +11,7 @@ import sqlalchemy as sa
 
 # revision identifiers, used by Alembic.
 revision = "0017_add_outline_binding_fields_to_chapters"
-down_revision = "0016_add_vector_index_support"
+down_revision = "0016_vector_index_support"
 branch_labels = None
 depends_on = None
 
