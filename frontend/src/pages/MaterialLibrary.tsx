@@ -215,7 +215,7 @@ const MaterialLibrary: React.FC = () => {
                     item.file_type === 'pdf' ? (
                       <div
                         style={{ height: 180, overflow: 'hidden', background: '#f8fafc', cursor: 'pointer', position: 'relative' }}
-                        onClick={() => setPreviewPdf(`${process.env.REACT_APP_API_URL || 'http://localhost:8000'}/${item.file_path.replace(/^\/+/, '')}`)}
+                        onClick={() => setPreviewPdf(`${process.env.REACT_APP_API_URL || 'http://localhost:8000'}/${(item.file_path || '').replace(/^\/+/, '')}`)}
                       >
                         <img
                           src={`${process.env.REACT_APP_API_URL || 'http://localhost:8000'}/${(item.thumbnail_path || item.preview_path || '').replace(/^\/+/, '')}`}

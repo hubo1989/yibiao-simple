@@ -40,6 +40,13 @@ import type {
   UsageStats,
 } from '../types/admin';
 import type {
+  ReviewExecuteRequest,
+  BidFileUploadResponse,
+  ReviewResultResponse,
+  ReviewHistoryResponse,
+  ReviewExportRequest,
+} from '../types/review';
+import type {
   PromptResponse,
   PromptListResponse,
   PromptUpdate,
@@ -984,6 +991,76 @@ export const requestLogApi = {
       params: { start_time: startTime, end_time: endTime },
     });
     return response.data;
+  },
+};
+
+// ==================== 标书审查 API ====================
+
+export const reviewApi = {
+  // 上传投标文件
+  uploadBidFile: async (
+    projectId: string,
+    file: File,
+    token?: string,
+  ): Promise<BidFileUploadResponse> => {
+    const formData = new FormData();
+    formData.append('project_id', projectId);
+    formData.append('file', file);
+    const response = await api.post('/api/review/upload-bid', formData, {
+      headers: {
+        'Content-Type': 'multipart/form-data',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+    });
+    return response.data;
+  },
+
+  // 执行审查（返回 fetch Response 用于 SSE 流式处理）
+  executeReview: async (
+    request: ReviewExecuteRequest,
+    token?: string,
+  ): Promise<Response> => {
+    const response = await fetch(`${API_BASE_URL}/api/review/execute`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+      body: JSON.stringify(request),
+    });
+    return response;
+  },
+
+  // 获取审查结果
+  getResult: async (taskId: string): Promise<ReviewResultResponse> => {
+    const response = await api.get(`/api/review/result/${taskId}`);
+    return response.data;
+  },
+
+  // 获取审查历史
+  getHistory: async (projectId: string): Promise<ReviewHistoryResponse> => {
+    const response = await api.get(`/api/review/history/${projectId}`);
+    return response.data;
+  },
+
+  // 导出带批注的 Word
+  exportWord: async (
+    request: ReviewExportRequest,
+    token?: string,
+  ): Promise<Blob> => {
+    const response = await fetch(`${API_BASE_URL}/api/review/export-word`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+      body: JSON.stringify(request),
+    });
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({}));
+      throw new Error(error.detail || '导出失败');
+    }
+    return response.blob();
   },
 };
 
