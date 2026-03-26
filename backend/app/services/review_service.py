@@ -101,20 +101,30 @@ class ReviewService:
 
         return svc
 
+    async def _prefetch_prompts(
+        self, project_id: uuid.UUID, scene_keys: list[str]
+    ) -> dict[str, tuple[str, str]]:
+        """预加载所有维度的 prompt，避免 asyncio.gather 中共享 AsyncSession"""
+        prompt_service = PromptService(self.db)
+        result: dict[str, tuple[str, str]] = {}
+        for key in scene_keys:
+            prompt, _ = await prompt_service.get_prompt(key, project_id)
+            result[key] = PromptService.split_prompt(prompt)
+        return result
+
     async def _run_dimension(
         self,
         openai_service: OpenAIService,
-        project_id: uuid.UUID,
         scene_key: str,
         schema: dict,
         user_content: str,
+        system_prompt: str,
+        user_template: str,
         temperature: float = 0.3,
     ) -> dict | None:
         """执行单维度审查，返回解析后的 JSON 结果"""
         try:
             prompt_service = PromptService(self.db)
-            prompt, _ = await prompt_service.get_prompt(scene_key, project_id)
-            system_prompt, user_template = PromptService.split_prompt(prompt)
             user_prompt = prompt_service.render_prompt(
                 user_template, {"content": user_content}
             )
@@ -147,10 +157,11 @@ class ReviewService:
         openai_service: OpenAIService,
         project: Project,
         bid_content: str,
+        system_prompt: str,
+        user_template: str,
         knowledge_context: str = "",
     ) -> dict:
         """执行响应性审查"""
-        # 构建输入内容
         sections = []
         if project.tech_requirements:
             sections.append(f"### 技术评分要求\n{project.tech_requirements}")
@@ -164,10 +175,11 @@ class ReviewService:
         user_content = "\n\n".join(sections)
         result = await self._run_dimension(
             openai_service,
-            project.id,
             "bid_review_responsiveness",
             RESPONSIVENESS_RESULT_SCHEMA,
             user_content,
+            system_prompt,
+            user_template,
         )
         return result or {"items": []}
 
@@ -176,21 +188,23 @@ class ReviewService:
         openai_service: OpenAIService,
         project: Project,
         bid_content: str,
+        system_prompt: str,
+        user_template: str,
     ) -> dict:
         """执行合规性审查"""
         sections = []
         if project.file_content:
-            # 截取招标文件中与合规相关的部分（投标人须知、资格审查等）
             sections.append(f"### 招标文件（合规相关）\n{project.file_content}")
         sections.append(f"### 投标文件内容\n{bid_content}")
 
         user_content = "\n\n".join(sections)
         result = await self._run_dimension(
             openai_service,
-            project.id,
             "bid_review_compliance",
             COMPLIANCE_RESULT_SCHEMA,
             user_content,
+            system_prompt,
+            user_template,
         )
         return result or {"items": []}
 
@@ -198,7 +212,8 @@ class ReviewService:
         self,
         openai_service: OpenAIService,
         bid_content: str,
-        project_id: uuid.UUID,
+        system_prompt: str,
+        user_template: str,
         project_overview: str = "",
     ) -> dict:
         """执行一致性审查"""
@@ -208,10 +223,11 @@ class ReviewService:
 
         result = await self._run_dimension(
             openai_service,
-            project_id,
             "bid_review_consistency",
             CONSISTENCY_RESULT_SCHEMA,
             user_content,
+            system_prompt,
+            user_template,
         )
         return result or {"contradictions": []}
 
@@ -239,12 +255,11 @@ class ReviewService:
 
         # 响应性问题
         for item in resp_items:
-            for issue in item.get("issues", []):
-                status = item.get("coverage_status", "missing")
-                if status == "missing":
-                    issue_distribution["critical"] += 1
-                elif status == "risk":
-                    issue_distribution["warning"] += 1
+            status = item.get("coverage_status", "missing")
+            if status == "missing":
+                issue_distribution["critical"] += 1
+            elif status == "risk":
+                issue_distribution["warning"] += 1
 
         # 合规性问题
         comp_items = compliance.get("items", []) if compliance else []
@@ -299,6 +314,9 @@ class ReviewService:
             if dim_name == "responsiveness":
                 if total_score > 0:
                     score_parts += (earned_score / total_score) * weight
+                else:
+                    # 无评分项时视为满分
+                    score_parts += weight
             elif dim_name == "compliance":
                 if comp_items:
                     pass_count = sum(1 for i in comp_items if i.get("check_result") == "pass")
@@ -379,28 +397,40 @@ class ReviewService:
             except Exception as e:
                 print(f"[Review] 知识库检索失败，跳过: {e}")
 
+        # 预加载所有维度的 prompt，避免 asyncio.gather 中共享 AsyncSession
+        scene_key_map = {
+            "responsiveness": "bid_review_responsiveness",
+            "compliance": "bid_review_compliance",
+            "consistency": "bid_review_consistency",
+        }
+        needed_keys = [scene_key_map[d] for d in dimensions if d in scene_key_map]
+        prompt_cache = await self._prefetch_prompts(project.id, needed_keys)
+
         # 构建维度执行列表
         dimension_funcs = []
         dimension_names = []
 
         if "responsiveness" in dimensions:
+            sp, ut = prompt_cache["bid_review_responsiveness"]
             dimension_funcs.append(
                 self._run_responsiveness_check(
-                    openai_service, project, bid_content, knowledge_context
+                    openai_service, project, bid_content, sp, ut, knowledge_context
                 )
             )
             dimension_names.append("responsiveness")
 
         if "compliance" in dimensions:
+            sp, ut = prompt_cache["bid_review_compliance"]
             dimension_funcs.append(
-                self._run_compliance_check(openai_service, project, bid_content)
+                self._run_compliance_check(openai_service, project, bid_content, sp, ut)
             )
             dimension_names.append("compliance")
 
         if "consistency" in dimensions:
+            sp, ut = prompt_cache["bid_review_consistency"]
             dimension_funcs.append(
                 self._run_consistency_check(
-                    openai_service, bid_content, project.id,
+                    openai_service, bid_content, sp, ut,
                     project.project_overview or ""
                 )
             )
@@ -415,7 +445,7 @@ class ReviewService:
         cons_result = None
         failed_dimensions: list[str] = []
 
-        for name, result in zip(dimension_names, results):
+        for name, result in zip(dimension_names, results, strict=True):
             if isinstance(result, Exception):
                 print(f"[Review] {name} 维度执行异常: {result}")
                 failed_dimensions.append(name)

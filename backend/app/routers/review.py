@@ -126,7 +126,13 @@ async def upload_bid_file(
     current_user: Annotated[User, Depends(require_editor)] = None,
     db: Annotated[AsyncSession, Depends(get_db)] = None,
 ):
-    """上传投标文件到指定项目的审查任务"""
+    """上传投标文件到指定项目的审查任务。
+
+    接收 .docx 格式的投标文件，校验项目状态、文件类型和大小后，
+    提取文本内容并构建段落索引，创建审查任务记录。
+
+    前置条件：项目已上传招标文件且已完成分析。
+    """
     try:
         project_uuid = uuid.UUID(project_id)
     except ValueError:
@@ -242,7 +248,11 @@ async def execute_review(
     current_user: Annotated[User, Depends(require_editor)] = None,
     db: Annotated[AsyncSession, Depends(get_db)] = None,
 ):
-    """执行审查任务，SSE 流式返回进度和结果"""
+    """执行审查任务，SSE 流式返回进度和结果。
+
+    支持响应性、合规性、一致性三个维度的并行审查。
+    通过 SSE 事件流实时推送每个维度的执行进度和最终结果。
+    """
     task = await db.get(BidReviewTask, request.task_id)
     if not task:
         raise HTTPException(status_code=404, detail="审查任务不存在")
@@ -319,8 +329,8 @@ async def execute_review(
                         err_task.status = ReviewTaskStatus.FAILED
                         err_task.error_message = str(e)
                         await err_db.commit()
-            except Exception:
-                pass
+            except Exception as err_update_exc:
+                print(f"[Review] 更新任务失败状态异常: {err_update_exc}")
             yield "data: [DONE]\n\n"
 
     return sse_response(generate())

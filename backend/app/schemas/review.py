@@ -10,10 +10,10 @@ from ..models.bid_review_task import ReviewTaskStatus
 
 # === 审查维度与状态类型 ===
 
-type ReviewDimension = Literal["responsiveness", "compliance", "consistency"]
-type CoverageStatus = Literal["covered", "partial", "missing", "risk"]
-type Severity = Literal["critical", "warning", "info"]
-type RiskLevel = Literal["low", "medium", "high"]
+ReviewDimension: type = Literal["responsiveness", "compliance", "consistency"]
+CoverageStatus: type = Literal["covered", "partial", "missing", "risk"]
+Severity: type = Literal["critical", "warning", "info"]
+RiskLevel: type = Literal["low", "medium", "high"]
 
 
 # === 响应性审查 ===

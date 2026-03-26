@@ -85,7 +85,7 @@ const BidReview: React.FC = () => {
 
   // 上传
   const [taskId, setTaskId] = useState<string | null>(null);
-  const [fileInfo, setFileInfo] = useState<any>(null);
+  const [fileInfo, setFileInfo] = useState<{ filename: string; file_size: number; paragraph_count: number; heading_count: number } | null>(null);
   const [uploading, setUploading] = useState(false);
 
   // 审查执行
