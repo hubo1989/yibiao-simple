@@ -1,12 +1,12 @@
 import React from 'react';
 import { Card, Tabs, Select, List, Empty } from 'antd';
 import { REVIEW_DIMENSION_LABELS } from '../../types/review';
-import type { ReviewDimension } from '../../types/review';
+import type { ReviewDimension, ResponsivenessItem, ComplianceItem, ConsistencyItem } from '../../types/review';
 import ReviewIssueItem from './ReviewIssueItem';
 
 interface IssueEntry {
   dimension: string;
-  item: any;
+  item: ResponsivenessItem | ComplianceItem | ConsistencyItem;
   key: string;
 }
 
@@ -77,6 +77,7 @@ const ReviewIssueList: React.FC<ReviewIssueListProps> = ({
       ) : (
         <List
           dataSource={filteredIssues}
+          rowKey="key"
           renderItem={(entry) => (
             <ReviewIssueItem
               dimension={entry.dimension}

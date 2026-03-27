@@ -189,7 +189,12 @@ async def upload_bid_file(
     review_dir = os.path.join(settings.upload_dir, "review", str(project_uuid))
     os.makedirs(review_dir, exist_ok=True)
     timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
-    safe_filename = f"{timestamp}_{file.filename}" if file.filename else f"{timestamp}_bid.docx"
+    # 安全处理客户端文件名：移除路径分隔符，使用原始文件名（不含扩展名）+ 安全扩展名
+    original_name = os.path.basename(file.filename or "bid").split('.')[0]
+    # 只保留安全字符（字母、数字、下划线、连字符、中文）
+    safe_name = "".join(c for c in original_name if c.isalnum() or c in ('_', '-', ' ', '.', '，', '、'))
+    safe_name = safe_name.strip()[:50]  # 限制长度
+    safe_filename = f"{timestamp}_{safe_name}.docx"
     bid_file_path = os.path.join(review_dir, safe_filename)
 
     with open(bid_file_path, "wb") as f:

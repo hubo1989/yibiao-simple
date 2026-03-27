@@ -384,16 +384,16 @@ class ReviewService:
                 results = await retrieval_svc.search(
                     project_id=project.id,
                     query=f"标书审查参考 {project.name}",
-                    top_k=10,
+                    top_k=len(knowledge_ids),
                 )
                 # 按 knowledge_ids 过滤
-                if results and knowledge_ids:
-                    kid_set = set(knowledge_ids)
-                    results = [r for r in results if str(r.get('id', '')) in kid_set]
                 if results:
-                    knowledge_context = "\n\n".join(
-                        f"- {r.get('content', '')}" for r in results[:10]
-                    )
+                    kid_set = set(knowledge_ids)
+                    filtered = [r for r in results if str(r.get('id', '')) in kid_set]
+                    if filtered:
+                        knowledge_context = "\n\n".join(
+                            f"- {r.get('content', '')}" for r in filtered[:10]
+                        )
             except Exception as e:
                 print(f"[Review] 知识库检索失败，跳过: {e}")
 

@@ -1001,7 +1001,6 @@ export const reviewApi = {
   uploadBidFile: async (
     projectId: string,
     file: File,
-    token?: string,
   ): Promise<BidFileUploadResponse> => {
     const formData = new FormData();
     formData.append('project_id', projectId);
@@ -1009,7 +1008,6 @@ export const reviewApi = {
     const response = await api.post('/api/review/upload-bid', formData, {
       headers: {
         'Content-Type': 'multipart/form-data',
-        ...(token ? { Authorization: `Bearer ${token}` } : {}),
       },
     });
     return response.data;
@@ -1020,14 +1018,17 @@ export const reviewApi = {
     request: ReviewExecuteRequest,
     token?: string,
   ): Promise<Response> => {
-    const response = await fetch(`${API_BASE_URL}/api/review/execute`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    const response = await authenticatedFetch(
+      `${API_BASE_URL}/api/review/execute`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(request),
       },
-      body: JSON.stringify(request),
-    });
+      token
+    );
     return response;
   },
 
@@ -1048,14 +1049,17 @@ export const reviewApi = {
     request: ReviewExportRequest,
     token?: string,
   ): Promise<Blob> => {
-    const response = await fetch(`${API_BASE_URL}/api/review/export-word`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    const response = await authenticatedFetch(
+      `${API_BASE_URL}/api/review/export-word`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(request),
       },
-      body: JSON.stringify(request),
-    });
+      token
+    );
     if (!response.ok) {
       const error = await response.json().catch(() => ({}));
       throw new Error(error.detail || '导出失败');

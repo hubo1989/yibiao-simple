@@ -12,13 +12,15 @@ export type MaterialCategory =
   | 'project_case'
   | 'other';
 
+export type MaterialReviewStatus = 'pending' | 'confirmed' | 'rejected';
+
 export interface MaterialAsset {
   id: string;
   name: string;
   category: MaterialCategory;
   description?: string;
   tags?: string[];
-  review_status?: string;
+  review_status?: MaterialReviewStatus;
   file_type?: string;
   file_path?: string;
   thumbnail_path?: string;
@@ -33,7 +35,7 @@ export interface MaterialRequirement {
   project_id: string;
   name: string;
   description: string;
-  category: string;
+  category: MaterialCategory;
   requirement_text: string;
   priority: 'high' | 'medium' | 'low';
   status: 'pending' | 'matched' | 'confirmed';
