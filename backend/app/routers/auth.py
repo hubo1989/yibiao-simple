@@ -1,7 +1,7 @@
 """认证路由：注册、登录、获取当前用户"""
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Response, Request
 from sqlalchemy import select, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -11,8 +11,8 @@ from ..schemas.auth import (
     UserRegister,
     UserLogin,
     Token,
+    TokenResponseWithCsrf,
     UserMe,
-    RefreshTokenRequest,
 )
 from ..auth.security import (
     verify_password,
@@ -20,17 +20,54 @@ from ..auth.security import (
     create_access_token,
     create_refresh_token,
     decode_token,
+    set_refresh_token_cookie,
+    get_refresh_token_from_cookie,
 )
 from ..auth.dependencies import get_current_user, get_current_active_user
+from ..auth.csrf import generate_csrf_token, validate_csrf_token
+
+# 导入速率限制器（如果可用）
+try:
+    from ..main import limiter
+except (ImportError, AttributeError):
+    class DummyLimiter:
+        def limit(self, *args, **kwargs):
+            def decorator(func):
+                return func
+            return decorator
+    limiter = DummyLimiter()
 
 router = APIRouter(prefix="/api/auth", tags=["认证"])
 
 
-@router.post("/register", response_model=Token, status_code=status.HTTP_201_CREATED)
+@router.get("/csrf-token")
+async def get_csrf_token(
+    response: Response,
+) -> dict:
+    """获取 CSRF token（用于初始登录前的预请求）"""
+    csrf_token = generate_csrf_token()
+
+    # 设置 CSRF cookie
+    response.set_cookie(
+        key="csrf_token",
+        value=csrf_token,
+        httponly=False,
+        path="/",
+        samesite="lax",
+        secure=False,  # 生产环境应设为 True
+    )
+
+    return {"csrf_token": csrf_token}
+
+
+@router.post("/register", response_model=TokenResponseWithCsrf, status_code=status.HTTP_201_CREATED)
+@limiter.limit("5/minute")
 async def register(
     user_data: UserRegister,
+    response: Response,
+    request: Request,
     db: Annotated[AsyncSession, Depends(get_db)],
-) -> Token:
+) -> TokenResponseWithCsrf:
     """用户注册"""
     # 检查用户名或邮箱是否已存在
     result = await db.execute(
@@ -77,18 +114,38 @@ async def register(
         additional_claims={"role": new_user.role.value},
     )
 
-    return Token(
+    # 设置 refresh token 为 httpOnly cookie
+    cookie_config = set_refresh_token_cookie(access_token, refresh_token, request)
+    response.set_cookie(**cookie_config)
+
+    # 生成 CSRF token
+    csrf_token = generate_csrf_token()
+
+    # 设置 CSRF cookie
+    response.set_cookie(
+        key="csrf_token",
+        value=csrf_token,
+        httponly=False,
+        path="/",
+        samesite="lax",
+        secure=False,
+    )
+
+    return TokenResponseWithCsrf(
         access_token=access_token,
-        refresh_token=refresh_token,
+        csrf_token=csrf_token,
         token_type="bearer",
     )
 
 
-@router.post("/login", response_model=Token)
+@router.post("/login", response_model=TokenResponseWithCsrf)
+@limiter.limit("10/minute")
 async def login(
     credentials: UserLogin,
+    response: Response,
+    request: Request,
     db: Annotated[AsyncSession, Depends(get_db)],
-) -> Token:
+) -> TokenResponseWithCsrf:
     """用户登录"""
     # 支持用户名或邮箱登录
     result = await db.execute(
@@ -125,9 +182,26 @@ async def login(
         additional_claims={"role": user.role.value},
     )
 
-    return Token(
+    # 设置 refresh token 为 httpOnly cookie
+    cookie_config = set_refresh_token_cookie(access_token, refresh_token, request)
+    response.set_cookie(**cookie_config)
+
+    # 生成 CSRF token
+    csrf_token = generate_csrf_token()
+
+    # 设置 CSRF cookie
+    response.set_cookie(
+        key="csrf_token",
+        value=csrf_token,
+        httponly=False,
+        path="/",
+        samesite="lax",
+        secure=False,
+    )
+
+    return TokenResponseWithCsrf(
         access_token=access_token,
-        refresh_token=refresh_token,
+        csrf_token=csrf_token,
         token_type="bearer",
     )
 
@@ -142,11 +216,21 @@ async def get_me(
 
 @router.post("/refresh", response_model=Token)
 async def refresh_token(
-    request: RefreshTokenRequest,
+    response: Response,
+    request: Request,
     db: Annotated[AsyncSession, Depends(get_db)],
 ) -> Token:
-    """使用刷新令牌获取新的访问令牌"""
-    payload = decode_token(request.refresh_token)
+    """使用刷新令牌获取新的访问令牌（从 httpOnly cookie 读取）"""
+    # 从 cookie 获取 refresh token
+    refresh_token = get_refresh_token_from_cookie(request)
+    if not refresh_token:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="缺少刷新令牌",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    payload = decode_token(refresh_token)
 
     if payload is None:
         raise HTTPException(
@@ -188,13 +272,41 @@ async def refresh_token(
         subject=token_subject,
         additional_claims={"role": user.role.value},
     )
-    refresh_token = create_refresh_token(
+    new_refresh_token = create_refresh_token(
         subject=token_subject,
         additional_claims={"role": user.role.value},
     )
 
+    # 设置新的 refresh token cookie
+    cookie_config = set_refresh_token_cookie(access_token, new_refresh_token, request)
+    response.set_cookie(**cookie_config)
+
+    # 生成新的 CSRF token
+    csrf_token = generate_csrf_token()
+
+    # 更新 CSRF cookie
+    response.set_cookie(
+        key="csrf_token",
+        value=csrf_token,
+        httponly=False,
+        path="/",
+        samesite="lax",
+        secure=False,
+    )
+
     return Token(
         access_token=access_token,
-        refresh_token=refresh_token,
         token_type="bearer",
     )
+
+
+@router.post("/logout")
+async def logout(response: Response) -> dict:
+    """登出用户（清除 refresh token cookie）"""
+    response.delete_cookie(
+        key="refresh_token",
+        path="/",
+        httponly=True,
+        samesite="lax",
+    )
+    return {"message": "登出成功"}

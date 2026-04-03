@@ -133,7 +133,7 @@ describe('DocumentAnalysis', () => {
         file_content: 'new uploaded content',
       },
     } as any);
-    mockedDocumentApi.uploadToProject.mockResolvedValue({ ok: true } as Response);
+    mockedDocumentApi.uploadToProject.mockResolvedValue({ ok: true } as any);
   });
 
   it('buffers incomplete SSE frames before appending streamed analysis', async () => {
@@ -143,13 +143,13 @@ describe('DocumentAnalysis', () => {
           'data: {"chunk":"项目',
           '概述"}\n\n',
           'data: [DONE]\n\n',
-        ])
+        ]) as any
       )
       .mockResolvedValueOnce(
         createStreamResponse([
           'data: {"chunk":"技术要求"}\n\n',
           'data: [DONE]\n\n',
-        ])
+        ]) as any
       );
 
     const { container, onAnalysisComplete } = renderDocumentAnalysis();

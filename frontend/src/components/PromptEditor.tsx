@@ -6,6 +6,7 @@ import React, { useState, useCallback, useRef, useEffect } from 'react';
 import { DocumentTextIcon, VariableIcon, ArrowPathIcon, EyeIcon, ClockIcon, ArrowUturnLeftIcon } from '@heroicons/react/24/outline';
 import { promptApi } from '../services/api';
 import type { PromptVersionResponse } from '../types/prompt';
+import type { ApiError } from '../utils/error';
 
 interface PromptEditorProps {
   sceneKey: string;
@@ -148,8 +149,9 @@ const PromptEditor: React.FC<PromptEditorProps> = ({
       if (onReset) {
         await onReset();
       }
-    } catch (err: any) {
-      alert(err.response?.data?.detail || '回滚失败');
+    } catch (err: unknown) {
+      const detail = (err as ApiError)?.response?.data?.detail;
+      alert(detail || '回滚失败');
     }
   }, [sceneKey, onReset]);
 

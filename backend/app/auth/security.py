@@ -4,6 +4,7 @@ from typing import Any
 
 import bcrypt
 from jose import jwt, JWTError
+from fastapi import Request
 
 from ..config import settings
 
@@ -88,3 +89,32 @@ def decode_token(token: str) -> dict[str, Any] | None:
         return payload
     except JWTError:
         return None
+
+
+def get_refresh_token_from_cookie(request: Request) -> str | None:
+    """从 httpOnly cookie 获取 refresh token"""
+    return request.cookies.get("refresh_token")
+
+
+def set_refresh_token_cookie(
+    access_token: str,
+    refresh_token: str,
+    request: Request,
+) -> dict:
+    """设置 refresh token 为 httpOnly cookie"""
+    from datetime import datetime, timedelta, timezone
+
+    # 计算 cookie 过期时间
+    expire = datetime.now(timezone.utc) + timedelta(
+        days=settings.refresh_token_expire_days
+    )
+
+    return {
+        "key": "refresh_token",
+        "value": refresh_token,
+        "httponly": True,
+        "expires": expire,
+        "path": "/",
+        "samesite": "lax",
+        "secure": False,  # 生产环境应设为 True（需要 HTTPS）
+    }

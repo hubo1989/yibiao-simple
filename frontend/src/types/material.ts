@@ -1,6 +1,4 @@
-/**
- * 素材库相关类型定义
- */
+export type MaterialScope = 'global' | 'enterprise' | 'user';
 
 export type MaterialCategory =
   | 'business_license'
@@ -10,39 +8,70 @@ export type MaterialCategory =
   | 'iso_cert'
   | 'contract_sample'
   | 'project_case'
+  | 'team_photo'
+  | 'equipment_photo'
+  | 'financial_report'
+  | 'bank_credit'
+  | 'social_security'
   | 'other';
 
 export type MaterialReviewStatus = 'pending' | 'confirmed' | 'rejected';
+export type MaterialRequirementStatus = 'pending' | 'matched' | 'missing' | 'ignored' | 'confirmed';
+export type BindingAnchorType = 'section_end' | 'paragraph_after' | 'paragraph_before' | 'appendix_block';
+export type BindingDisplayMode = 'image' | 'attachment_note';
 
 export interface MaterialAsset {
   id: string;
-  name: string;
+  scope: MaterialScope;
+  owner_id?: string | null;
+  uploaded_by?: string | null;
   category: MaterialCategory;
-  description?: string;
-  tags?: string[];
-  review_status?: MaterialReviewStatus;
-  file_type?: string;
-  file_path?: string;
-  thumbnail_path?: string;
-  preview_path?: string;
-  is_expired?: boolean;
-  created_at?: string;
-  updated_at?: string;
+  name: string;
+  description?: string | null;
+  file_path: string;
+  preview_path?: string | null;
+  thumbnail_path?: string | null;
+  file_type: string;
+  file_ext: string;
+  file_size: number;
+  page_count?: number | null;
+  tags: string[];
+  keywords: string[];
+  ai_description?: string | null;
+  ai_extracted_fields: Record<string, unknown>;
+  valid_from?: string | null;
+  valid_until?: string | null;
+  is_expired: boolean;
+  review_status: MaterialReviewStatus;
+  usage_count: number;
+  last_used_at?: string | null;
+  created_at: string;
+  updated_at: string;
 }
 
 export interface MaterialRequirement {
   id: string;
   project_id: string;
-  name: string;
-  description: string;
-  category: MaterialCategory;
+  source_document_id?: string | null;
+  chapter_hint?: string | null;
+  section_hint?: string | null;
+  requirement_name: string;
   requirement_text: string;
-  priority: 'high' | 'medium' | 'low';
-  status: 'pending' | 'matched' | 'confirmed';
-  matched_material_id?: string;
-  confidence?: number;
+  category?: string | null;
+  tags: string[];
+  is_mandatory: boolean;
+  status: MaterialRequirementStatus;
+  extracted_by: string;
+  sort_index: number;
   created_at: string;
   updated_at: string;
+}
+
+export interface MaterialMatchCandidate {
+  asset_id: string;
+  score: number;
+  matched_reasons: string[];
+  asset?: MaterialAsset | null;
 }
 
 export interface ChapterMaterialBinding {
@@ -51,18 +80,13 @@ export interface ChapterMaterialBinding {
   chapter_id: string;
   material_requirement_id?: string | null;
   material_asset_id: string;
-  anchor_type?: string;
+  anchor_type: BindingAnchorType;
   anchor_value?: string | null;
-  display_mode?: string;
+  display_mode: BindingDisplayMode;
   caption?: string | null;
-  sort_index?: number;
-  created_at?: string;
-}
-
-export interface MaterialMatchCandidate {
-  material_id: string;
-  material_name: string;
-  score: number;
-  reason: string;
-  matched_fields: string[];
+  sort_index: number;
+  created_by?: string | null;
+  created_at: string;
+  updated_at: string;
+  material_asset?: MaterialAsset | null;
 }

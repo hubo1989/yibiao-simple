@@ -49,6 +49,7 @@ class AnalysisType(str, Enum):
     """分析类型"""
     OVERVIEW = "overview"
     REQUIREMENTS = "requirements"
+    MATERIAL_REQUIREMENTS = "material_requirements"
 
 
 class AnalysisRequest(BaseModel):
@@ -113,6 +114,7 @@ class WordExportRequest(BaseModel):
     """Word导出请求"""
     project_name: Optional[str] = Field(None, description="项目名称")
     project_overview: Optional[str] = Field(None, description="项目概述")
+    project_id: Optional[str] = Field(None, description="可选的项目ID，用于读取章节素材绑定")
     outline: List[OutlineItem] = Field(..., description="目录结构，包含内容")
 
 
@@ -235,27 +237,24 @@ class KnowledgeDocResponse(BaseModel):
 
 class KnowledgeSearchRequest(BaseModel):
     """知识库检索请求"""
-    chapter_title: str = Field(..., description="章节标题")
-    chapter_description: Optional[str] = Field("", description="章节描述")
-    parent_chapters: Optional[List[Dict[str, Any]]] = Field(default_factory=list, description="上级章节信息")
-    project_overview: str = Field(..., description="项目概述")
-    top_k: int = Field(5, description="返回前K个最相关的结果")
+    query: str = Field(..., description="搜索查询文本")
+    top_k: int = Field(5, ge=1, le=20, description="返回前K个最相关的结果")
+    doc_types: Optional[List[str]] = Field(None, description="限制文档类型")
+    scope: Optional[str] = Field(None, description="限制数据范围")
 
 
 class KnowledgeSearchResult(BaseModel):
     """知识库检索结果"""
-    id: str
+    doc_id: str
     title: str
-    doc_type: str
-    relevance_score: float = Field(..., description="相关性得分（0-1）")
-    matched_nodes: List[Dict[str, Any]] = Field(default_factory=list, description="匹配的树节点")
-    content_preview: str = Field(..., description="内容预览")
+    content: str
+    score: float = Field(0.0, description="相关性得分")
+    metadata: Dict[str, Any] = Field(default_factory=dict, description="元数据")
 
 
 class KnowledgeSearchResponse(BaseModel):
     """知识库检索响应"""
     results: List[KnowledgeSearchResult]
-    total: int
 
 
 class ContentGenerateWithKnowledgeRequest(BaseModel):

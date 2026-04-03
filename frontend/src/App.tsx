@@ -15,6 +15,7 @@ const ProjectSettings = lazy(() => import('./pages/ProjectSettings'));
 const BidReview = lazy(() => import('./pages/BidReview'));
 const Admin = lazy(() => import('./pages/Admin'));
 const KnowledgeBase = lazy(() => import('./pages/KnowledgeBase'));
+const MaterialLibrary = lazy(() => import('./pages/MaterialLibrary'));
 const ProjectManager = lazy(() => import('./pages/ProjectManager'));
 const RequestLogs = lazy(() => import('./pages/RequestLogs'));
 const BasicLayout = lazy(() => import('./layouts/BasicLayout'));
@@ -80,6 +81,7 @@ function App() {
 
               {/* 知识库管理 */}
               <Route path="knowledge" element={<KnowledgeBase />} />
+              <Route path="materials" element={<MaterialLibrary />} />
             </Route>
 
             {/* 默认重定向 */}

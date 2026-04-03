@@ -1,16 +1,20 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { OutlineData, OutlineItem } from '../types';
 import { outlineApi, expandApi, consistencyApi } from '../services/api';
+import { getErrorMessage } from '../utils/error';
+import { consumeSseEvents } from '../utils/sse';
 import { useAuth } from '../contexts/AuthContext';
 import ChapterStatusBadge from '../components/ChapterStatusBadge';
+import RatingChecklistModal from '../components/outline-edit/RatingChecklistModal';
+import OutlineEditModal from '../components/outline-edit/OutlineEditModal';
 import type { ChapterStatus } from '../types/chapter';
 import type { RatingChecklistResponse } from '../types/bid';
 import { getCurrentModel, getCurrentProviderConfigId } from '../utils/modelCache';
 import { ProCard } from '@ant-design/pro-components';
-import { Button, Space, Upload, Alert, message, Typography, Tree, Input, Modal, Form, Spin, Tag } from 'antd';
-import { 
-  PlusOutlined, 
-  UploadOutlined, 
+import { Button, Space, Upload, Alert, message, Typography, Tree, Spin, Tag, Modal } from 'antd';
+import {
+  PlusOutlined,
+  UploadOutlined,
   LoadingOutlined,
   CheckCircleOutlined,
   EditOutlined,
@@ -33,44 +37,6 @@ interface OutlineEditProps {
   projectId: string;
   onContinue?: () => void;
 }
-
-const consumeSseEvents = (
-  buffer: string,
-  onEvent: (payload: any) => void
-): { remainder: string; done: boolean } => {
-  const normalizedBuffer = buffer.replace(/\r\n/g, '\n');
-  const events = normalizedBuffer.split('\n\n');
-  const remainder = events.pop() ?? '';
-
-  for (const event of events) {
-    if (!event.trim()) {
-      continue;
-    }
-
-    const data = event
-      .split('\n')
-      .filter((line) => line.startsWith('data: '))
-      .map((line) => line.slice(6))
-      .join('\n')
-      .trim();
-
-    if (!data) {
-      continue;
-    }
-
-    if (data === '[DONE]') {
-      return { remainder: '', done: true };
-    }
-
-    try {
-      onEvent(JSON.parse(data));
-    } catch {
-      // Ignore malformed complete SSE events but keep the stream alive.
-    }
-  }
-
-  return { remainder, done: false };
-};
 
 const OutlineEdit: React.FC<OutlineEditProps> = ({
   projectOverview,
@@ -134,10 +100,6 @@ const OutlineEdit: React.FC<OutlineEditProps> = ({
   const canContinue = hasOutline && Boolean(onContinue);
   const isBusy = generatingL1 || generatingL2L3;
 
-  const getErrorMessage = (error: any, fallback: string) => {
-    return error?.response?.data?.detail || error?.message || fallback;
-  };
-
   const fetchRatingChecklist = async () => {
     if (!projectId) {
       message.warning('缺少项目 ID，无法生成评分响应清单');
@@ -148,7 +110,7 @@ const OutlineEdit: React.FC<OutlineEditProps> = ({
     try {
       const result = await consistencyApi.generateRatingChecklist(projectId);
       setRatingChecklist(result);
-    } catch (error: any) {
+    } catch (error: unknown) {
       message.error(getErrorMessage(error, '评分响应清单生成失败，请重试'));
     } finally {
       setIsLoadingRatingChecklist(false);
@@ -190,8 +152,8 @@ const OutlineEdit: React.FC<OutlineEditProps> = ({
       setUploadedExpand(true);
       setMsg(null);
 
-      const response = await expandApi.uploadExpandFile(file, token || undefined);
-      const data = await response.json();
+      const response = await expandApi.uploadExpandFile(file);
+      const data = response.data;
 
       if (data.success) {
         setExpandFile(file);
@@ -199,8 +161,11 @@ const OutlineEdit: React.FC<OutlineEditProps> = ({
       } else {
         throw new Error(data.message || '文件上传失败');
       }
-    } catch (error: any) {
-      setMsg({ type: 'error', text: error.response?.data?.message || error.message || '文件上传失败' });
+    } catch (error: unknown) {
+      const err = error as any;
+      const responseMessage = err?.response?.data?.message;
+      const errorMessage = error instanceof Error ? error.message : '';
+      setMsg({ type: 'error', text: responseMessage || errorMessage || '文件上传失败' });
     } finally {
       // NOTE: keeping uploadedExpand state active to disable further uploads 
     }
@@ -228,14 +193,9 @@ const OutlineEdit: React.FC<OutlineEditProps> = ({
         project_id: projectId,
         model_name: currentModel || undefined,
         provider_config_id: currentProviderConfigId || undefined,
-      }, token || undefined);
+      });
 
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}));
-        throw new Error(errorData.detail || `请求失败: ${response.status}`);
-      }
-
-      const reader = response.body?.getReader();
+      const reader = response.data?.getReader();
       if (!reader) {
         throw new Error('无法读取响应流');
       }
@@ -243,7 +203,7 @@ const OutlineEdit: React.FC<OutlineEditProps> = ({
       let result = '';
       const decoder = new TextDecoder();
       let pending = '';
-      const appendOutlineChunk = (parsed: any) => {
+      const appendOutlineChunk = (parsed: { chunk?: string }) => {
         if (parsed.chunk) {
           result += parsed.chunk;
           setStreamingContent(result);
@@ -302,8 +262,9 @@ const OutlineEdit: React.FC<OutlineEditProps> = ({
       } catch (parseError) {
         throw new Error('解析一级目录结构失败');
       }
-    } catch (error: any) {
-      setMsg({ type: 'error', text: error.message || '一级目录生成失败' });
+    } catch (error: unknown) {
+      const errorMessage = error instanceof Error ? error.message : '一级目录生成失败';
+      setMsg({ type: 'error', text: errorMessage });
       setStreamingContent('');
     } finally {
       setGeneratingL1(false);
@@ -339,14 +300,9 @@ const OutlineEdit: React.FC<OutlineEditProps> = ({
         model_name: currentModel || undefined,
         provider_config_id: currentProviderConfigId || undefined,
         outline_data: outlineData,
-      }, token || undefined);
+      });
 
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}));
-        throw new Error(errorData.detail || `请求失败: ${response.status}`);
-      }
-
-      const reader = response.body?.getReader();
+      const reader = response.data?.getReader();
       if (!reader) {
         throw new Error('无法读取响应流');
       }
@@ -364,32 +320,32 @@ const OutlineEdit: React.FC<OutlineEditProps> = ({
         pending += decoder.decode(value, { stream: true });
         const { remainder, done: streamDone } = consumeSseEvents(pending, (parsed) => {
           if (parsed.type === 'chapter') {
-            const chapterIndex = parsed.index;
+            const chapterIndex = parsed.index as number;
             if (chapterIndex < updatedOutline.length) {
               updatedOutline[chapterIndex] = {
                 ...updatedOutline[chapterIndex],
-                children: parsed.data.children || [],
+                children: (parsed.data as any)?.children || [],
                 status: 'generated'
               };
             } else {
               updatedOutline.push({
-                ...parsed.data,
+                ...(parsed.data as any),
                 status: 'generated'
               });
             }
 
             const tempOutline = { outline: updatedOutline };
             onOutlineGenerated(tempOutline);
-            setStreamingContent(`正在生成第 ${parsed.index + 1}/${parsed.total} 章...`);
+            setStreamingContent(`正在生成第 ${(parsed.index as number) + 1}/${parsed.total} 章...`);
           }
 
           if (parsed.type === 'complete') {
-            onOutlineGenerated(parsed.data);
+            onOutlineGenerated(parsed.data as OutlineData);
             setStreamingContent('');
           }
 
           if (parsed.error) {
-            throw new Error(parsed.message || '生成失败');
+            throw new Error((parsed.message as string) || '生成失败');
           }
         });
         pending = remainder;
@@ -416,8 +372,9 @@ const OutlineEdit: React.FC<OutlineEditProps> = ({
         collectIds(outlineJson.outline || []);
         setExpandedItems(allIds);
       }
-    } catch (error: any) {
-      setMsg({ type: 'error', text: error.message || '二三级目录生成失败' });
+    } catch (error: unknown) {
+      const errorMessage = error instanceof Error ? error.message : '二三级目录生成失败';
+      setMsg({ type: 'error', text: errorMessage });
       setStreamingContent('');
     } finally {
       setGeneratingL2L3(false);
@@ -960,148 +917,25 @@ const OutlineEdit: React.FC<OutlineEditProps> = ({
         </div>
       </div>
 
-      <Modal
-        title="评分响应清单"
-        open={showRatingChecklist}
-        width={920}
-        onCancel={() => setShowRatingChecklist(false)}
-        footer={[
-          <Button
-            key="refresh"
-            onClick={() => {
-              void fetchRatingChecklist();
-            }}
-            loading={isLoadingRatingChecklist}
-          >
-            重新生成
-          </Button>,
-          <Button key="close" type="primary" onClick={() => setShowRatingChecklist(false)}>
-            关闭
-          </Button>,
-        ]}
-      >
-        {isLoadingRatingChecklist ? (
-          <div style={{ padding: '48px 0', textAlign: 'center' }}>
-            <Spin size="large" />
-          </div>
-        ) : ratingChecklist?.items?.length ? (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 16, maxHeight: '70vh', overflowY: 'auto', paddingRight: 4 }}>
-            <Alert
-              type="info"
-              showIcon
-              message={`共生成 ${ratingChecklist.items.length} 条评分项响应建议，可用于核对目录覆盖范围与后续正文写作重点。`}
-            />
+      <RatingChecklistModal
+        visible={showRatingChecklist}
+        isLoading={isLoadingRatingChecklist}
+        data={ratingChecklist}
+        onRefresh={() => {
+          void fetchRatingChecklist();
+        }}
+        onClose={() => setShowRatingChecklist(false)}
+      />
 
-            {ratingChecklist.items.map((item, index) => (
-              <div
-                key={`${item.rating_item}-${index}`}
-                style={{
-                  border: '1px solid #e5e7eb',
-                  borderRadius: 16,
-                  padding: 16,
-                  background: '#fff',
-                }}
-              >
-                <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, marginBottom: 12, alignItems: 'flex-start' }}>
-                  <div>
-                    <Typography.Text strong style={{ fontSize: 15 }}>
-                      {index + 1}. {item.rating_item}
-                    </Typography.Text>
-                    <Typography.Text type="secondary" style={{ display: 'block', marginTop: 4 }}>
-                      建议优先映射到目录主职责明确、能直接承接评分要点的章节中。
-                    </Typography.Text>
-                  </div>
-                  <Tag color="blue">{item.score || '未标注分值'}</Tag>
-                </div>
-
-                {item.response_targets?.length ? (
-                  <div style={{ marginBottom: 12 }}>
-                    <Typography.Text strong>响应目标</Typography.Text>
-                    <div style={{ marginTop: 8, display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-                      {item.response_targets.map((target) => (
-                        <Tag key={target} color="geekblue">
-                          {target}
-                        </Tag>
-                      ))}
-                    </div>
-                  </div>
-                ) : null}
-
-                {item.evidence_suggestions?.length ? (
-                  <div style={{ marginBottom: 12 }}>
-                    <Typography.Text strong>建议佐证</Typography.Text>
-                    <div style={{ marginTop: 8, display: 'grid', gap: 6 }}>
-                      {item.evidence_suggestions.map((evidence, evidenceIndex) => (
-                        <Typography.Text key={`${evidence}-${evidenceIndex}`} type="secondary">
-                          • {evidence}
-                        </Typography.Text>
-                      ))}
-                    </div>
-                  </div>
-                ) : null}
-
-                {item.writing_focus ? (
-                  <div style={{ marginBottom: item.risk_points?.length ? 12 : 0 }}>
-                    <Typography.Text strong>写作重点</Typography.Text>
-                    <Typography.Paragraph style={{ marginTop: 8, marginBottom: 0 }}>
-                      {item.writing_focus}
-                    </Typography.Paragraph>
-                  </div>
-                ) : null}
-
-                {item.risk_points?.length ? (
-                  <div>
-                    <Typography.Text strong style={{ color: '#cf1322' }}>
-                      失分风险
-                    </Typography.Text>
-                    <div style={{ marginTop: 8, display: 'grid', gap: 6 }}>
-                      {item.risk_points.map((risk, riskIndex) => (
-                        <Typography.Text key={`${risk}-${riskIndex}`} style={{ color: '#cf1322' }}>
-                          • {risk}
-                        </Typography.Text>
-                      ))}
-                    </div>
-                  </div>
-                ) : null}
-              </div>
-            ))}
-          </div>
-        ) : (
-          <Alert
-            type="warning"
-            showIcon
-            message="暂未生成评分响应清单"
-            description="请确认项目已经完成标书解析，并且技术评分要求已成功保存。"
-          />
-        )}
-      </Modal>
-
-      <Modal
-        title="编辑目录项"
-        open={!!editingItem}
+      <OutlineEditModal
+        visible={!!editingItem}
+        title={editTitle}
+        description={editDescription}
+        onTitleChange={setEditTitle}
+        onDescriptionChange={setEditDescription}
         onOk={saveEdit}
         onCancel={cancelEditing}
-        okText="保存"
-        cancelText="取消"
-      >
-        <Form layout="vertical">
-          <Form.Item label="目录标题">
-            <Input 
-              value={editTitle} 
-              onChange={(e) => setEditTitle(e.target.value)} 
-              placeholder="请输入目录标题"
-            />
-          </Form.Item>
-          <Form.Item label="目录描述">
-            <Input.TextArea 
-              value={editDescription} 
-              onChange={(e) => setEditDescription(e.target.value)} 
-              rows={4}
-              placeholder="请输入目录描述"
-            />
-          </Form.Item>
-        </Form>
-      </Modal>
+      />
     </div>
   );
 };

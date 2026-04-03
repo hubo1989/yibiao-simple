@@ -6,6 +6,7 @@ import { PlusOutlined } from '@ant-design/icons';
 import { projectApi } from '../services/api';
 import type { ProjectSummary } from '../types/project';
 import { PROJECT_STATUS_LABELS, ProjectStatus } from '../types/project';
+import { getErrorMessage } from '../utils/error';
 
 const ProjectManager: React.FC = () => {
   const navigate = useNavigate();
@@ -24,7 +25,7 @@ const ProjectManager: React.FC = () => {
     }
   };
 
-  const handleCreateProject = async (values: any) => {
+  const handleCreateProject = async (values: { name: string; description?: string }) => {
     try {
       setCreating(true);
       const newProject = await projectApi.create({
@@ -35,9 +36,9 @@ const ProjectManager: React.FC = () => {
       setShowCreateModal(false);
       createForm.resetFields();
       navigate(`/project/${newProject.id}`);
-    } catch (err: any) {
+    } catch (err: unknown) {
       console.error('创建项目失败:', err);
-      message.error(err.response?.data?.detail || '创建项目失败');
+      message.error(getErrorMessage(err, '创建项目失败'));
     } finally {
       setCreating(false);
     }

@@ -19,8 +19,10 @@ from ..models.schemas import (
 )
 from ..models.user import User
 from ..models.project import Project, project_members
+from ..models.material import ChapterMaterialBinding
 from ..db.database import get_db
 from ..services.file_service import FileService
+from ..services.material_service import render_content_with_material_bindings
 from ..services.openai_service import OpenAIService
 from ..services.prompt_service import PromptService
 from ..utils.sse import sse_response
@@ -120,11 +122,11 @@ async def analyze_document_stream(
         async def generate():
             # 使用 PromptService 获取提示词（无项目上下文，使用全局/内置）
             prompt_service = PromptService(db)
-            scene_key = (
-                "doc_analysis_overview"
-                if request.analysis_type == AnalysisType.OVERVIEW
-                else "doc_analysis_requirements"
-            )
+            scene_key = {
+                AnalysisType.OVERVIEW: "doc_analysis_overview",
+                AnalysisType.REQUIREMENTS: "doc_analysis_requirements",
+                AnalysisType.MATERIAL_REQUIREMENTS: "doc_analysis_requirements",
+            }[request.analysis_type]
             prompt, _ = await prompt_service.get_prompt(scene_key)
             system_prompt, user_template = PromptService.split_prompt(prompt)
             user_prompt = prompt_service.render_prompt(
@@ -157,6 +159,7 @@ async def analyze_document_stream(
 async def export_word(
     request: WordExportRequest,
     current_user: Annotated[User, Depends(require_editor)] = None,
+    db: Annotated[AsyncSession, Depends(get_db)] = None,
 ):
     """根据目录数据导出Word文档"""
     try:
@@ -381,6 +384,29 @@ async def export_word(
             blocks = parse_markdown_blocks(content)
             render_markdown_blocks(blocks)
 
+        binding_map: dict[str, dict] = {}
+        if request.project_id:
+            try:
+                project_uuid = uuid.UUID(request.project_id)
+            except ValueError as exc:
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="无效的项目ID格式") from exc
+            await _verify_project_member(project_uuid, current_user.id, db)
+            result = await db.execute(
+                select(ChapterMaterialBinding).where(ChapterMaterialBinding.project_id == project_uuid)
+            )
+            bindings = result.scalars().all()
+            for binding in bindings:
+                await db.refresh(binding, attribute_names=["material_asset"])
+                material = binding.material_asset
+                binding_map[str(binding.id)] = {
+                    "caption": binding.caption or (material.name if material else "素材附件"),
+                    "material_name": material.name if material else "素材附件",
+                    "display_mode": binding.display_mode.value if hasattr(binding.display_mode, "value") else str(binding.display_mode),
+                    "file_path": material.file_path if material else None,
+                    "preview_path": material.preview_path if material else None,
+                    "file_type": material.file_type if material else None,
+                }
+
         # 递归构建文档内容（章节和内容）
         def add_outline_items(items, level: int = 1):
             for item in items:
@@ -408,7 +434,12 @@ async def export_word(
                 if not item.children:
                     content = item.content or ""
                     if content.strip():
-                        add_markdown_content(content)
+                        render_content_with_material_bindings(
+                            document=doc,
+                            content=content,
+                            binding_map=binding_map,
+                            add_text=add_markdown_content,
+                        )
                 else:
                     add_outline_items(item.children, level + 1)
 
@@ -601,11 +632,11 @@ async def analyze_project_document_stream(
 
             # 使用 PromptService 获取提示词
             prompt_service = PromptService(db)
-            scene_key = (
-                "doc_analysis_overview"
-                if analysis_type == AnalysisType.OVERVIEW
-                else "doc_analysis_requirements"
-            )
+            scene_key = {
+                AnalysisType.OVERVIEW: "doc_analysis_overview",
+                AnalysisType.REQUIREMENTS: "doc_analysis_requirements",
+                AnalysisType.MATERIAL_REQUIREMENTS: "doc_analysis_requirements",
+            }[analysis_type]
             prompt, _ = await prompt_service.get_prompt(scene_key, project_id)
             system_prompt, user_template = PromptService.split_prompt(prompt)
             user_prompt = prompt_service.render_prompt(
