@@ -1,4 +1,6 @@
 """请求日志中间件"""
+import logging
+import re
 import time
 import uuid
 import json
@@ -11,20 +13,55 @@ from ..db.database import async_session_factory
 from ..models.request_log import RequestLog
 from ..auth.security import decode_token
 
+# 配置请求日志专用 logger
+request_logger = logging.getLogger("app.request")
+
 
 # 敏感字段列表 - 这些字段不会被记录到日志中
 SENSITIVE_FIELDS = {
     "password",
     "password_confirm",
     "hashed_password",
+    "new_password",
+    "old_password",
     "api_key",
     "api_key_encrypted",
+    "api_key_secret",
     "token",
     "access_token",
     "refresh_token",
+    "bearer_token",
+    "jwt_token",
     "secret",
+    "secret_key",
+    "client_secret",
     "authorization",
+    "auth_token",
+    "session_token",
+    "csrf_token",
+    "otp",
+    "totp_secret",
+    "private_key",
+    "private_key_pem",
+    "credit_card",
+    "card_number",
+    "cvv",
+    "cvc",
+    "ssn",
+    "social_security",
+    "pin",
+    "passphrase",
 }
+
+# 敏感字段模式
+SENSITIVE_PATTERNS = [
+    re.compile(r"password", re.IGNORECASE),
+    re.compile(r"token", re.IGNORECASE),
+    re.compile(r"secret", re.IGNORECASE),
+    re.compile(r"\w+key\w*$", re.IGNORECASE),
+    re.compile(r"auth", re.IGNORECASE),
+    re.compile(r"credential", re.IGNORECASE),
+]
 
 # 敏感请求头列表
 SENSITIVE_HEADERS = {
@@ -43,33 +80,60 @@ SKIP_PATTERNS = [
 ]
 
 
-def sanitize_dict(data: dict[str, Any], sensitive_fields: set[str]) -> dict[str, Any]:
+def _is_sensitive_field(field_name: str) -> bool:
+    """检查字段名是否为敏感字段"""
+    if not field_name:
+        return False
+
+    lower_name = field_name.lower()
+
+    # 检查精确匹配
+    if lower_name in SENSITIVE_FIELDS:
+        return True
+
+    # 检查模式匹配
+    for pattern in SENSITIVE_PATTERNS:
+        if pattern.search(field_name):
+            return True
+
+    return False
+
+
+def sanitize_dict(data: dict[str, Any], sensitive_fields: set[str] | None = None, max_depth: int = 10, current_depth: int = 0) -> dict[str, Any]:
     """
     过滤字典中的敏感信息
 
     Args:
         data: 原始字典
-        sensitive_fields: 敏感字段集合
+        sensitive_fields: 敏感字段集合（兼容旧接口，优先使用内置模式）
+        max_depth: 最大递归深度
+        current_depth: 当前递归深度
 
     Returns:
         过滤后的字典，敏感字段值替换为 "***"
     """
     if not isinstance(data, dict):
         return data
-        
+
+    if current_depth >= max_depth:
+        return {"_truncated": "max depth reached"}
+
     result = {}
     for key, value in data.items():
-        lower_key = key.lower()
-        # 检查是否是敏感字段
-        if lower_key in sensitive_fields or any(
-            sensitive in lower_key for sensitive in ["password", "secret", "token", "key"]
-        ):
+        # 使用传入的 sensitive_fields（兼容旧接口）或内置检测
+        is_sensitive = False
+        if sensitive_fields and key.lower() in sensitive_fields:
+            is_sensitive = True
+        elif _is_sensitive_field(key):
+            is_sensitive = True
+
+        if is_sensitive:
             result[key] = "***"
         elif isinstance(value, dict):
-            result[key] = sanitize_dict(value, sensitive_fields)
+            result[key] = sanitize_dict(value, sensitive_fields, max_depth, current_depth + 1)
         elif isinstance(value, list):
             result[key] = [
-                sanitize_dict(item, sensitive_fields) if isinstance(item, dict) else item
+                sanitize_dict(item, sensitive_fields, max_depth, current_depth + 1) if isinstance(item, dict) else item
                 for item in value
             ]
         else:
@@ -230,7 +294,7 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
 
         except Exception as e:
             # 日志记录失败不应影响请求响应
-            print(f"Request logging error: {e}")
+            request_logger.error(f"Request logging error: {e}", exc_info=True)
 
     async def _get_user_id(self, request: Request) -> uuid.UUID | None:
         """从请求中获取用户 ID"""

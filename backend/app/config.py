@@ -45,6 +45,7 @@ class Settings(BaseSettings):
     app_name: str = "AI写标书助手"
     app_version: str = "2.0.0"
     debug: bool = False
+    env: str = "development"  # development | production
 
     # CORS设置 - 支持环境变量注入
     cors_origins: List[str] = [
@@ -60,6 +61,8 @@ class Settings(BaseSettings):
         "http://127.0.0.1:3004",
         "http://localhost:3033",
         "http://127.0.0.1:3033",
+        "http://localhost:3088",
+        "http://127.0.0.1:3088",
         "http://localhost",
         "http://127.0.0.1",
     ]
@@ -70,6 +73,16 @@ class Settings(BaseSettings):
 
     # 数据库设置 - 支持环境变量注入
     database_url: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/yibiao"
+
+    # LlamaIndex 知识库设置
+    knowledge_vector_backend: str = "llamaindex"
+    embedding_model: str = "qwen3-embedding:4b"
+    embedding_dimension: int = 2560
+    ollama_base_url: str = "http://localhost:11434"
+    knowledge_chunk_size: int = 512
+    knowledge_chunk_overlap: int = 50
+    knowledge_top_k: int = 5
+    knowledge_vector_table: str = "knowledge_nodes"
 
     # OpenAI默认设置
     default_model: str = "gpt-3.5-turbo"
@@ -87,8 +100,14 @@ class Settings(BaseSettings):
             if env_secret:
                 self.secret_key = env_secret
             else:
+                # 生产环境必须设置 SECRET_KEY
+                if self.env == "production":
+                    raise ValueError(
+                        "生产环境必须设置 SECRET_KEY 环境变量！"
+                        "请设置强随机密钥，例如: python -c 'import secrets; print(secrets.token_urlsafe(32))'"
+                    )
+                # 开发环境使用默认值并发出警告
                 import warnings
-
                 warnings.warn(
                     "SECRET_KEY 环境变量未设置，使用开发默认值。"
                     "生产环境必须设置 SECRET_KEY 环境变量！",

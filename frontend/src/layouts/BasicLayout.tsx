@@ -5,6 +5,7 @@ import {
   ProjectOutlined, 
   SettingOutlined, 
   ReadOutlined,
+  PictureOutlined,
   LogoutOutlined,
   UserOutlined,
   FolderOpenOutlined
@@ -39,6 +40,11 @@ const BasicLayout: React.FC = () => {
       path: '/knowledge',
       name: '知识库管理',
       icon: <ReadOutlined />,
+    },
+    {
+      path: '/materials',
+      name: '素材库',
+      icon: <PictureOutlined />,
     },
     ...(user?.role === 'admin' ? [{
       path: '/admin',

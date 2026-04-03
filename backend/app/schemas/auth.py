@@ -23,7 +23,13 @@ class UserLogin(BaseModel):
 class Token(BaseModel):
     """令牌响应"""
     access_token: str = Field(..., description="访问令牌")
-    refresh_token: str = Field(..., description="刷新令牌")
+    token_type: str = Field(default="bearer", description="令牌类型")
+
+
+class TokenResponseWithCsrf(BaseModel):
+    """带 CSRF token 的令牌响应（用于初始登录/注册）"""
+    access_token: str = Field(..., description="访问令牌")
+    csrf_token: str = Field(..., description="CSRF 保护令牌")
     token_type: str = Field(default="bearer", description="令牌类型")
 
 

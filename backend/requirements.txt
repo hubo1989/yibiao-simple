@@ -1,4 +1,8 @@
-﻿fastapi==0.116.1
+﻿# Python 版本要求: 3.11 - 3.13
+# 注意: Python 3.14+ 目前不兼容（seleniumbase 等）
+#
+# 核心依赖
+fastapi==0.116.1
 uvicorn[standard]==0.35.0
 python-multipart==0.0.20
 openai==1.106.1
@@ -22,13 +26,13 @@ asyncio-throttle==1.0.2
 duckduckgo-search==8.1.1
 # LangChain支持（已移除）
 beautifulsoup4==4.12.3
-# 增强爬虫能力
+# 爬虫工具（playwright 作为主要工具）
 playwright==1.51.0
-seleniumbase==4.33.3
-undetected-chromedriver==3.5.5
+# 注意: seleniumbase 和 undetected-chromedriver 已移至 requirements-optional.txt
+# 它们与 pytest 在 Python 3.13+ 上存在兼容性问题
 # MCP服务支持
 mcp==1.13.1
-# PageIndex 依赖
+# PageIndex/知识库依赖
 tiktoken==0.11.0
 pyyaml==6.0.2
 # 验证
@@ -40,6 +44,8 @@ alembic==1.15.2
 # JWT 认证
 python-jose[cryptography]==3.4.0
 bcrypt==4.2.1
+# 安全增强
+slowapi==0.1.9
 # LlamaIndex 知识库
 llama-index-core>=0.10.0
 llama-index-embeddings-ollama>=0.3.0

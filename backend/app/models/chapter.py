@@ -4,7 +4,7 @@ from datetime import datetime
 from enum import Enum as PyEnum
 from typing import TYPE_CHECKING
 
-from sqlalchemy import String, Text, DateTime, ForeignKey, func, Enum, Integer
+from sqlalchemy import String, Text, DateTime, ForeignKey, func, Enum, Integer, Boolean
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -53,6 +53,12 @@ class Chapter(Base):
     content: Mapped[str | None] = mapped_column(
         Text, nullable=True,
         comment="章节内容"
+    )
+    material_marker_enabled: Mapped[bool] = mapped_column(
+        Boolean,
+        default=False,
+        nullable=False,
+        comment="是否允许自动插入素材标记",
     )
     rating_item: Mapped[str | None] = mapped_column(
         Text, nullable=True,

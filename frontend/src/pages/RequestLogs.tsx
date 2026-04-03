@@ -345,8 +345,9 @@ const RequestLogs: React.FC = () => {
                   </svg>
                 </button>
               </div>
-              <div className="flex-1 overflow-y-auto px-6 py-4 space-y-4">
-                <div className="grid grid-cols-2 gap-4">
+              <div className="flex-1 overflow-y-auto px-6 py-4">
+                <>
+                <div className="grid grid-cols-2 gap-4 mb-4">
                   <div>
                     <p className="text-sm font-medium text-gray-500">请求方法</p>
                     <p className="mt-1 text-sm text-gray-900">{selectedLog.method}</p>
@@ -378,7 +379,7 @@ const RequestLogs: React.FC = () => {
                 </div>
 
                 {Object.keys(selectedLog.query_params).length > 0 && (
-                  <div>
+                  <div className="mb-4">
                     <p className="text-sm font-medium text-gray-500 mb-2">查询参数</p>
                     <pre className="bg-gray-50 rounded p-3 text-xs overflow-x-auto">
                       {JSON.stringify(selectedLog.query_params, null, 2)}
@@ -387,7 +388,7 @@ const RequestLogs: React.FC = () => {
                 )}
 
                 {selectedLog.request_body && (
-                  <div>
+                  <div className="mb-4">
                     <p className="text-sm font-medium text-gray-500 mb-2">请求体</p>
                     <pre className="bg-gray-50 rounded p-3 text-xs overflow-x-auto max-h-60">
                       {JSON.stringify(selectedLog.request_body, null, 2)}
@@ -396,7 +397,7 @@ const RequestLogs: React.FC = () => {
                 )}
 
                 {selectedLog.response_body && (
-                  <div>
+                  <div className="mb-4">
                     <p className="text-sm font-medium text-gray-500 mb-2">响应体</p>
                     <pre className="bg-gray-50 rounded p-3 text-xs overflow-x-auto max-h-60">
                       {JSON.stringify(selectedLog.response_body, null, 2)}
@@ -405,13 +406,14 @@ const RequestLogs: React.FC = () => {
                 )}
 
                 {selectedLog.error_message && (
-                  <div>
+                  <div className="mb-4">
                     <p className="text-sm font-medium text-red-500 mb-2">错误信息</p>
                     <pre className="bg-red-50 rounded p-3 text-xs overflow-x-auto text-red-900">
                       {selectedLog.error_message}
                     </pre>
                   </div>
                 )}
+                </>
               </div>
             </div>
           </div>

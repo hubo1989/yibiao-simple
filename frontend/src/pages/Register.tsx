@@ -8,6 +8,7 @@ import { Alert, Button, Form, Input, Typography } from 'antd';
 import { useAuth } from '../contexts/AuthContext';
 import type { RegisterRequest } from '../types/auth';
 import AuthShell from '../components/AuthShell';
+import type { ApiError } from '../utils/error';
 
 export default function Register(): React.ReactElement {
   const navigate = useNavigate();
@@ -27,12 +28,12 @@ export default function Register(): React.ReactElement {
         password: values.password,
       });
       navigate('/');
-    } catch (err: any) {
-      const detail = err.response?.data?.detail;
+    } catch (err: unknown) {
+      const detail = (err as ApiError)?.response?.data;
       let message: string;
       if (Array.isArray(detail)) {
         // Pydantic 验证错误数组
-        message = detail.map((e: any) => e.msg).join('；');
+        message = detail.map((e: { msg: string }) => e.msg).join('；');
       } else if (typeof detail === 'string') {
         message = detail;
       } else {

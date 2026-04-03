@@ -8,11 +8,11 @@ export interface RequestLog {
   username?: string;
   method: string;
   path: string;
-  query_params: Record<string, any>;
-  request_headers: Record<string, any>;
-  request_body?: any;
+  query_params: Record<string, string | string[] | number | boolean | undefined>;
+  request_headers: Record<string, string>;
+  request_body?: unknown;
   status_code: number;
-  response_body?: any;
+  response_body?: unknown;
   duration_ms: number;
   ip_address?: string;
   user_agent?: string;
