@@ -7,6 +7,7 @@ import { LockOutlined, UserOutlined } from '@ant-design/icons';
 import { Alert, Button, Checkbox, Form, Input, Typography, message } from 'antd';
 import { useAuth } from '../contexts/AuthContext';
 import AuthShell from '../components/AuthShell';
+import type { ApiError } from '../utils/error';
 
 export default function Login(): React.ReactElement {
   const navigate = useNavigate();
@@ -24,8 +25,8 @@ export default function Login(): React.ReactElement {
       });
       message.success('登录成功！');
       navigate('/');
-    } catch (err: any) {
-      const msg = err.response?.data?.detail || '登录失败，请检查用户名和密码';
+    } catch (err: unknown) {
+      const msg = (err as ApiError)?.response?.data?.detail || '登录失败，请检查用户名和密码';
       setError(msg);
       message.error(msg);
     } finally {

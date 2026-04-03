@@ -5,6 +5,7 @@ import { PlusOutlined, UploadOutlined, CloudUploadOutlined } from '@ant-design/i
 import api from '../services/api';
 import type { KnowledgeDoc } from '../types/knowledge';
 import { useLayoutHeader } from '../layouts/layoutHeader';
+import { getErrorMessage } from '../utils/error';
 
 const POLL_INTERVAL = 5000; // 5秒轮询
 
@@ -79,27 +80,28 @@ const KnowledgeBase: React.FC = () => {
   const handleReindex = async (id: string) => {
     try {
       message.loading('正在重新索引...');
-      await api.post(`/api/knowledge/${id}/reindex`);
+      await api.post(`/api/knowledge/docs/${id}/reindex`);
       message.success('已发送重新索引请求');
       actionRef.current?.reload();
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error('重新索引失败:', error);
-      message.error(error.response?.data?.detail || '重新索引失败');
+      const detail = (error as any)?.response?.data?.detail;
+      message.error(detail || '重新索引失败');
     }
   };
 
   const handleDelete = async (id: string) => {
     try {
-      await api.delete(`/api/knowledge/${id}`);
+      await api.delete(`/api/knowledge/docs/${id}`);
       message.success('删除成功');
       actionRef.current?.reload();
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error('删除失败:', error);
-      message.error(error.response?.data?.detail || '删除失败');
+      message.error(getErrorMessage(error, '删除失败'));
     }
   };
 
-  const handleCreateSubmit = async (values: any) => {
+  const handleCreateSubmit = async (values: { title: string; content: string; doc_type: string; scope: string; tags?: string; category?: string }) => {
     setSubmitting(true);
     try {
       const formData = new FormData();
@@ -110,7 +112,7 @@ const KnowledgeBase: React.FC = () => {
       if (values.tags) formData.append('tags', values.tags);
       if (values.category) formData.append('category', values.category);
 
-      await api.post('/api/knowledge/create', formData, {
+      await api.post('/api/knowledge/manual', formData, {
         headers: { 'Content-Type': 'multipart/form-data' },
       });
 
@@ -118,15 +120,16 @@ const KnowledgeBase: React.FC = () => {
       setShowCreateModal(false);
       createForm.resetFields();
       actionRef.current?.reload();
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error('创建失败:', error);
-      message.error(error.response?.data?.detail || '创建失败');
+      const detail = (error as any)?.response?.data?.detail;
+      message.error(detail || '创建失败');
     } finally {
       setSubmitting(false);
     }
   };
 
-  const handleUploadSubmit = async (values: any) => {
+  const handleUploadSubmit = async (values: { title: string; doc_type: string; scope: string; tags?: string; category?: string }) => {
     if (!uploadFile) {
       message.warning('请选择要上传的文件');
       return;
@@ -151,9 +154,10 @@ const KnowledgeBase: React.FC = () => {
       setUploadFile(null);
       uploadForm.resetFields();
       actionRef.current?.reload();
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error('上传失败:', error);
-      message.error(error.response?.data?.detail || '上传失败');
+      const detail = (error as any)?.response?.data?.detail;
+      message.error(detail || '上传失败');
     } finally {
       setSubmitting(false);
     }
@@ -275,8 +279,9 @@ const KnowledgeBase: React.FC = () => {
           if (params.scope && params.scope !== 'all') queryParams.append('scope', params.scope);
           
           try {
-            const response = await api.get(`/api/knowledge?${queryParams.toString()}`);
-            let data = response.data;
+            const response = await api.get(`/api/knowledge/docs?${queryParams.toString()}`);
+            const result = response.data;
+            let data = result.items || [];
             // 客户端实现简单的标题搜索
             if (params.title) {
               data = data.filter((item: KnowledgeDoc) => item.title.includes(params.title));
@@ -289,7 +294,7 @@ const KnowledgeBase: React.FC = () => {
             return {
               data: data,
               success: true,
-              total: data.length,
+              total: result.total || data.length,
             };
           } catch (error) {
             console.error('获取列表失败:', error);
@@ -389,7 +394,7 @@ const KnowledgeBase: React.FC = () => {
               onRemove={() => setUploadFile(null)}
               fileList={uploadFile ? [uploadFile as any] : []}
               maxCount={1}
-              accept=".pdf,.doc,.docx"
+              accept=".pdf"
             >
               <Button icon={<UploadOutlined />}>选择文件</Button>
             </Upload>

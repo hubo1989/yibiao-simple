@@ -123,6 +123,16 @@ class KnowledgeDoc(Base):
         comment="向量索引错误信息"
     )
 
+    # LlamaIndex 后端标记
+    index_backend: Mapped[str] = mapped_column(
+        String(20), nullable=False, server_default="llamaindex",
+        comment="索引后端: llamaindex"
+    )
+    index_version: Mapped[int] = mapped_column(
+        Integer, nullable=False, server_default="1",
+        comment="索引版本号"
+    )
+
     # 元数据
     tags: Mapped[list | None] = mapped_column(
         JSONB, nullable=True, default=list,

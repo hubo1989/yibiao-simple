@@ -1,0 +1,7 @@
+# 可选依赖 - 浏览器自动化爬虫
+# 注意: 这些包与 Python 3.13+ 的 pytest 存在兼容性问题
+# 仅在需要高级爬虫功能时安装
+# 安装命令: pip install -r requirements-optional.txt
+
+seleniumbase==4.33.3
+undetected-chromedriver==3.5.5

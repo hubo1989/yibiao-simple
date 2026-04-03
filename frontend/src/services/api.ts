@@ -1,8 +1,8 @@
 /**
  * API服务
  */
-import axios, { AxiosError } from 'axios';
-import type { User, LoginRequest, RegisterRequest, Token } from '../types/auth';
+import axios, { AxiosError, InternalAxiosRequestConfig } from 'axios';
+import type { User, LoginRequest, RegisterRequest, Token, TokenResponseWithCsrf } from '../types/auth';
 import type { ProjectSummary, Project, ProjectCreate, ProjectProgress, ProjectMember } from '../types/project';
 import type {
   VersionResponse,
@@ -64,31 +64,51 @@ import type {
 
 const API_BASE_URL = process.env.REACT_APP_API_URL || 'http://localhost:8000';
 
+/** 构建文件 URL（用于图片/PDF 预览等） */
+export function getFileUrl(path: string | undefined | null): string {
+  if (!path) return '';
+  return `${API_BASE_URL}/${path.replace(/^\/+/, '')}`;
+}
+
 const TOKEN_KEY = 'auth_token';
-const REFRESH_TOKEN_KEY = 'refresh_token';
+const CSRF_TOKEN_KEY = 'csrf_token';
 
 const api = axios.create({
   baseURL: API_BASE_URL,
   timeout: 120000,
+  withCredentials: true, // 允许携带 httpOnly cookie
 });
 
-// Token 管理函数
+// Token 管理函数（仅 access_token 存储在内存/localStorage）
 export function getStoredToken(): string | null {
   return localStorage.getItem(TOKEN_KEY);
 }
 
-export function getStoredRefreshToken(): string | null {
-  return localStorage.getItem(REFRESH_TOKEN_KEY);
-}
-
-export function setStoredTokens(accessToken: string, refreshToken: string): void {
+export function setStoredToken(accessToken: string): void {
   localStorage.setItem(TOKEN_KEY, accessToken);
-  localStorage.setItem(REFRESH_TOKEN_KEY, refreshToken);
 }
 
-export function clearStoredTokens(): void {
+export function clearStoredToken(): void {
   localStorage.removeItem(TOKEN_KEY);
-  localStorage.removeItem(REFRESH_TOKEN_KEY);
+}
+
+// CSRF Token 管理函数
+export function getCsrfToken(): string | null {
+  return localStorage.getItem(CSRF_TOKEN_KEY);
+}
+
+export function setCsrfToken(csrfToken: string): void {
+  localStorage.setItem(CSRF_TOKEN_KEY, csrfToken);
+}
+
+export function clearCsrfToken(): void {
+  localStorage.removeItem(CSRF_TOKEN_KEY);
+}
+
+// 从 cookie 读取 CSRF token（用于首次登录后）
+export function getCsrfTokenFromCookie(): string | null {
+  const match = document.cookie.match(/csrf_token=([^;]+)/);
+  return match ? match[1] : null;
 }
 
 export function setAuthToken(token: string | null): void {
@@ -103,13 +123,21 @@ export function clearAuthToken(): void {
   delete api.defaults.headers.common['Authorization'];
 }
 
-// 请求拦截器：自动附加 Authorization header
+// 请求拦截器：自动附加 Authorization header 和 CSRF token
 api.interceptors.request.use(
   (config) => {
+    // 添加 access token
     const token = getStoredToken();
     if (token && !config.headers['Authorization']) {
       config.headers['Authorization'] = `Bearer ${token}`;
     }
+
+    // 添加 CSRF token（对于状态变更请求）
+    const csrfToken = getCsrfToken() || getCsrfTokenFromCookie();
+    if (csrfToken && config.method && ['post', 'put', 'delete', 'patch'].includes(config.method.toLowerCase())) {
+      config.headers['X-CSRF-Token'] = csrfToken;
+    }
+
     return config;
   },
   (error) => Promise.reject(error)
@@ -117,36 +145,48 @@ api.interceptors.request.use(
 
 // 响应拦截器
 api.interceptors.response.use(
-  (response) => response,
+  (response) => {
+    // 从响应中提取 CSRF token（如果有）
+    const csrfToken = response.data?.csrf_token;
+    if (csrfToken) {
+      setCsrfToken(csrfToken);
+    }
+    return response;
+  },
   async (error: AxiosError) => {
-    const originalRequest = error.config as any;
+    const originalRequest = error.config as InternalAxiosRequestConfig & { _retry?: boolean };
 
     // 如果是 401 错误且不是刷新 token 请求，尝试刷新 token
     if (error.response?.status === 401 && !originalRequest._retry) {
       originalRequest._retry = true;
 
-      const refreshToken = getStoredRefreshToken();
-      if (refreshToken) {
-        try {
-          const response = await axios.post<Token>(`${API_BASE_URL}/api/auth/refresh`, {
-            refresh_token: refreshToken,
-          });
+      try {
+        // refresh token 在 httpOnly cookie 中，自动携带
+        const response = await axios.post<Token>(`${API_BASE_URL}/api/auth/refresh`, {}, {
+          withCredentials: true,
+        });
 
-          const { access_token, refresh_token } = response.data;
-          setStoredTokens(access_token, refresh_token);
-          setAuthToken(access_token);
+        const { access_token } = response.data;
+        setStoredToken(access_token);
+        setAuthToken(access_token);
 
-          // 重试原始请求
-          originalRequest.headers['Authorization'] = `Bearer ${access_token}`;
-          return api(originalRequest);
-        } catch {
-          // 刷新 token 失败，清除认证状态
-          clearStoredTokens();
-          clearAuthToken();
-          // 跳转到登录页
-          if (window.location.pathname !== '/login') {
-            window.location.href = '/login';
-          }
+        // 更新 CSRF token（如果有）
+        const newCsrfToken = getCsrfTokenFromCookie();
+        if (newCsrfToken) {
+          setCsrfToken(newCsrfToken);
+        }
+
+        // 重试原始请求
+        originalRequest.headers['Authorization'] = `Bearer ${access_token}`;
+        return api(originalRequest);
+      } catch {
+        // 刷新 token 失败，清除认证状态
+        clearStoredToken();
+        clearAuthToken();
+        clearCsrfToken();
+        // 跳转到登录页
+        if (window.location.pathname !== '/login') {
+          window.location.href = '/login';
         }
       }
     }
@@ -156,66 +196,25 @@ api.interceptors.response.use(
   }
 );
 
-// 带认证的 fetch 辅助函数，处理 token 刷新
-async function authenticatedFetch(
-  url: string,
-  options: RequestInit = {},
-  token?: string
-): Promise<Response> {
-  const authToken = token || getStoredToken();
-
-  const response = await fetch(url, {
-    ...options,
-    headers: {
-      ...options.headers,
-      ...(authToken ? { 'Authorization': `Bearer ${authToken}` } : {}),
-    },
-  });
-
-  // 处理 401 错误
-  if (response.status === 401) {
-    const refreshToken = getStoredRefreshToken();
-    if (refreshToken) {
-      try {
-        const refreshResponse = await axios.post<Token>(`${API_BASE_URL}/api/auth/refresh`, {
-          refresh_token: refreshToken,
-        });
-
-        const { access_token, refresh_token } = refreshResponse.data;
-        setStoredTokens(access_token, refresh_token);
-        setAuthToken(access_token);
-
-        // 使用新 token 重试请求
-        return fetch(url, {
-          ...options,
-          headers: {
-            ...options.headers,
-            'Authorization': `Bearer ${access_token}`,
-          },
-        });
-      } catch {
-        // 刷新失败，清除认证并跳转登录页
-        clearStoredTokens();
-        clearAuthToken();
-        if (window.location.pathname !== '/login') {
-          window.location.href = '/login';
-        }
-      }
-    }
-  }
-
-  return response;
-}
-
 // 认证相关 API
 export const authApi = {
+  // 获取 CSRF token（登录前调用）
+  getCsrfToken: async (): Promise<{ csrf_token: string }> => {
+    const response = await axios.get<{ csrf_token: string }>(`${API_BASE_URL}/api/auth/csrf-token`, {
+      withCredentials: true,
+    });
+    // 存储 CSRF token
+    setCsrfToken(response.data.csrf_token);
+    return response.data;
+  },
+
   // 用户登录
   login: (credentials: LoginRequest) =>
-    api.post<Token>('/api/auth/login', credentials),
+    api.post<TokenResponseWithCsrf>('/api/auth/login', credentials),
 
   // 用户注册
   register: (data: RegisterRequest) =>
-    api.post<Token>('/api/auth/register', data),
+    api.post<TokenResponseWithCsrf>('/api/auth/register', data),
 
   // 获取当前用户信息
   getMe: async (): Promise<User> => {
@@ -223,9 +222,13 @@ export const authApi = {
     return response.data;
   },
 
-  // 刷新令牌
-  refresh: (refreshToken: string) =>
-    api.post<Token>('/api/auth/refresh', { refresh_token: refreshToken }),
+  // 登出
+  logout: async () => {
+    await api.post('/api/auth/logout');
+    clearStoredToken();
+    clearAuthToken();
+    clearCsrfToken();
+  },
 };
 
 // 项目相关 API
@@ -306,15 +309,27 @@ export interface OutlineRequest {
   provider_config_id?: string;
 }
 
+export interface OutlineItem {
+  id: string;
+  title: string;
+  description?: string;
+  content?: string;
+  status?: string;
+  children?: OutlineItem[];
+  rating_item?: string;
+  chapter_role?: string;
+  avoid_overlap?: string;
+}
+
 export interface ContentGenerationRequest {
-  outline: { outline: any[] };
+  outline: { outline: OutlineItem[] };
   project_overview: string;
 }
 
 export interface ChapterContentRequest {
-  chapter: any;
-  parent_chapters?: any[];
-  sibling_chapters?: any[];
+  chapter: OutlineItem;
+  parent_chapters?: OutlineItem[];
+  sibling_chapters?: OutlineItem[];
   project_overview: string;
   model_name?: string;
   provider_config_id?: string;
@@ -358,25 +373,18 @@ export const documentApi = {
 
 
   // 流式分析文档
-  analyzeDocumentStream: (data: AnalysisRequest, token?: string) => {
-    return authenticatedFetch(`${API_BASE_URL}/api/document/analyze-stream`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(data),
-    }, token);
+  analyzeDocumentStream: (data: AnalysisRequest) => {
+    return api.post('/api/document/analyze-stream', data, {
+      responseType: 'stream',
+    });
   },
 
   // 上传文件到项目
-  uploadToProject: (projectId: string, file: File, token?: string) => {
+  uploadToProject: (projectId: string, file: File) => {
     const formData = new FormData();
     formData.append('project_id', projectId);
     formData.append('file', file);
-    return authenticatedFetch(`${API_BASE_URL}/api/document/upload-to-project`, {
-      method: 'POST',
-      body: formData,
-    }, token);
+    return api.post('/api/document/upload-to-project', formData);
   },
 
   // 流式分析项目文档（保存到数据库）
@@ -386,38 +394,23 @@ export const documentApi = {
       analysis_type: 'overview' | 'requirements';
       model_name?: string;
       provider_config_id?: string;
-    },
-    token?: string,
+    }
   ) => {
-    return authenticatedFetch(`${API_BASE_URL}/api/document/analyze-project-stream`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(data),
-    }, token);
+    return api.post('/api/document/analyze-project-stream', data, {
+      responseType: 'stream',
+    });
   },
 
   // 保存项目分析结果（用于下一步前的备份保存）
-  saveProjectAnalysis: (projectId: string, data: { project_overview?: string; tech_requirements?: string }, token?: string) => {
-    return authenticatedFetch(`${API_BASE_URL}/api/document/save-analysis/${projectId}`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(data),
-    }, token);
+  saveProjectAnalysis: (projectId: string, data: { project_overview?: string; tech_requirements?: string }) => {
+    return api.post(`/api/document/save-analysis/${projectId}`, data);
   },
 
   // 导出Word文档
-  exportWord: (data: any, token?: string) => {
-    return authenticatedFetch(`${API_BASE_URL}/api/document/export-word`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(data),
-    }, token);
+  exportWord: (data: { project_name: string; project_overview?: string; project_id?: string; outline: OutlineItem[] }) => {
+    return api.post('/api/document/export-word', data, {
+      responseType: 'blob',
+    });
   },
 };
 
@@ -500,50 +493,33 @@ export const outlineApi = {
     api.post('/api/outline/generate', data),
 
   // 流式生成目录
-  generateOutlineStream: (data: OutlineRequest, token?: string) => {
-    return authenticatedFetch(`${API_BASE_URL}/api/outline/generate-stream`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(data),
-    }, token);
+  generateOutlineStream: (data: OutlineRequest) => {
+    return api.post('/api/outline/generate-stream', data, {
+      responseType: 'stream',
+    });
   },
 
   // 流式生成项目目录（保存到数据库）
-  generateProjectOutlineStream: (data: { project_id: string; model_name?: string; provider_config_id?: string }, token?: string) => {
-    return authenticatedFetch(`${API_BASE_URL}/api/outline/generate-project-stream`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(data),
-    }, token);
+  generateProjectOutlineStream: (data: { project_id: string; model_name?: string; provider_config_id?: string }) => {
+    return api.post('/api/outline/generate-project-stream', data, {
+      responseType: 'stream',
+    });
   },
 
   // 流式生成项目一级目录
-  generateProjectOutlineL1Stream: (data: { project_id: string; model_name?: string; provider_config_id?: string }, token?: string) => {
-    return authenticatedFetch(`${API_BASE_URL}/api/outline/generate-project-l1-stream`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(data),
-    }, token);
+  generateProjectOutlineL1Stream: (data: { project_id: string; model_name?: string; provider_config_id?: string }) => {
+    return api.post('/api/outline/generate-project-l1-stream', data, {
+      responseType: 'stream',
+    });
   },
 
   // 流式生成项目二三级目录
   generateProjectOutlineL2L3Stream: (
-    data: { project_id: string; model_name?: string; provider_config_id?: string; outline_data?: any },
-    token?: string,
+    data: { project_id: string; model_name?: string; provider_config_id?: string; outline_data?: { outline: OutlineItem[] } }
   ) => {
-    return authenticatedFetch(`${API_BASE_URL}/api/outline/generate-project-l2l3-stream`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(data),
-    }, token);
+    return api.post('/api/outline/generate-project-l2l3-stream', data, {
+      responseType: 'stream',
+    });
   },
 
   getProjectChapters: async (projectId: string): Promise<ProjectChapterListResponse> => {
@@ -556,13 +532,10 @@ export const outlineApi = {
 // 方案扩写相关API
 export const expandApi = {
   // 上传扩写文件
-  uploadExpandFile: (file: File, token?: string) => {
+  uploadExpandFile: (file: File) => {
     const formData = new FormData();
     formData.append('file', file);
-    return authenticatedFetch(`${API_BASE_URL}/api/expand/upload`, {
-      method: 'POST',
-      body: formData,
-    }, token);
+    return api.post('/api/expand/upload', formData);
   },
 };
 
@@ -573,14 +546,10 @@ export const contentApi = {
     api.post('/api/content/generate-chapter', data),
 
   // 流式生成单章节内容
-  generateChapterContentStream: (data: ChapterContentRequest, token?: string) => {
-    return authenticatedFetch(`${API_BASE_URL}/api/content/generate-chapter-stream`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(data),
-    }, token);
+  generateChapterContentStream: (data: ChapterContentRequest) => {
+    return api.post('/api/content/generate-chapter-stream', data, {
+      responseType: 'stream',
+    });
   },
 };
 
@@ -702,11 +671,8 @@ export const commentApi = {
 export const proofreadApi = {
   // 触发章节校对（流式返回）
   proofreadChapter: (chapterId: string) => {
-    return authenticatedFetch(`${API_BASE_URL}/api/chapters/${chapterId}/proofread`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
+    return api.post(`/api/chapters/${chapterId}/proofread`, undefined, {
+      responseType: 'stream',
     });
   },
 };

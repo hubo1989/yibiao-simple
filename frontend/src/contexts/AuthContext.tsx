@@ -5,13 +5,13 @@
 import React, { createContext, useContext, useState, useEffect, useCallback, useMemo } from 'react';
 import type {
   User,
-  Token,
+  TokenResponseWithCsrf,
   LoginRequest,
   RegisterRequest,
   AuthContextType,
   UserRole,
 } from '../types/auth';
-import { authApi, setAuthToken, clearAuthToken, getStoredToken, setStoredTokens, clearStoredTokens } from '../services/api';
+import { authApi, setAuthToken, clearAuthToken, getStoredToken, setStoredToken, clearStoredToken, setCsrfToken } from '../services/api';
 
 const AuthContext = createContext<AuthContextType | null>(null);
 
@@ -67,7 +67,7 @@ export function AuthProvider({ children }: AuthProviderProps): React.ReactElemen
         } catch {
           // Token 无效，清除认证状态
           clearAuthToken();
-          clearStoredTokens();
+          clearStoredToken();
           setStoredUser(null);
           setUser(null);
           setToken(null);
@@ -81,12 +81,17 @@ export function AuthProvider({ children }: AuthProviderProps): React.ReactElemen
 
   const login = useCallback(async (credentials: LoginRequest): Promise<void> => {
     const response = await authApi.login(credentials);
-    const tokenData: Token = response.data;
+    const tokenData: TokenResponseWithCsrf = response.data;
 
-    // 存储 token
-    setStoredTokens(tokenData.access_token, tokenData.refresh_token);
+    // 存储 access token（refresh token 在 httpOnly cookie 中自动管理）
+    setStoredToken(tokenData.access_token);
     setAuthToken(tokenData.access_token);
     setToken(tokenData.access_token);
+
+    // 存储 CSRF token
+    if (tokenData.csrf_token) {
+      setCsrfToken(tokenData.csrf_token);
+    }
 
     // 获取用户信息
     const userData = await authApi.getMe();
@@ -96,12 +101,17 @@ export function AuthProvider({ children }: AuthProviderProps): React.ReactElemen
 
   const register = useCallback(async (data: RegisterRequest): Promise<void> => {
     const response = await authApi.register(data);
-    const tokenData: Token = response.data;
+    const tokenData: TokenResponseWithCsrf = response.data;
 
-    // 存储 token
-    setStoredTokens(tokenData.access_token, tokenData.refresh_token);
+    // 存储 access token（refresh token 在 httpOnly cookie 中自动管理）
+    setStoredToken(tokenData.access_token);
     setAuthToken(tokenData.access_token);
     setToken(tokenData.access_token);
+
+    // 存储 CSRF token
+    if (tokenData.csrf_token) {
+      setCsrfToken(tokenData.csrf_token);
+    }
 
     // 获取用户信息
     const userData = await authApi.getMe();
@@ -110,8 +120,12 @@ export function AuthProvider({ children }: AuthProviderProps): React.ReactElemen
   }, []);
 
   const logout = useCallback((): void => {
+    // 调用后端 logout 清除 httpOnly cookie
+    authApi.logout().catch(() => {
+      // 忽略网络错误，仍然清除本地状态
+    });
     clearAuthToken();
-    clearStoredTokens();
+    clearStoredToken();
     setStoredUser(null);
     setUser(null);
     setToken(null);

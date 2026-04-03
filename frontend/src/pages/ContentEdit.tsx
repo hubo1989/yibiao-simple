@@ -8,15 +8,21 @@ import {
   chapterApi,
   outlineApi,
   consistencyApi,
+  materialApi,
   ChapterContentRequest,
 } from '../services/api';
+import { getErrorMessage, ApiError } from '../utils/error';
 import { useAuth } from '../contexts/AuthContext';
 import { saveAs } from 'file-saver';
 import { draftStorage } from '../utils/draftStorage';
 import { getCurrentModel, getCurrentProviderConfigId } from '../utils/modelCache';
 import ChapterStatusBadge from '../components/ChapterStatusBadge';
 import ProofreadPanel from '../components/ProofreadPanel';
+import MaterialMarkerModal from '../components/content-edit/MaterialMarkerModal';
+import ReverseEnhanceModal from '../components/content-edit/ReverseEnhanceModal';
+import ClauseResponseModal from '../components/content-edit/ClauseResponseModal';
 import type { ChapterStatus } from '../types/chapter';
+import type { ChapterMaterialBinding } from '../types/material';
 import type { ProofreadResult, ProofreadIssue } from '../types/proofread';
 import type { ChapterReverseEnhanceResponse, ClauseResponseResult } from '../types/bid';
 import { ProCard } from '@ant-design/pro-components';
@@ -49,6 +55,7 @@ import {
   LoadingOutlined,
   BulbOutlined,
   ProfileOutlined,
+  PaperClipOutlined,
 } from '@ant-design/icons';
 
 interface ContentEditProps {
@@ -108,10 +115,11 @@ const ContentEdit: React.FC<ContentEditProps> = ({
   const [clauseKnowledgeContext, setClauseKnowledgeContext] = useState('');
   const [clauseResponseResult, setClauseResponseResult] = useState<ClauseResponseResult | null>(null);
   const [isGeneratingClauseResponse, setIsGeneratingClauseResponse] = useState(false);
+  const [showMaterialMarkerModal, setShowMaterialMarkerModal] = useState(false);
+  const [materialMarkerBindings, setMaterialMarkerBindings] = useState<ChapterMaterialBinding[]>([]);
+  const [materialMarkerTarget, setMaterialMarkerTarget] = useState<{ chapterNumber: string; title: string } | null>(null);
+  const [selectedBindingId, setSelectedBindingId] = useState<string>('');
 
-  const getErrorMessage = (error: any, fallback: string) => {
-    return error?.response?.data?.detail || error?.message || fallback;
-  };
 
   const loadProjectChapterMap = useCallback(async (): Promise<Record<string, string>> => {
     if (!projectId) {
@@ -164,6 +172,62 @@ const ContentEdit: React.FC<ContentEditProps> = ({
     },
     [getProjectChapterId]
   );
+
+  const handleOpenMaterialMarkerModal = useCallback(
+    async (item: OutlineItem) => {
+      if (!projectId) {
+        message.warning('仅项目模式支持素材占位标记');
+        return;
+      }
+      const projectChapterId = await getProjectChapterId(item.id);
+      if (!projectChapterId) {
+        message.warning(`未找到章节 ${item.id} 的数据库记录`);
+        return;
+      }
+      try {
+        const bindings = await materialApi.listBindings(projectId, projectChapterId);
+        setMaterialMarkerBindings(bindings);
+        setSelectedBindingId(bindings.length > 0 ? bindings[0].id : '');
+        setMaterialMarkerTarget({ chapterNumber: item.id, title: item.title });
+        setShowMaterialMarkerModal(true);
+      } catch (error: unknown) {
+        const detail = (error as any)?.response?.data?.detail;
+        message.error(detail || '加载素材绑定失败');
+      }
+    },
+    [getProjectChapterId, projectId]
+  );
+
+  const handleInsertMaterialMarker = useCallback(async () => {
+    if (!materialMarkerTarget || !selectedBindingId) {
+      message.warning('请选择要插入的素材绑定');
+      return;
+    }
+
+    const chapterNumber = materialMarkerTarget.chapterNumber;
+    const targetItem = leafItems.find((item) => item.id === chapterNumber);
+    if (!targetItem) {
+      message.warning('未找到目标章节内容');
+      return;
+    }
+
+    const marker = `[INSERT_MATERIAL:${selectedBindingId}]`;
+    const nextContent = `${targetItem.content || ''}\n\n${marker}`.trim();
+    setLeafItems((prevItems) =>
+      prevItems.map((item) => (item.id === chapterNumber ? { ...item, content: nextContent } : item))
+    );
+    draftStorage.saveContentById({ [chapterNumber]: nextContent });
+
+    if (projectId) {
+      const projectChapterId = await getProjectChapterId(chapterNumber);
+      if (projectChapterId) {
+        await chapterApi.updateContent(projectChapterId, nextContent, `插入素材标记 ${selectedBindingId}`);
+      }
+    }
+
+    setShowMaterialMarkerModal(false);
+    message.success('素材占位标记已插入');
+  }, [getProjectChapterId, leafItems, materialMarkerTarget, projectId, selectedBindingId]);
 
   const highlightConsistencyFixes = (content: string): React.ReactNode => {
     if (!content) return null;
@@ -298,7 +362,7 @@ const ContentEdit: React.FC<ContentEditProps> = ({
     };
 
     handleScroll();
-    const target: any = scrollContainer || window;
+    const target = scrollContainer || window;
     target.addEventListener('scroll', handleScroll);
     return () => target.removeEventListener('scroll', handleScroll);
   }, []);
@@ -342,11 +406,8 @@ const ContentEdit: React.FC<ContentEditProps> = ({
       setProofreadChapterId(chapterId);
 
       const response = await proofreadApi.proofreadChapter(chapterId);
-      if (!response.ok) {
-        throw new Error('校对请求失败');
-      }
 
-      const reader = response.body?.getReader();
+      const reader = response.data?.getReader();
       if (!reader) throw new Error('无法读取响应');
 
       let fullContent = '';
@@ -592,6 +653,22 @@ const ContentEdit: React.FC<ContentEditProps> = ({
             )}
 
             {isLeaf && currentContent && !generationError && projectId && (
+              <Tooltip title="插入已绑定的素材占位标记">
+                <Button
+                  type="text"
+                  size="small"
+                  icon={<PaperClipOutlined />}
+                  onClick={() => {
+                    void handleOpenMaterialMarkerModal(item);
+                  }}
+                  style={{ color: '#0f766e' }}
+                >
+                  插入素材
+                </Button>
+              </Tooltip>
+            )}
+
+            {isLeaf && currentContent && !generationError && projectId && (
               <Tooltip title="根据评分点分析本章覆盖情况并给出补强建议">
                 <Button
                   type="text"
@@ -740,11 +817,9 @@ const ContentEdit: React.FC<ContentEditProps> = ({
         provider_config_id: getCurrentProviderConfigId() || undefined,
       };
 
-      const response = await contentApi.generateChapterContentStream(request, token || undefined);
+      const response = await contentApi.generateChapterContentStream(request);
 
-      if (!response.ok) throw new Error('生成失败');
-
-      const reader = response.body?.getReader();
+      const reader = response.data?.getReader();
       if (!reader) throw new Error('无法读取响应');
 
       let content = '';
@@ -800,8 +875,8 @@ const ContentEdit: React.FC<ContentEditProps> = ({
       }
 
       return updatedItem;
-    } catch (error: any) {
-      const errorMessage = error?.message || '生成失败';
+    } catch (error: unknown) {
+      const errorMessage = error instanceof Error ? error.message : '生成失败';
       const updatedItem = { ...item, content: undefined, generationError: errorMessage };
       draftStorage.clearChapterContent(item.id);
       setLeafItems(prevItems => {
@@ -941,16 +1016,14 @@ const ContentEdit: React.FC<ContentEditProps> = ({
       };
 
       const exportPayload = {
-        project_name: outlineData.project_name,
+        project_name: outlineData.project_name || '标书文档',
         project_overview: outlineData.project_overview,
+        project_id: projectId,
         outline: buildExportOutline(outlineData.outline),
       };
 
-      const response = await documentApi.exportWord(exportPayload, token || undefined);
-      if (!response.ok) {
-        throw new Error('导出失败');
-      }
-      const blob = await response.blob();
+      const response = await documentApi.exportWord(exportPayload);
+      const blob = response.data;
       saveAs(blob, `${outlineData.project_name || '标书文档'}.docx`);
       message.success('导出成功');
     } catch (error) {
@@ -1113,194 +1186,37 @@ const ContentEdit: React.FC<ContentEditProps> = ({
         />
       )}
 
-      <Modal
-        title={reverseEnhanceTarget ? `反向补强：${reverseEnhanceTarget.chapterNumber} ${reverseEnhanceTarget.title}` : '反向补强'}
-        open={showReverseEnhanceModal}
-        width={820}
-        onCancel={() => setShowReverseEnhanceModal(false)}
-        footer={[
-          reverseEnhanceResult ? (
-            <Button
-              key="copy"
-              onClick={() => {
-                void copyText(buildReverseEnhanceSummary(reverseEnhanceResult), '补强建议已复制');
-              }}
-            >
-              复制建议
-            </Button>
-          ) : null,
-          <Button key="close" type="primary" onClick={() => setShowReverseEnhanceModal(false)}>
-            关闭
-          </Button>,
-        ]}
-      >
-        {isReverseEnhancing ? (
-          <div style={{ padding: '48px 0', textAlign: 'center' }}>
-            <Spin size="large" />
-          </div>
-        ) : reverseEnhanceResult ? (
-          <Space direction="vertical" size="large" style={{ width: '100%' }}>
-            <Alert
-              type="info"
-              showIcon
-              message={reverseEnhanceResult.coverage_assessment}
-              description={reverseEnhanceResult.summary}
-            />
+      <MaterialMarkerModal
+        visible={showMaterialMarkerModal}
+        target={materialMarkerTarget}
+        selectedBindingId={selectedBindingId}
+        bindings={materialMarkerBindings}
+        onSelectBinding={setSelectedBindingId}
+        onOk={() => { void handleInsertMaterialMarker(); }}
+        onCancel={() => setShowMaterialMarkerModal(false)}
+      />
 
-            <div>
-              <Typography.Text strong>已覆盖评分点</Typography.Text>
-              <div style={{ marginTop: 8, display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-                {reverseEnhanceResult.matched_points.length ? (
-                  reverseEnhanceResult.matched_points.map((point) => (
-                    <Tag key={point} color="success">
-                      {point}
-                    </Tag>
-                  ))
-                ) : (
-                  <Typography.Text type="secondary">暂无明确已覆盖评分点</Typography.Text>
-                )}
-              </div>
-            </div>
+      <ReverseEnhanceModal
+        visible={showReverseEnhanceModal}
+        target={reverseEnhanceTarget}
+        isLoading={isReverseEnhancing}
+        result={reverseEnhanceResult}
+        onCopy={() => { void copyText(buildReverseEnhanceSummary(reverseEnhanceResult!), '补强建议已复制'); }}
+        onClose={() => setShowReverseEnhanceModal(false)}
+      />
 
-            <div>
-              <Typography.Text strong>待补强评分点</Typography.Text>
-              <div style={{ marginTop: 8, display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-                {reverseEnhanceResult.missing_points.length ? (
-                  reverseEnhanceResult.missing_points.map((point) => (
-                    <Tag key={point} color="error">
-                      {point}
-                    </Tag>
-                  ))
-                ) : (
-                  <Typography.Text type="secondary">当前没有识别到明显缺失项</Typography.Text>
-                )}
-              </div>
-            </div>
-
-            <div style={{ display: 'grid', gap: 12 }}>
-              <Typography.Text strong>补强动作</Typography.Text>
-              {reverseEnhanceResult.enhancement_actions.length ? (
-                reverseEnhanceResult.enhancement_actions.map((action, index) => (
-                  <Card key={`${action.problem}-${index}`} size="small">
-                    <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, alignItems: 'flex-start' }}>
-                      <Typography.Text strong>
-                        {index + 1}. {action.problem}
-                      </Typography.Text>
-                      <Tag
-                        color={
-                          action.priority === 'high'
-                            ? 'error'
-                            : action.priority === 'medium'
-                              ? 'processing'
-                              : 'default'
-                        }
-                      >
-                        {action.priority === 'high'
-                          ? '高优先级'
-                          : action.priority === 'medium'
-                            ? '中优先级'
-                            : '低优先级'}
-                      </Tag>
-                    </div>
-                    <Typography.Paragraph style={{ marginTop: 8, marginBottom: action.evidence_needed ? 8 : 0 }}>
-                      {action.action}
-                    </Typography.Paragraph>
-                    {action.evidence_needed ? (
-                      <Typography.Text type="secondary">
-                        建议补充材料：{action.evidence_needed}
-                      </Typography.Text>
-                    ) : null}
-                  </Card>
-                ))
-              ) : (
-                <Typography.Text type="secondary">暂无可执行补强动作</Typography.Text>
-              )}
-            </div>
-          </Space>
-        ) : (
-          <Alert
-            type="warning"
-            showIcon
-            message="暂未获得补强结果"
-            description="请确认章节内容已生成且项目评分要求已保存，然后重试。"
-          />
-        )}
-      </Modal>
-
-      <Modal
-        title="条款逐条响应"
-        open={showClauseResponseModal}
-        width={860}
-        onCancel={() => setShowClauseResponseModal(false)}
-        footer={[
-          clauseResponseResult ? (
-            <Button
-              key="copy"
-              onClick={() => {
-                void copyText(clauseResponseResult.content, '逐条响应内容已复制');
-              }}
-            >
-              复制结果
-            </Button>
-          ) : null,
-          <Button key="close" onClick={() => setShowClauseResponseModal(false)}>
-            关闭
-          </Button>,
-          <Button
-            key="generate"
-            type="primary"
-            loading={isGeneratingClauseResponse}
-            onClick={() => {
-              void handleGenerateClauseResponse();
-            }}
-          >
-            {clauseResponseResult ? '重新生成' : '生成响应'}
-          </Button>,
-        ]}
-      >
-        <Space direction="vertical" size="large" style={{ width: '100%' }}>
-          <div>
-            <Typography.Text strong>技术参数或条款原文</Typography.Text>
-            <Input.TextArea
-              rows={6}
-              value={clauseText}
-              onChange={(event) => setClauseText(event.target.value)}
-              placeholder="请输入需要逐条响应的技术参数、技术条款或服务要求原文"
-              style={{ marginTop: 8 }}
-            />
-          </div>
-
-          <div>
-            <Typography.Text strong>补充知识上下文（可选）</Typography.Text>
-            <Input.TextArea
-              rows={4}
-              value={clauseKnowledgeContext}
-              onChange={(event) => setClauseKnowledgeContext(event.target.value)}
-              placeholder="可补充企业能力、产品参数、实施边界等信息，帮助生成更贴合项目的响应内容"
-              style={{ marginTop: 8 }}
-            />
-          </div>
-
-          {isGeneratingClauseResponse ? (
-            <div style={{ padding: '32px 0', textAlign: 'center' }}>
-              <Spin size="large" />
-            </div>
-          ) : clauseResponseResult ? (
-            <Card size="small" title="生成结果">
-              <div className="markdown-body">
-                <ReactMarkdown>{clauseResponseResult.content}</ReactMarkdown>
-              </div>
-            </Card>
-          ) : (
-            <Alert
-              type="info"
-              showIcon
-              message="输入条款后点击“生成响应”"
-              description="系统会输出可直接用于技术标正文或条款响应表的逐条响应内容。"
-            />
-          )}
-        </Space>
-      </Modal>
+      <ClauseResponseModal
+        visible={showClauseResponseModal}
+        clauseText={clauseText}
+        knowledgeContext={clauseKnowledgeContext}
+        isLoading={isGeneratingClauseResponse}
+        result={clauseResponseResult}
+        onClauseTextChange={setClauseText}
+        onKnowledgeContextChange={setClauseKnowledgeContext}
+        onGenerate={() => { void handleGenerateClauseResponse(); }}
+        onCopy={() => { void copyText(clauseResponseResult!.content, '逐条响应内容已复制'); }}
+        onClose={() => setShowClauseResponseModal(false)}
+      />
 
       {/* 校对结果面板 */}
       <ProofreadPanel

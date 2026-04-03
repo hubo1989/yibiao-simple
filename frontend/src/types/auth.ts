@@ -16,8 +16,11 @@ export interface User {
 
 export interface Token {
   access_token: string;
-  refresh_token: string;
   token_type: string;
+}
+
+export interface TokenResponseWithCsrf extends Token {
+  csrf_token: string;
 }
 
 export interface LoginRequest {

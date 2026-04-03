@@ -5,6 +5,7 @@ import { materialApi } from '../services/api';
 import type { MaterialAsset, MaterialCategory } from '../types/material';
 import { useLayoutHeader } from '../layouts/layoutHeader';
 import IngestionWizard from '../components/IngestionWizard';
+import { getFileUrl, getErrorMessage, ApiError } from '../utils/error';
 
 const categoryOptions: { label: string; value: MaterialCategory }[] = [
   { label: '营业执照', value: 'business_license' },
@@ -43,8 +44,8 @@ const MaterialLibrary: React.FC = () => {
         keyword: keyword || undefined,
       });
       setItems(data);
-    } catch (error: any) {
-      message.error(error.response?.data?.detail || '加载素材失败');
+    } catch (error: unknown) {
+      message.error(getErrorMessage(error, '加载素材失败'));
     } finally {
       setLoading(false);
     }
@@ -69,7 +70,7 @@ const MaterialLibrary: React.FC = () => {
 
   const filteredItems = useMemo(() => items, [items]);
 
-  const handleUpload = async (values: any) => {
+  const handleUpload = async (values: { name: string; category: MaterialCategory; description?: string; tags?: string }) => {
     if (uploadSubmitting) return;
     if (!file) {
       message.warning('请选择要上传的素材文件');
@@ -91,14 +92,14 @@ const MaterialLibrary: React.FC = () => {
       setFile(null);
       form.resetFields();
       await loadData();
-    } catch (error: any) {
-      message.error(error.response?.data?.detail || '素材上传失败');
+    } catch (error: unknown) {
+      message.error(getErrorMessage(error, '素材上传失败'));
     } finally {
       setUploadSubmitting(false);
     }
   };
 
-  const handleEdit = async (values: any) => {
+  const handleEdit = async (values: { name: string; category: MaterialCategory; description?: string; tags?: string; review_status?: string }) => {
     if (!editingItem) return;
     setEditSubmitting(true);
     try {
@@ -112,8 +113,8 @@ const MaterialLibrary: React.FC = () => {
       setEditingItem(null);
       editForm.resetFields();
       await loadData();
-    } catch (error: any) {
-      message.error(error.response?.data?.detail || '更新失败');
+    } catch (error: unknown) {
+      message.error(getErrorMessage(error, '更新失败'));
     } finally {
       setEditSubmitting(false);
     }
@@ -125,8 +126,8 @@ const MaterialLibrary: React.FC = () => {
       await materialApi.delete(id);
       message.success('删除成功');
       await loadData();
-    } catch (error: any) {
-      message.error(error.response?.data?.detail || '删除失败');
+    } catch (error: unknown) {
+      message.error(getErrorMessage(error, '删除失败'));
     } finally {
       setDeletingId(null);
     }
@@ -215,10 +216,10 @@ const MaterialLibrary: React.FC = () => {
                     item.file_type === 'pdf' ? (
                       <div
                         style={{ height: 180, overflow: 'hidden', background: '#f8fafc', cursor: 'pointer', position: 'relative' }}
-                        onClick={() => setPreviewPdf(`${process.env.REACT_APP_API_URL || 'http://localhost:8000'}/${item.file_path.replace(/^\/+/, '')}`)}
+                        onClick={() => setPreviewPdf(getFileUrl(item.file_path))}
                       >
                         <img
-                          src={`${process.env.REACT_APP_API_URL || 'http://localhost:8000'}/${(item.thumbnail_path || item.preview_path || '').replace(/^\/+/, '')}`}
+                          src={getFileUrl(item.thumbnail_path || item.preview_path || '')}
                           alt={item.name}
                           style={{ width: '100%', height: '100%', objectFit: 'cover' }}
                         />
@@ -231,12 +232,12 @@ const MaterialLibrary: React.FC = () => {
                       </div>
                     ) : (
                       <Image
-                        src={`${process.env.REACT_APP_API_URL || 'http://localhost:8000'}/${(item.thumbnail_path || item.preview_path || '').replace(/^\/+/, '')}`}
+                        src={getFileUrl(item.thumbnail_path || item.preview_path || '')}
                         alt={item.name}
                         style={{ height: 180, objectFit: 'cover' }}
                         preview={{
                           src: item.preview_path
-                            ? `${process.env.REACT_APP_API_URL || 'http://localhost:8000'}/${item.preview_path.replace(/^\/+/, '')}`
+                            ? getFileUrl(item.preview_path)
                             : undefined,
                         }}
                       />

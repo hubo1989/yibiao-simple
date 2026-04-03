@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import { documentApi } from '../services/api';
+import { MarkdownComponentProps } from '../utils/error';
 import { useAuth } from '../contexts/AuthContext';
 import { draftStorage } from '../utils/draftStorage';
 import { getCurrentModel, getCurrentProviderConfigId } from '../utils/modelCache';
@@ -100,28 +101,28 @@ const DocumentAnalysis: React.FC<DocumentAnalysisProps> = ({
   }, [techRequirements]);
 
   const markdownComponents = {
-    p: ({ children }: any) => <p style={{ whiteSpace: 'pre-wrap', lineHeight: '1.5', margin: '0 0 1em 0' }}>{children}</p>,
-    ul: ({ children }: any) => <ul style={{ paddingLeft: 20, marginBottom: '1em' }}>{children}</ul>,
-    ol: ({ children }: any) => <ol style={{ paddingLeft: 20, marginBottom: '1em' }}>{children}</ol>,
-    li: ({ children }: any) => <li style={{ lineHeight: '1.5' }}>{children}</li>,
-    h1: ({ children }: any) => <h1 style={{ fontSize: '1.25em', fontWeight: 600, margin: '1em 0 0.5em 0' }}>{children}</h1>,
-    h2: ({ children }: any) => <h2 style={{ fontSize: '1.1em', fontWeight: 600, margin: '1em 0 0.5em 0' }}>{children}</h2>,
-    h3: ({ children }: any) => <h3 style={{ fontSize: '1em', fontWeight: 600, margin: '1em 0 0.5em 0' }}>{children}</h3>,
-    strong: ({ children }: any) => <strong style={{ fontWeight: 600 }}>{children}</strong>,
-    em: ({ children }: any) => <em style={{ fontStyle: 'italic' }}>{children}</em>,
-    blockquote: ({ children }: any) => <blockquote style={{ borderLeft: '4px solid #1677ff', paddingLeft: 16, margin: '1em 0', color: 'rgba(0, 0, 0, 0.45)' }}>{children}</blockquote>,
-    code: ({ children }: any) => <code style={{ backgroundColor: 'rgba(0, 0, 0, 0.04)', padding: '0.2em 0.4em', borderRadius: 3, fontFamily: 'monospace' }}>{children}</code>,
-    table: ({ children }: any) => <table style={{ width: '100%', borderCollapse: 'collapse', margin: '1em 0' }}>{children}</table>,
-    thead: ({ children }: any) => <thead style={{ backgroundColor: '#fafafa' }}>{children}</thead>,
-    th: ({ children }: any) => <th style={{ border: '1px solid #f0f0f0', padding: '8px 16px', textAlign: 'left', fontWeight: 600 }}>{children}</th>,
-    td: ({ children }: any) => <td style={{ border: '1px solid #f0f0f0', padding: '8px 16px' }}>{children}</td>,
-    text: ({ children }: any) => <span style={{ whiteSpace: 'pre-wrap' }}>{children}</span>,
+    p: ({ children }: MarkdownComponentProps) => <p style={{ whiteSpace: 'pre-wrap', lineHeight: '1.5', margin: '0 0 1em 0' }}>{children}</p>,
+    ul: ({ children }: MarkdownComponentProps) => <ul style={{ paddingLeft: 20, marginBottom: '1em' }}>{children}</ul>,
+    ol: ({ children }: MarkdownComponentProps) => <ol style={{ paddingLeft: 20, marginBottom: '1em' }}>{children}</ol>,
+    li: ({ children }: MarkdownComponentProps) => <li style={{ lineHeight: '1.5' }}>{children}</li>,
+    h1: ({ children }: MarkdownComponentProps) => <h1 style={{ fontSize: '1.25em', fontWeight: 600, margin: '1em 0 0.5em 0' }}>{children}</h1>,
+    h2: ({ children }: MarkdownComponentProps) => <h2 style={{ fontSize: '1.1em', fontWeight: 600, margin: '1em 0 0.5em 0' }}>{children}</h2>,
+    h3: ({ children }: MarkdownComponentProps) => <h3 style={{ fontSize: '1em', fontWeight: 600, margin: '1em 0 0.5em 0' }}>{children}</h3>,
+    strong: ({ children }: MarkdownComponentProps) => <strong style={{ fontWeight: 600 }}>{children}</strong>,
+    em: ({ children }: MarkdownComponentProps) => <em style={{ fontStyle: 'italic' }}>{children}</em>,
+    blockquote: ({ children }: MarkdownComponentProps) => <blockquote style={{ borderLeft: '4px solid #1677ff', paddingLeft: 16, margin: '1em 0', color: 'rgba(0, 0, 0, 0.45)' }}>{children}</blockquote>,
+    code: ({ children }: MarkdownComponentProps) => <code style={{ backgroundColor: 'rgba(0, 0, 0, 0.04)', padding: '0.2em 0.4em', borderRadius: 3, fontFamily: 'monospace' }}>{children}</code>,
+    table: ({ children }: MarkdownComponentProps) => <table style={{ width: '100%', borderCollapse: 'collapse', margin: '1em 0' }}>{children}</table>,
+    thead: ({ children }: MarkdownComponentProps) => <thead style={{ backgroundColor: '#fafafa' }}>{children}</thead>,
+    th: ({ children }: MarkdownComponentProps) => <th style={{ border: '1px solid #f0f0f0', padding: '8px 16px', textAlign: 'left', fontWeight: 600 }}>{children}</th>,
+    td: ({ children }: MarkdownComponentProps) => <td style={{ border: '1px solid #f0f0f0', padding: '8px 16px' }}>{children}</td>,
+    text: ({ children }: MarkdownComponentProps) => <span style={{ whiteSpace: 'pre-wrap' }}>{children}</span>,
   };
 
   const streamingComponents = {
     ...markdownComponents,
-    p: ({ children }: any) => <p style={{ whiteSpace: 'pre-wrap', lineHeight: '1.3', margin: '0 0 0.5em 0', color: '#1677ff' }}>{children}</p>,
-    text: ({ children }: any) => <span style={{ whiteSpace: 'pre-wrap', color: '#1677ff' }}>{children}</span>,
+    p: ({ children }: MarkdownComponentProps) => <p style={{ whiteSpace: 'pre-wrap', lineHeight: '1.3', margin: '0 0 0.5em 0', color: '#1677ff' }}>{children}</p>,
+    text: ({ children }: MarkdownComponentProps) => <span style={{ whiteSpace: 'pre-wrap', color: '#1677ff' }}>{children}</span>,
   };
 
   const handleFileSelect = (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -152,8 +153,9 @@ const DocumentAnalysis: React.FC<DocumentAnalysisProps> = ({
       } else {
         setMsg({ type: 'error', text: response.data.message });
       }
-    } catch (error: any) {
-      setMsg({ type: 'error', text: error.response?.data?.detail || '文件上传失败' });
+    } catch (error: unknown) {
+      const detail = (error as any)?.response?.data?.detail;
+      setMsg({ type: 'error', text: detail || '文件上传失败' });
     } finally {
       setUploading(false);
     }
@@ -215,8 +217,9 @@ const DocumentAnalysis: React.FC<DocumentAnalysisProps> = ({
           if (isStreamDone) {
             return;
           }
-        } catch (e: any) {
-          throw new Error(e.message || '连接错误，请检查网络');
+        } catch (e: unknown) {
+          const errorMessage = e instanceof Error ? e.message : '连接错误，请检查网络';
+          throw new Error(errorMessage);
         }
       };
 
@@ -229,7 +232,7 @@ const DocumentAnalysis: React.FC<DocumentAnalysisProps> = ({
           setAnalyzing(false);
           return;
         }
-        await documentApi.uploadToProject(projectId, uploadedFile, token || undefined);
+        await documentApi.uploadToProject(projectId, uploadedFile);
 
         setCurrentAnalysisStep('overview');
         const overviewResponse = await documentApi.analyzeProjectStream({
@@ -237,9 +240,9 @@ const DocumentAnalysis: React.FC<DocumentAnalysisProps> = ({
           analysis_type: 'overview',
           model_name: currentModel || undefined,
           provider_config_id: currentProviderConfigId || undefined,
-        }, token || undefined);
+        });
 
-        await processStream(overviewResponse, (chunk) => {
+        await processStream(overviewResponse as any, (chunk) => {
           overviewResult += chunk;
           setStreamingOverview(normalizeLineBreaks(overviewResult));
         });
@@ -252,9 +255,9 @@ const DocumentAnalysis: React.FC<DocumentAnalysisProps> = ({
           analysis_type: 'requirements',
           model_name: currentModel || undefined,
           provider_config_id: currentProviderConfigId || undefined,
-        }, token || undefined);
+        });
 
-        await processStream(requirementsResponse, (chunk) => {
+        await processStream(requirementsResponse as any, (chunk) => {
           requirementsResult += chunk;
           setStreamingRequirements(normalizeLineBreaks(requirementsResult));
         });
@@ -275,11 +278,12 @@ const DocumentAnalysis: React.FC<DocumentAnalysisProps> = ({
       setStreamingRequirements('');
       setCurrentAnalysisStep(null);
 
-    } catch (error: any) {
-      if (error.message?.includes('401') || error.message?.includes('认证') || error.message?.includes('Unauthorized')) {
+    } catch (error: unknown) {
+      const errorMessage = error instanceof Error ? error.message : '';
+      if (errorMessage?.includes('401') || errorMessage?.includes('认证') || errorMessage?.includes('Unauthorized')) {
         setMsg({ type: 'error', text: '登录已过期，请重新登录' });
       } else {
-        setMsg({ type: 'error', text: error.message || '标书解析失败' });
+        setMsg({ type: 'error', text: errorMessage || '标书解析失败' });
       }
       setStreamingOverview('');
       setStreamingRequirements('');

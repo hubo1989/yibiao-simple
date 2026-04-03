@@ -152,8 +152,8 @@ asyncio-throttle==1.0.2
 duckduckgo-search==8.1.1
 beautifulsoup4==4.12.3
 playwright==1.51.0
-seleniumbase==4.33.3
-undetected-chromedriver==3.5.5
+# 注意: seleniumbase 和 undetected-chromedriver 已移至 requirements-optional.txt
+# 它们与 pytest 在 Python 3.13+ 上存在兼容性问题
 mcp==1.13.1
 sqlalchemy[asyncio]==2.0.41
 asyncpg==0.30.0
@@ -253,10 +253,7 @@ hiddenimports = [
     'playwright',
     'playwright.async_api',
     'playwright.sync_api',
-    'seleniumbase',
-    'seleniumbase.core',
-    'seleniumbase.fixtures',
-    'undetected_chromedriver',
+    # 注意: seleniumbase 相关导入已移除（已移至 requirements-optional.txt）
     'asyncio_throttle',
     'sqlalchemy',
     'sqlalchemy.ext.asyncio',
@@ -355,7 +352,8 @@ def build_exe():
         "--hidden-import=bs4 --hidden-import=beautifulsoup4 "
         "--hidden-import=playwright --hidden-import=playwright.async_api --hidden-import=playwright.sync_api "
         "--hidden-import=seleniumbase --hidden-import=seleniumbase.core --hidden-import=seleniumbase.fixtures "
-        "--hidden-import=undetected_chromedriver --hidden-import=asyncio_throttle "
+        # 注意: seleniumbase hidden imports 已移除（已移至 requirements-optional.txt）
+        "--hidden-import=asyncio_throttle "
         "--hidden-import=sqlalchemy --hidden-import=sqlalchemy.ext.asyncio --hidden-import=sqlalchemy.orm "
         "--hidden-import=asyncpg --hidden-import=alembic "
         "--console app_launcher.py"

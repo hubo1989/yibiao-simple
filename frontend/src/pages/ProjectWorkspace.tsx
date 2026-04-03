@@ -9,11 +9,13 @@ import { projectApi, consistencyApi, documentApi } from '../services/api';
 import { useAppState } from '../hooks/useAppState';
 import type { Project, ProjectProgress } from '../types/project';
 import type { ConsistencyCheckResponse } from '../types/consistency';
+import { getErrorMessage } from '../utils/error';
 import StepBar from '../components/StepBar';
 import VersionHistory from '../components/VersionHistory';
 import MemberSidebar from '../components/MemberSidebar';
 import ConsistencyPanel from '../components/ConsistencyPanel';
 import CommentPanel from '../components/CommentPanel';
+import MaterialRequirementDrawer from '../components/MaterialRequirementDrawer';
 import { useLayoutHeader } from '../layouts/layoutHeader';
 import DocumentAnalysis from './DocumentAnalysis';
 import OutlineEdit from './OutlineEdit';
@@ -25,6 +27,7 @@ import {
   SettingOutlined,
   HistoryOutlined,
   ArrowLeftOutlined,
+  PaperClipOutlined,
 } from '@ant-design/icons';
 
 const { Content } = Layout;
@@ -44,6 +47,7 @@ const ProjectWorkspace: React.FC = () => {
   const [consistencyResult, setConsistencyResult] = useState<ConsistencyCheckResponse | null>(null);
   const [isCheckingConsistency, setIsCheckingConsistency] = useState(false);
   const [activeCommentChapter, setActiveCommentChapter] = useState<string | null>(null);
+  const [showMaterialDrawer, setShowMaterialDrawer] = useState(false);
   const [lastChapterSummaries, setLastChapterSummaries] = useState<{ chapter_number: string; title: string; summary: string }[]>([]);
   const [highlightedChapters, setHighlightedChapters] = useState<Set<string>>(new Set());
 
@@ -156,6 +160,7 @@ const ProjectWorkspace: React.FC = () => {
 
           <div className="flex shrink-0 flex-wrap items-center gap-3">
             <Button icon={<TeamOutlined />} onClick={() => setShowMemberSidebar(true)}>成员</Button>
+            <Button icon={<PaperClipOutlined />} onClick={() => setShowMaterialDrawer(true)}>材料需求</Button>
             <Button icon={<SettingOutlined />} onClick={() => navigate(`/project/${projectId}/settings`)}>设置</Button>
             <Button icon={<HistoryOutlined />} onClick={() => setShowVersionHistory(true)}>版本历史</Button>
           </div>
@@ -181,8 +186,7 @@ const ProjectWorkspace: React.FC = () => {
           {
             project_overview: state.projectOverview,
             tech_requirements: state.techRequirements,
-          },
-          token || undefined
+          }
         );
       } catch (error) {
         console.error('保存分析结果失败:', error);
@@ -228,9 +232,9 @@ const ProjectWorkspace: React.FC = () => {
     try {
       const result = await consistencyApi.checkConsistency(projectId, summariesToUse);
       setConsistencyResult(result);
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error('一致性检查失败:', error);
-      const errorMessage = error.response?.data?.detail || '一致性检查失败，请重试';
+      const errorMessage = getErrorMessage(error, '一致性检查失败，请重试');
       message.error(errorMessage);
     } finally {
       setIsCheckingConsistency(false);
@@ -461,6 +465,13 @@ const ProjectWorkspace: React.FC = () => {
           onClose={() => setActiveCommentChapter(null)}
         />
       )}
+      {projectId ? (
+        <MaterialRequirementDrawer
+          open={showMaterialDrawer}
+          projectId={projectId}
+          onClose={() => setShowMaterialDrawer(false)}
+        />
+      ) : null}
     </Layout>
   );
 };

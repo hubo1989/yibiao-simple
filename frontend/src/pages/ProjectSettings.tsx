@@ -13,6 +13,7 @@ import ConfigPanel from '../components/ConfigPanel';
 import PromptEditor from '../components/PromptEditor';
 import { useLayoutHeader } from '../layouts/layoutHeader';
 import { ArrowLeftOutlined } from '@ant-design/icons';
+import { getErrorMessage } from '../utils/error';
 
 const ProjectSettings: React.FC = () => {
   const { projectId } = useParams<{ projectId: string }>();
@@ -242,8 +243,8 @@ const ProjectSettings: React.FC = () => {
                                   prompt: newPrompt,
                                 });
                                 loadPrompts();
-                              } catch (err: any) {
-                                const errorMsg = err.response?.data?.detail || '保存失败';
+                              } catch (err: unknown) {
+                                const errorMsg = getErrorMessage(err, '保存失败');
                                 alert(errorMsg);
                               }
                             }}
@@ -258,8 +259,8 @@ const ProjectSettings: React.FC = () => {
                               try {
                                 await promptApi.deleteProjectPrompt(projectId!, prompt.scene_key);
                                 loadPrompts();
-                              } catch (err: any) {
-                                const errorMsg = err.response?.data?.detail || '删除失败';
+                              } catch (err: unknown) {
+                                const errorMsg = getErrorMessage(err, '删除失败');
                                 alert(errorMsg);
                               }
                             } : undefined}
