@@ -12,7 +12,7 @@ import starlette.middleware.cors
 
 from .config import settings
 from .db.database import engine
-from .routers import config, document, outline, content, search, expand, auth, admin, projects, versions, chapters, comments, templates, knowledge, request_logs
+from .routers import config, document, outline, content, search, expand, auth, admin, projects, versions, chapters, comments, templates, knowledge, request_logs, review
 from .middleware import AuditMiddleware, RequestLoggingMiddleware
 
 
@@ -66,6 +66,7 @@ app.include_router(content.router)
 app.include_router(search.router)
 app.include_router(expand.router)
 app.include_router(request_logs.router)
+app.include_router(review.router)
 
 # 健康检查端点
 @app.get("/health")
