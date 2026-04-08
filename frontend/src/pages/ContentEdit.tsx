@@ -815,6 +815,7 @@ const ContentEdit: React.FC<ContentEditProps> = ({
         project_overview: projectOverview,
         model_name: getCurrentModel() || undefined,
         provider_config_id: getCurrentProviderConfigId() || undefined,
+        use_knowledge: true,
       };
 
       const response = await contentApi.generateChapterContentStream(request);
@@ -843,7 +844,11 @@ const ContentEdit: React.FC<ContentEditProps> = ({
               if (parsed.status === 'error') {
                 throw new Error(parsed.message || '生成失败');
               }
-              
+
+              if (parsed.status === 'knowledge_retrieved' && parsed.count > 0) {
+                message.info(`已检索知识库 ${parsed.count} 条参考`, 2);
+              }
+
               if (parsed.status === 'streaming' && parsed.full_content) {
                 content = parsed.full_content;
                 updatedItem.content = content;

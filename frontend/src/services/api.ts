@@ -349,6 +349,7 @@ export interface ChapterContentRequest {
   project_overview: string;
   model_name?: string;
   provider_config_id?: string;
+  use_knowledge?: boolean;
 }
 
 export interface ProviderModelsOption {

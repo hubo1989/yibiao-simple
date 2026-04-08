@@ -102,6 +102,10 @@ class ChapterContentRequest(BaseModel):
     project_overview: str = Field("", description="项目概述")
     model_name: Optional[str] = Field(None, description="可选的模型名称，覆盖默认配置")
     provider_config_id: Optional[str] = Field(None, description="可选的 Provider 配置 ID，覆盖默认配置")
+    use_knowledge: bool = Field(True, description="是否检索知识库注入上下文")
+    rating_response_checklist: Optional[List[Dict[str, Any]]] = Field(None, description="评分响应检查表")
+    source_chapter_content: Optional[str] = Field(None, description="原章节内容，用于改写")
+    rewrite_suggestions: Optional[List[str]] = Field(None, description="改写建议列表")
 
 
 class ErrorResponse(BaseModel):
