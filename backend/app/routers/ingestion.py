@@ -1,8 +1,12 @@
 """历史标书解析 API 路由"""
+import uuid
+
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from ..auth.dependencies import get_current_active_user
 from ..db.database import get_db
+from ..models.user import User
 from ..schemas.material import (
     IngestionTaskCreate,
     IngestionTaskResponse,
@@ -73,6 +77,7 @@ async def list_candidates(
 async def confirm_candidates(
     task_id: str,
     request: IngestionConfirmRequest,
+    current_user: User = Depends(get_current_active_user),
     db: AsyncSession = Depends(get_db),
 ):
     """确认候选素材并入库"""
@@ -83,6 +88,7 @@ async def confirm_candidates(
             task_id=uuid.UUID(task_id),
             confirm_ids=request.confirm_ids,
             reject_ids=request.reject_ids,
+            owner_id=current_user.id,
         )
         return {
             "success": True,

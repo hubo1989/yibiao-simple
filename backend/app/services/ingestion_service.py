@@ -89,7 +89,7 @@ class HistoricalBidIngestionService:
             )
         )
         if existing.scalar_one_or_none():
-            raise ValueError("该文档已有进行中的解析任务")
+            raise ValueError("该文档已有进行中的解析任务，请稍后再试")
 
         task = IngestionTask(
             document_id=document_id,
