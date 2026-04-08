@@ -156,7 +156,7 @@ const BidReview: React.FC = () => {
 
     setUploading(true);
     try {
-      const data = await reviewApi.uploadBidFile(projectId, file, token || undefined);
+      const data = await reviewApi.uploadBidFile(projectId, file);
       if (data.success && data.task_id) {
         setTaskId(data.task_id);
         setFileInfo(data.file_info);

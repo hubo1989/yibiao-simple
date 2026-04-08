@@ -984,17 +984,19 @@ export const reviewApi = {
     request: ReviewExecuteRequest,
     token?: string,
   ): Promise<Response> => {
-    const response = await authenticatedFetch(
-      `${API_BASE_URL}/api/review/execute`,
-      {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(request),
-      },
-      token
-    );
+    const authToken = token || getStoredToken();
+    const csrfToken = getCsrfToken() || getCsrfTokenFromCookie();
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+    };
+    if (authToken) headers['Authorization'] = `Bearer ${authToken}`;
+    if (csrfToken) headers['X-CSRF-Token'] = csrfToken;
+    const response = await fetch(`${API_BASE_URL}/api/review/execute`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(request),
+      credentials: 'include',
+    });
     return response;
   },
 
@@ -1015,17 +1017,19 @@ export const reviewApi = {
     request: ReviewExportRequest,
     token?: string,
   ): Promise<Blob> => {
-    const response = await authenticatedFetch(
-      `${API_BASE_URL}/api/review/export-word`,
-      {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(request),
-      },
-      token
-    );
+    const authToken = token || getStoredToken();
+    const csrfToken = getCsrfToken() || getCsrfTokenFromCookie();
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+    };
+    if (authToken) headers['Authorization'] = `Bearer ${authToken}`;
+    if (csrfToken) headers['X-CSRF-Token'] = csrfToken;
+    const response = await fetch(`${API_BASE_URL}/api/review/export-word`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(request),
+      credentials: 'include',
+    });
     if (!response.ok) {
       const error = await response.json().catch(() => ({}));
       throw new Error(error.detail || '导出失败');
