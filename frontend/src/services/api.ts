@@ -350,6 +350,7 @@ export interface ChapterContentRequest {
   model_name?: string;
   provider_config_id?: string;
   use_knowledge?: boolean;
+  confirmed_material_ids?: string[];
 }
 
 export interface ProviderModelsOption {
@@ -496,20 +497,6 @@ export const materialApi = {
     try {
       await api.delete(`/api/materials/${id}`);
     } catch (error) { handleApiError(error, '删除素材失败'); }
-  },
-
-  disable: async (id: string): Promise<{ success: boolean }> => {
-    try {
-      const response = await api.post<{ success: boolean }>(`/api/materials/${id}/disable`);
-      return response.data;
-    } catch (error) { handleApiError(error, '停用素材失败'); }
-  },
-
-  enable: async (id: string): Promise<{ success: boolean }> => {
-    try {
-      const response = await api.post<{ success: boolean }>(`/api/materials/${id}/enable`);
-      return response.data;
-    } catch (error) { handleApiError(error, '启用素材失败'); }
   },
 
   listBindings: async (projectId: string, chapterId: string): Promise<ChapterMaterialBinding[]> => {

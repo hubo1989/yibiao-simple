@@ -472,14 +472,14 @@ async def export_reviewed_word(
 # ============ 审查问题 AI 修复（流式） ============
 
 
-class ApplyFixRequest(BaseModel):
+from pydantic import BaseModel as _PydanticBase, Field as _Field
+
+
+class ApplyFixRequest(_PydanticBase):
     """应用审查问题修复请求"""
-    chapter_id: str = Field(..., description="章节标识（用于定位）")
-    current_content: str = Field(..., description="当前章节内容")
-    issue_ids: list[str] = Field(default_factory=list, description="要修复的问题 ID 列表，空表示使用全部问题")
-
-
-from pydantic import BaseModel as BaseModel_
+    chapter_id: str = _Field(..., description="章节标识（用于定位）")
+    current_content: str = _Field(..., description="当前章节内容")
+    issue_ids: list[str] = _Field(default_factory=list, description="要修复的问题 ID 列表，空表示使用全部问题")
 
 
 @router.post("/apply-fix-stream/{task_id}")
