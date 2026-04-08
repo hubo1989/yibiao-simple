@@ -363,7 +363,6 @@ class HistoricalBidIngestionService:
             # 标记候选为已确认
             candidate.review_status = "confirmed"
             candidate.confirmed_at = datetime.now(timezone.utc)
-            candidate.confirmed_by = owner_id
 
             confirmed_count += 1
 
