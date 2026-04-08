@@ -5,8 +5,9 @@ import time
 import gc
 import io
 import base64
+import uuid as uuid_mod
 from datetime import datetime
-from typing import Optional, List, Dict, Tuple
+from typing import Optional, List, Dict, Tuple, Any
 import PyPDF2
 import docx
 from fastapi import UploadFile
@@ -489,13 +490,13 @@ class FileService:
         content = await file.read()
         if len(content) > settings.max_file_size:
             raise Exception(f"文件大小超过限制 ({settings.max_file_size / 1024 / 1024}MB)")
-        
+
         # 重置文件指针
         await file.seek(0)
-        
+
         # 保存文件
         file_path = await FileService.save_uploaded_file(file)
-        
+
         try:
             # 根据文件类型提取文本和图片
             if file.content_type == "application/pdf":
@@ -514,3 +515,177 @@ class FileService:
             # 异常情况下也使用安全的文件清理方法
             FileService._safe_file_cleanup(file_path)
             raise e
+
+    # ============ 素材解析：文本与图片分离 ============
+
+    @staticmethod
+    def _save_material_image(image_data: bytes, ext: str, material_id: str, index: int) -> str:
+        """将单张素材图片保存到磁盘，返回相对路径"""
+        images_dir = os.path.join(settings.upload_dir, "material_images", material_id)
+        os.makedirs(images_dir, exist_ok=True)
+        filename = f"image_{index:03d}.{ext}"
+        file_path = os.path.join(images_dir, filename)
+        with open(file_path, "wb") as f:
+            f.write(image_data)
+        # 返回相对于 upload_dir 的路径，方便后续 API 暴露
+        return os.path.join("material_images", material_id, filename)
+
+    @staticmethod
+    def _extract_pdf_with_images(file_path: str, material_id: str) -> Dict[str, Any]:
+        """从 PDF 提取文本和图片（分离模式），返回 {text, images}"""
+        extracted_text_parts: List[str] = []
+        images: List[Dict[str, Any]] = []
+        global_img_counter = 1
+
+        # 先提取所有图片并保存到磁盘
+        all_raw_images = FileService.extract_images_from_pdf(file_path)
+        page_images_map: Dict[int, List[Tuple[bytes, str, int]]] = {}
+        for img_data, ext, page_num, img_index in all_raw_images:
+            rel_path = FileService._save_material_image(img_data, ext, material_id, global_img_counter)
+            images.append({
+                "index": global_img_counter,
+                "marker": f"[图片{global_img_counter}]",
+                "file_path": rel_path,
+                "page": page_num,
+                "format": ext,
+                "size": len(img_data),
+            })
+            if page_num not in page_images_map:
+                page_images_map[page_num] = []
+            page_images_map[page_num].append((global_img_counter, ext))
+            global_img_counter += 1
+
+        # 再提取文本，将图片标记替换为 [图片N]
+        try:
+            if pdfplumber is not None:
+                with pdfplumber.open(file_path) as pdf:
+                    for page_num, page in enumerate(pdf.pages, 1):
+                        extracted_text_parts.append(f"\n--- 第 {page_num} 页 ---\n")
+                        text = page.extract_text()
+                        if text:
+                            extracted_text_parts.append(text)
+                        tables = page.extract_tables()
+                        for table_num, table in enumerate(tables, 1):
+                            extracted_text_parts.append(f"\n[表格 {table_num}]")
+                            for row in table:
+                                if row:
+                                    row_text = " | ".join([str(cell) if cell else "" for cell in row])
+                                    extracted_text_parts.append(row_text)
+                            extracted_text_parts.append("[表格结束]\n")
+            elif fitz is not None:
+                doc = fitz.open(file_path)
+                for page_num in range(doc.page_count):
+                    page = doc[page_num]
+                    extracted_text_parts.append(f"\n--- 第 {page_num + 1} 页 ---\n")
+                    text = page.get_text()
+                    if text:
+                        extracted_text_parts.append(text)
+                doc.close()
+            else:
+                with open(file_path, 'rb') as f:
+                    pdf_reader = PyPDF2.PdfReader(f)
+                    for page in pdf_reader.pages:
+                        extracted_text_parts.append(page.extract_text() or "")
+        except Exception as e:
+            raise Exception(f"PDF文本提取失败: {str(e)}")
+
+        text = "\n".join(extracted_text_parts).strip()
+        return {"text": text, "images": images}
+
+    @staticmethod
+    def _extract_docx_with_images(file_path: str, material_id: str) -> Dict[str, Any]:
+        """从 DOCX 提取文本和图片（分离模式），返回 {text, images}"""
+        images: List[Dict[str, Any]] = []
+        global_img_counter = 1
+
+        # 先提取所有图片并保存到磁盘
+        all_raw_images = FileService.extract_images_from_docx(file_path)
+        for img_data, ext, img_index in all_raw_images:
+            rel_path = FileService._save_material_image(img_data, ext, material_id, global_img_counter)
+            images.append({
+                "index": global_img_counter,
+                "marker": f"[图片{global_img_counter}]",
+                "file_path": rel_path,
+                "format": ext,
+                "size": len(img_data),
+            })
+            global_img_counter += 1
+
+        # 再提取文本
+        extracted_text_parts: List[str] = []
+        try:
+            doc = docx.Document(file_path)
+            for paragraph in doc.paragraphs:
+                text = paragraph.text.strip()
+                if text:
+                    extracted_text_parts.append(text)
+            for table_num, table in enumerate(doc.tables, 1):
+                extracted_text_parts.append(f"\n[表格 {table_num}]")
+                for row in table.rows:
+                    row_data = []
+                    for cell in row.cells:
+                        cell_text = cell.text.strip()
+                        row_data.append(cell_text if cell_text else "")
+                    row_text = " | ".join(row_data)
+                    if row_text.strip():
+                        extracted_text_parts.append(row_text)
+                extracted_text_parts.append("[表格结束]\n")
+            if doc:
+                del doc
+            gc.collect()
+        except Exception as e:
+            gc.collect()
+            raise Exception(f"Word文档文本提取失败: {str(e)}")
+
+        text = "\n".join(extracted_text_parts).strip()
+        return {"text": text, "images": images}
+
+    @staticmethod
+    async def parse_material(file: UploadFile) -> Dict[str, Any]:
+        """
+        解析上传的素材文件，将文本和图片分离返回。
+
+        返回:
+            {
+                "text": str,           # 提取的纯文本内容
+                "images": [            # 提取的图片列表
+                    {
+                        "index": int,
+                        "marker": str,      # 如 "[图片1]"
+                        "file_path": str,   # 图片文件相对路径
+                        "format": str,      # 图片格式 (jpg/png/...)
+                        "size": int,        # 图片字节大小
+                        "page": int|None,   # PDF 页码（仅 PDF）
+                    }
+                ],
+                "material_id": str,     # 本次解析的唯一 ID
+                "source_filename": str, # 原始文件名
+            }
+        """
+        content = await file.read()
+        if len(content) > settings.max_file_size:
+            raise Exception(f"文件大小超过限制 ({settings.max_file_size / 1024 / 1024}MB)")
+
+        await file.seek(0)
+
+        # 检查文件类型
+        is_pdf = content[:5] == b'%PDF-'
+        is_docx = content[:4] == b'PK\x03\x04'
+        if not (is_pdf or is_docx):
+            raise Exception("不支持的文件类型，请上传PDF或Word文档")
+
+        material_id = uuid_mod.uuid4().hex[:12]
+        file_path = await FileService.save_uploaded_file(file)
+
+        try:
+            _init_advanced_libs()
+            if is_pdf:
+                result = FileService._extract_pdf_with_images(file_path, material_id)
+            else:
+                result = FileService._extract_docx_with_images(file_path, material_id)
+
+            result["material_id"] = material_id
+            result["source_filename"] = file.filename or "unknown"
+            return result
+        finally:
+            FileService._safe_file_cleanup(file_path)

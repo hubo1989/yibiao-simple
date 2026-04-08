@@ -1,10 +1,10 @@
 """文档处理相关API路由"""
 
 import uuid
-from typing import Annotated
+from typing import Annotated, Dict
 
 from fastapi import APIRouter, UploadFile, File, HTTPException, Depends, Form, status
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, FileResponse
 from pydantic import BaseModel, Field
 from sqlalchemy import select, and_, exists
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -16,6 +16,8 @@ from ..models.schemas import (
     WordExportRequest,
     ProjectFileUploadResponse,
     ProjectAnalysisRequest,
+    MaterialParseResponse,
+    MaterialImageInfo,
 )
 from ..models.user import User
 from ..models.project import Project, project_members
@@ -27,12 +29,14 @@ from ..services.openai_service import OpenAIService
 from ..services.prompt_service import PromptService
 from ..utils.sse import sse_response
 from ..auth.dependencies import require_editor
+from ..config import settings
 
 import json
+import os
 import io
 import re
 import docx
-from docx.shared import Pt
+from docx.shared import Pt, Inches
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.oxml.ns import qn
 from urllib.parse import quote
@@ -212,6 +216,27 @@ async def export_word(
             overview_p_format = overview_p.paragraph_format
             overview_p_format.space_after = Pt(12)
 
+        # 构建图片映射表：{ "[图片N]": "绝对路径" }
+        image_map: Dict[str, str] = {}
+        if request.images:
+            for marker, rel_path in request.images.items():
+                abs_path = os.path.join(settings.upload_dir, rel_path)
+                if os.path.exists(abs_path):
+                    image_map[marker] = abs_path
+
+        # 图片标记检测正则
+        img_marker_pattern = re.compile(r'(\[图片\d+\])')
+
+        def _insert_image_to_doc(image_path: str) -> None:
+            """在文档中插入一张图片，自动限制最大宽度为 6 英寸"""
+            try:
+                doc.add_picture(image_path, width=Inches(6))
+                # 图片居中
+                last_paragraph = doc.paragraphs[-1]
+                last_paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            except Exception:
+                pass
+
         # 简单的 Markdown 段落解析：支持标题、列表、表格和基础加粗/斜体
         def add_markdown_runs(para: docx.text.paragraph.Paragraph, text: str) -> None:
             """在指定段落中追加 markdown 文本的 runs"""
@@ -238,10 +263,34 @@ async def export_word(
                 set_run_font_simsun(run)
 
         def add_markdown_paragraph(text: str) -> None:
-            """将一段 Markdown 文本解析为一个普通段落，保留加粗/斜体效果"""
-            para = doc.add_paragraph()
-            add_markdown_runs(para, text)
-            para.paragraph_format.space_after = Pt(6)
+            """将一段 Markdown 文本解析为一个普通段落，保留加粗/斜体效果；遇到 [图片N] 标记则插入真实图片"""
+            if not image_map:
+                # 无图片映射，走原逻辑
+                para = doc.add_paragraph()
+                add_markdown_runs(para, text)
+                para.paragraph_format.space_after = Pt(6)
+                return
+
+            # 按 [图片N] 标记切分文本
+            segments = img_marker_pattern.split(text)
+            for segment in segments:
+                if not segment:
+                    continue
+                if img_marker_pattern.fullmatch(segment):
+                    # 这是一个图片标记
+                    if segment in image_map:
+                        _insert_image_to_doc(image_map[segment])
+                    else:
+                        # 没有对应图片文件，保留标记文本
+                        para = doc.add_paragraph()
+                        run = para.add_run(segment)
+                        set_run_font_simsun(run)
+                        para.paragraph_format.space_after = Pt(6)
+                else:
+                    # 普通文本段落
+                    para = doc.add_paragraph()
+                    add_markdown_runs(para, segment)
+                    para.paragraph_format.space_after = Pt(6)
 
         def parse_markdown_blocks(content: str):
             """
@@ -739,3 +788,103 @@ async def save_project_analysis(
     await db.commit()
 
     return {"success": True, "message": "分析结果已保存"}
+
+
+# ============ 素材解析：文本与图片分离 ============
+
+
+@router.post("/parse-material", response_model=MaterialParseResponse)
+async def parse_material(
+    file: UploadFile = File(...),
+    current_user: Annotated[User, Depends(require_editor)] = None,
+):
+    """
+    上传素材文件并解析，将文本和图片分离返回。
+
+    返回的 text 字段包含纯文本内容（图片位置以 [图片N] 标记），
+    images 字段包含所有提取的图片信息（路径、格式、大小等），
+    可通过 /api/document/material-image/{material_id}/{filename} 获取图片文件。
+    """
+    try:
+        # 检查文件类型
+        allowed_types = [
+            "application/pdf",
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        ]
+        if file.content_type not in allowed_types:
+            return MaterialParseResponse(
+                success=False,
+                message="不支持的文件类型，请上传PDF或Word文档",
+                material_id="",
+                source_filename=file.filename or "unknown",
+            )
+
+        # Magic bytes 校验
+        header = await file.read(8)
+        await file.seek(0)
+        is_pdf = header[:5] == b"%PDF-"
+        is_docx = header[:4] == b"PK\x03\x04"
+        if not (is_pdf or is_docx):
+            return MaterialParseResponse(
+                success=False,
+                message="文件内容与类型不匹配，请上传有效的PDF或Word文档",
+                material_id="",
+                source_filename=file.filename or "unknown",
+            )
+
+        result = await FileService.parse_material(file)
+
+        return MaterialParseResponse(
+            success=True,
+            message=f"素材解析成功，共提取 {len(result['images'])} 张图片",
+            material_id=result["material_id"],
+            source_filename=result["source_filename"],
+            text=result["text"],
+            images=[MaterialImageInfo(**img) for img in result["images"]],
+            image_count=len(result["images"]),
+        )
+
+    except Exception as e:
+        return MaterialParseResponse(
+            success=False,
+            message=f"素材解析失败: {str(e)}",
+            material_id="",
+            source_filename=file.filename or "unknown",
+        )
+
+
+@router.get("/material-image/{material_id}/{filename}")
+async def get_material_image(
+    material_id: str,
+    filename: str,
+    current_user: Annotated[User, Depends(require_editor)] = None,
+):
+    """获取素材解析提取的图片文件"""
+    image_path = os.path.join(
+        settings.upload_dir,
+        "material_images",
+        material_id,
+        filename,
+    )
+
+    if not os.path.exists(image_path):
+        raise HTTPException(status_code=404, detail="图片文件不存在")
+
+    # 安全检查：防止路径遍历
+    real_path = os.path.realpath(image_path)
+    real_base = os.path.realpath(os.path.join(settings.upload_dir, "material_images"))
+    if not real_path.startswith(real_base):
+        raise HTTPException(status_code=403, detail="无权访问该文件")
+
+    # 根据扩展名设置 MIME 类型
+    ext = os.path.splitext(filename)[1].lower()
+    mime_map = {
+        ".jpg": "image/jpeg",
+        ".jpeg": "image/jpeg",
+        ".png": "image/png",
+        ".gif": "image/gif",
+        ".bmp": "image/bmp",
+    }
+    media_type = mime_map.get(ext, "application/octet-stream")
+
+    return FileResponse(image_path, media_type=media_type, filename=filename)

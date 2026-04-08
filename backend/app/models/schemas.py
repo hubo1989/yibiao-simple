@@ -116,6 +116,7 @@ class WordExportRequest(BaseModel):
     project_overview: Optional[str] = Field(None, description="项目概述")
     project_id: Optional[str] = Field(None, description="可选的项目ID，用于读取章节素材绑定")
     outline: List[OutlineItem] = Field(..., description="目录结构，包含内容")
+    images: Optional[Dict[str, str]] = Field(None, description="图片映射表，key为 [图片N] 标记，value为图片文件相对路径")
 
 
 # ============ 项目上下文相关 Schema ============
@@ -263,3 +264,26 @@ class ContentGenerateWithKnowledgeRequest(BaseModel):
     chapter_id: str = Field(..., description="章节ID")
     knowledge_ids: List[str] = Field(default_factory=list, description="选中的知识库ID列表")
     model_name: Optional[str] = Field(None, description="可选的模型名称，覆盖默认配置")
+
+
+# ============ 素材解析相关 Schema ============
+
+class MaterialImageInfo(BaseModel):
+    """素材中提取的单张图片信息"""
+    index: int = Field(..., description="图片序号")
+    marker: str = Field(..., description="文本中的图片标记，如 [图片1]")
+    file_path: str = Field(..., description="图片文件相对路径")
+    format: str = Field(..., description="图片格式 (jpg/png/...)")
+    size: int = Field(..., description="图片字节大小")
+    page: Optional[int] = Field(None, description="PDF 页码（仅 PDF 文件）")
+
+
+class MaterialParseResponse(BaseModel):
+    """素材解析响应：文本和图片分离"""
+    success: bool
+    message: str
+    material_id: str = Field(..., description="本次解析的唯一标识")
+    source_filename: str = Field(..., description="原始文件名")
+    text: Optional[str] = Field(None, description="提取的纯文本内容")
+    images: List[MaterialImageInfo] = Field(default_factory=list, description="提取的图片列表")
+    image_count: int = Field(0, description="提取的图片数量")
