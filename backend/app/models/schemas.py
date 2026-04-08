@@ -102,6 +102,7 @@ class ChapterContentRequest(BaseModel):
     project_overview: str = Field("", description="项目概述")
     model_name: Optional[str] = Field(None, description="可选的模型名称，覆盖默认配置")
     provider_config_id: Optional[str] = Field(None, description="可选的 Provider 配置 ID，覆盖默认配置")
+    confirmed_material_ids: List[str] = Field(default_factory=list, description="用户确认选中的素材 ID 列表")
 
 
 class ErrorResponse(BaseModel):

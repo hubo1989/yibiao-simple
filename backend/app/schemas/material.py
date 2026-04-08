@@ -55,6 +55,7 @@ class MaterialAssetResponse(MaterialAssetBase):
     file_size: int
     page_count: int | None = None
     is_expired: bool
+    is_disabled: bool = False
     usage_count: int
     last_used_at: datetime | None = None
     # 溯源字段
@@ -212,3 +213,14 @@ class MaterialCandidateResponse(BaseModel):
 class IngestionConfirmRequest(BaseModel):
     confirm_ids: list[uuid.UUID] = Field(default_factory=list)
     reject_ids: list[uuid.UUID] = Field(default_factory=list)
+
+
+class ChapterSuggestRequest(BaseModel):
+    project_id: str
+    chapter_title: str
+    chapter_content: str = ""
+    top_k: int = 5
+
+
+class MaterialAssetWithScore(MaterialAssetResponse):
+    score: float = 0.0

@@ -522,6 +522,27 @@ export const materialApi = {
       return response.data;
     } catch (error) { handleApiError(error, '创建素材绑定失败'); }
   },
+
+  disable: async (id: string): Promise<{ success: boolean }> => {
+    try {
+      const response = await api.post<{ success: boolean }>(`/api/materials/${id}/disable`);
+      return response.data;
+    } catch (error) { handleApiError(error, '停用素材失败'); }
+  },
+
+  enable: async (id: string): Promise<{ success: boolean }> => {
+    try {
+      const response = await api.post<{ success: boolean }>(`/api/materials/${id}/enable`);
+      return response.data;
+    } catch (error) { handleApiError(error, '启用素材失败'); }
+  },
+
+  suggestForChapter: async (data: { project_id: string; chapter_title: string; chapter_content?: string; top_k?: number }): Promise<{ suggestions: Array<MaterialAsset & { score: number }> }> => {
+    try {
+      const response = await api.post<{ suggestions: Array<MaterialAsset & { score: number }> }>('/api/materials/suggest-for-chapter', data);
+      return response.data;
+    } catch (error) { handleApiError(error, '获取素材推荐失败'); }
+  },
 };
 
 // 目录相关API
