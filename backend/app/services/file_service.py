@@ -519,19 +519,30 @@ class FileService:
     # ============ 素材解析：文本与图片分离 ============
 
     @staticmethod
-    def _save_material_image(image_data: bytes, ext: str, material_id: str, index: int) -> str:
-        """将单张素材图片保存到磁盘，返回相对路径"""
+    async def _save_material_image(image_data: bytes, ext: str, material_id: str, index: int) -> str:
+        """将单张素材图片保存到磁盘（async），返回相对路径"""
         images_dir = os.path.join(settings.upload_dir, "material_images", material_id)
         os.makedirs(images_dir, exist_ok=True)
         filename = f"image_{index:03d}.{ext}"
         file_path = os.path.join(images_dir, filename)
-        with open(file_path, "wb") as f:
-            f.write(image_data)
+        async with aiofiles.open(file_path, "wb") as f:
+            await f.write(image_data)
         # 返回相对于 upload_dir 的路径，方便后续 API 暴露
         return os.path.join("material_images", material_id, filename)
 
     @staticmethod
-    def _extract_pdf_with_images(file_path: str, material_id: str) -> Dict[str, Any]:
+    def _safe_image_dir_cleanup(material_id: str) -> None:
+        """删除 material_images/{material_id}/ 目录及其所有内容"""
+        import shutil
+        images_dir = os.path.join(settings.upload_dir, "material_images", material_id)
+        try:
+            if os.path.isdir(images_dir):
+                shutil.rmtree(images_dir, ignore_errors=True)
+        except Exception as e:
+            print(f"清理素材图片目录失败 {images_dir}: {e}")
+
+    @staticmethod
+    async def _extract_pdf_with_images(file_path: str, material_id: str) -> Dict[str, Any]:
         """从 PDF 提取文本和图片（分离模式），返回 {text, images}"""
         extracted_text_parts: List[str] = []
         images: List[Dict[str, Any]] = []
@@ -539,9 +550,9 @@ class FileService:
 
         # 先提取所有图片并保存到磁盘
         all_raw_images = FileService.extract_images_from_pdf(file_path)
-        page_images_map: Dict[int, List[Tuple[bytes, str, int]]] = {}
+        page_images_map: Dict[int, List[int]] = {}  # page_num -> [img_index, ...]
         for img_data, ext, page_num, img_index in all_raw_images:
-            rel_path = FileService._save_material_image(img_data, ext, material_id, global_img_counter)
+            rel_path = await FileService._save_material_image(img_data, ext, material_id, global_img_counter)
             images.append({
                 "index": global_img_counter,
                 "marker": f"[图片{global_img_counter}]",
@@ -552,10 +563,10 @@ class FileService:
             })
             if page_num not in page_images_map:
                 page_images_map[page_num] = []
-            page_images_map[page_num].append((global_img_counter, ext))
+            page_images_map[page_num].append(global_img_counter)
             global_img_counter += 1
 
-        # 再提取文本，将图片标记替换为 [图片N]
+        # 再提取文本，并在每页末尾追加该页的图片标记
         try:
             if pdfplumber is not None:
                 with pdfplumber.open(file_path) as pdf:
@@ -572,6 +583,9 @@ class FileService:
                                     row_text = " | ".join([str(cell) if cell else "" for cell in row])
                                     extracted_text_parts.append(row_text)
                             extracted_text_parts.append("[表格结束]\n")
+                        # 在页文本末尾追加本页图片标记
+                        for idx in page_images_map.get(page_num, []):
+                            extracted_text_parts.append(f"[图片{idx}]")
             elif fitz is not None:
                 doc = fitz.open(file_path)
                 for page_num in range(doc.page_count):
@@ -580,12 +594,17 @@ class FileService:
                     text = page.get_text()
                     if text:
                         extracted_text_parts.append(text)
+                    # 在页文本末尾追加本页图片标记
+                    for idx in page_images_map.get(page_num + 1, []):
+                        extracted_text_parts.append(f"[图片{idx}]")
                 doc.close()
             else:
                 with open(file_path, 'rb') as f:
                     pdf_reader = PyPDF2.PdfReader(f)
-                    for page in pdf_reader.pages:
+                    for page_no, page in enumerate(pdf_reader.pages, 1):
                         extracted_text_parts.append(page.extract_text() or "")
+                        for idx in page_images_map.get(page_no, []):
+                            extracted_text_parts.append(f"[图片{idx}]")
         except Exception as e:
             raise Exception(f"PDF文本提取失败: {str(e)}")
 
@@ -593,15 +612,15 @@ class FileService:
         return {"text": text, "images": images}
 
     @staticmethod
-    def _extract_docx_with_images(file_path: str, material_id: str) -> Dict[str, Any]:
+    async def _extract_docx_with_images(file_path: str, material_id: str) -> Dict[str, Any]:
         """从 DOCX 提取文本和图片（分离模式），返回 {text, images}"""
         images: List[Dict[str, Any]] = []
         global_img_counter = 1
 
-        # 先提取所有图片并保存到磁盘
+        # 先提取所有图片并保存到磁盘，建立 relationship id → 图片序号 的映射
         all_raw_images = FileService.extract_images_from_docx(file_path)
         for img_data, ext, img_index in all_raw_images:
-            rel_path = FileService._save_material_image(img_data, ext, material_id, global_img_counter)
+            rel_path = await FileService._save_material_image(img_data, ext, material_id, global_img_counter)
             images.append({
                 "index": global_img_counter,
                 "marker": f"[图片{global_img_counter}]",
@@ -611,14 +630,40 @@ class FileService:
             })
             global_img_counter += 1
 
-        # 再提取文本
+        # 再提取文本，通过检测段落中的图片 run 注入 [图片N] 标记
         extracted_text_parts: List[str] = []
+        inline_img_counter = 1
         try:
+            import lxml.etree as etree  # python-docx 依赖 lxml，已安装
             doc = docx.Document(file_path)
+
+            # 收集文档中图片所在的段落位置（用 XML 检测 <a:blip> 或 <v:imagedata>）
+            _NS_A = "http://schemas.openxmlformats.org/drawingml/2006/main"
+            _NS_V = "urn:schemas-microsoft-com:vml"
+            _NS_W = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+
+            def _paragraph_has_image(para) -> bool:
+                """检测段落 XML 中是否包含内联图片标记"""
+                xml_str = para._element.xml
+                return (
+                    "a:blip" in xml_str
+                    or "v:imagedata" in xml_str
+                    or "pic:pic" in xml_str
+                    or ('<w:drawing' in xml_str)
+                    or ('<w:pict' in xml_str)
+                )
+
             for paragraph in doc.paragraphs:
                 text = paragraph.text.strip()
-                if text:
+                if _paragraph_has_image(paragraph) and inline_img_counter <= len(images):
+                    # 先输出段落原有文字（如有），再插入图片标记
+                    if text:
+                        extracted_text_parts.append(text)
+                    extracted_text_parts.append(f"[图片{inline_img_counter}]")
+                    inline_img_counter += 1
+                elif text:
                     extracted_text_parts.append(text)
+
             for table_num, table in enumerate(doc.tables, 1):
                 extracted_text_parts.append(f"\n[表格 {table_num}]")
                 for row in table.rows:
@@ -630,8 +675,13 @@ class FileService:
                     if row_text.strip():
                         extracted_text_parts.append(row_text)
                 extracted_text_parts.append("[表格结束]\n")
-            if doc:
-                del doc
+
+            # 如果有图片但段落检测未注入全部（fallback：在文末追加剩余标记）
+            while inline_img_counter <= len(images):
+                extracted_text_parts.append(f"[图片{inline_img_counter}]")
+                inline_img_counter += 1
+
+            del doc
             gc.collect()
         except Exception as e:
             gc.collect()
@@ -676,16 +726,41 @@ class FileService:
 
         material_id = uuid_mod.uuid4().hex[:12]
         file_path = await FileService.save_uploaded_file(file)
+        extraction_ok = False
 
         try:
             _init_advanced_libs()
             if is_pdf:
-                result = FileService._extract_pdf_with_images(file_path, material_id)
+                result = await FileService._extract_pdf_with_images(file_path, material_id)
             else:
-                result = FileService._extract_docx_with_images(file_path, material_id)
+                result = await FileService._extract_docx_with_images(file_path, material_id)
 
             result["material_id"] = material_id
             result["source_filename"] = file.filename or "unknown"
+            extraction_ok = True
             return result
         finally:
+            # 无论成功失败，都清理临时上传文件
             FileService._safe_file_cleanup(file_path)
+            # 提取失败时，清理已写出的素材图片目录
+            if not extraction_ok:
+                FileService._safe_image_dir_cleanup(material_id)
+
+    @staticmethod
+    async def write_material_owner(material_id: str, owner_id: str) -> None:
+        """将所有者 ID 写入 material_images/{material_id}/.owner 文件"""
+        images_dir = os.path.join(settings.upload_dir, "material_images", material_id)
+        os.makedirs(images_dir, exist_ok=True)
+        owner_file = os.path.join(images_dir, ".owner")
+        async with aiofiles.open(owner_file, "w") as f:
+            await f.write(str(owner_id))
+
+    @staticmethod
+    def read_material_owner(material_id: str) -> str | None:
+        """读取素材图片目录的所有者 ID，不存在则返回 None"""
+        owner_file = os.path.join(settings.upload_dir, "material_images", material_id, ".owner")
+        try:
+            with open(owner_file, "r") as f:
+                return f.read().strip()
+        except OSError:
+            return None

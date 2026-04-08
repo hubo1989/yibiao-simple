@@ -217,10 +217,18 @@ async def export_word(
             overview_p_format.space_after = Pt(12)
 
         # 构建图片映射表：{ "[图片N]": "绝对路径" }
+        # 安全校验：防止路径穿越（../）逃逸 upload_dir
         image_map: Dict[str, str] = {}
         if request.images:
+            canonical_upload_dir = os.path.realpath(settings.upload_dir)
             for marker, rel_path in request.images.items():
-                abs_path = os.path.join(settings.upload_dir, rel_path)
+                # 拒绝绝对路径
+                if os.path.isabs(rel_path):
+                    continue
+                abs_path = os.path.realpath(os.path.join(settings.upload_dir, rel_path))
+                # 确保路径在 upload_dir 内
+                if not abs_path.startswith(canonical_upload_dir + os.sep) and abs_path != canonical_upload_dir:
+                    continue
                 if os.path.exists(abs_path):
                     image_map[marker] = abs_path
 
@@ -805,52 +813,54 @@ async def parse_material(
     images 字段包含所有提取的图片信息（路径、格式、大小等），
     可通过 /api/document/material-image/{material_id}/{filename} 获取图片文件。
     """
+    # 检查文件类型
+    allowed_types = [
+        "application/pdf",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    ]
+    if file.content_type not in allowed_types:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="不支持的文件类型，请上传PDF或Word文档",
+        )
+
+    # Magic bytes 校验
+    header = await file.read(8)
+    await file.seek(0)
+    is_pdf = header[:5] == b"%PDF-"
+    is_docx = header[:4] == b"PK\x03\x04"
+    if not (is_pdf or is_docx):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="文件内容与类型不匹配，请上传有效的PDF或Word文档",
+        )
+
+    # 文件大小预检（peek content_length）
     try:
-        # 检查文件类型
-        allowed_types = [
-            "application/pdf",
-            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        ]
-        if file.content_type not in allowed_types:
-            return MaterialParseResponse(
-                success=False,
-                message="不支持的文件类型，请上传PDF或Word文档",
-                material_id="",
-                source_filename=file.filename or "unknown",
-            )
-
-        # Magic bytes 校验
-        header = await file.read(8)
-        await file.seek(0)
-        is_pdf = header[:5] == b"%PDF-"
-        is_docx = header[:4] == b"PK\x03\x04"
-        if not (is_pdf or is_docx):
-            return MaterialParseResponse(
-                success=False,
-                message="文件内容与类型不匹配，请上传有效的PDF或Word文档",
-                material_id="",
-                source_filename=file.filename or "unknown",
-            )
-
         result = await FileService.parse_material(file)
-
-        return MaterialParseResponse(
-            success=True,
-            message=f"素材解析成功，共提取 {len(result['images'])} 张图片",
-            material_id=result["material_id"],
-            source_filename=result["source_filename"],
-            text=result["text"],
-            images=[MaterialImageInfo(**img) for img in result["images"]],
-            image_count=len(result["images"]),
-        )
-
+    except HTTPException:
+        raise
     except Exception as e:
-        return MaterialParseResponse(
-            success=False,
-            message=f"素材解析失败: {str(e)}",
-            material_id="",
-            source_filename=file.filename or "unknown",
+        err_msg = str(e)
+        if "大小超过限制" in err_msg:
+            raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail=err_msg)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"素材解析失败: {err_msg}",
         )
+
+    # 写入所有者元数据，供 GET /material-image 鉴权使用
+    await FileService.write_material_owner(result["material_id"], str(current_user.id))
+
+    return MaterialParseResponse(
+        success=True,
+        message=f"素材解析成功，共提取 {len(result['images'])} 张图片",
+        material_id=result["material_id"],
+        source_filename=result["source_filename"],
+        text=result["text"],
+        images=[MaterialImageInfo(**img) for img in result["images"]],
+        image_count=len(result["images"]),
+    )
 
 
 @router.get("/material-image/{material_id}/{filename}")
@@ -859,7 +869,13 @@ async def get_material_image(
     filename: str,
     current_user: Annotated[User, Depends(require_editor)] = None,
 ):
-    """获取素材解析提取的图片文件"""
+    """获取素材解析提取的图片文件（仅限解析该素材的本人访问）"""
+    # 路径穿越防护：material_id 和 filename 均不得包含路径分隔符
+    if os.sep in material_id or "/" in material_id or ".." in material_id:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="无效的素材ID")
+    if os.sep in filename or "/" in filename or ".." in filename:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="无效的文件名")
+
     image_path = os.path.join(
         settings.upload_dir,
         "material_images",
@@ -867,14 +883,22 @@ async def get_material_image(
         filename,
     )
 
-    if not os.path.exists(image_path):
-        raise HTTPException(status_code=404, detail="图片文件不存在")
-
-    # 安全检查：防止路径遍历
+    # 安全检查：防止路径遍历（double check with realpath）
     real_path = os.path.realpath(image_path)
     real_base = os.path.realpath(os.path.join(settings.upload_dir, "material_images"))
-    if not real_path.startswith(real_base):
-        raise HTTPException(status_code=403, detail="无权访问该文件")
+    if not real_path.startswith(real_base + os.sep) and real_path != real_base:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="无权访问该文件")
+
+    if not os.path.exists(real_path):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="图片文件不存在")
+
+    # 越权校验：图片必须属于当前登录用户
+    owner_id = FileService.read_material_owner(material_id)
+    if owner_id is None:
+        # 无所有者元数据（旧数据或异常情况）
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="无权访问该文件")
+    if owner_id != str(current_user.id):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="无权访问该文件")
 
     # 根据扩展名设置 MIME 类型
     ext = os.path.splitext(filename)[1].lower()
@@ -887,4 +911,4 @@ async def get_material_image(
     }
     media_type = mime_map.get(ext, "application/octet-stream")
 
-    return FileResponse(image_path, media_type=media_type, filename=filename)
+    return FileResponse(real_path, media_type=media_type, filename=filename)
