@@ -962,6 +962,41 @@ export const requestLogApi = {
 
 // ==================== 标书审查 API ====================
 
+/**
+ * 检查当前 token 是否即将过期（剩余 < 60 秒），如需则刷新。
+ * 返回最新的有效 token，或 null（未登录）。
+ */
+async function refreshTokenIfNeeded(): Promise<string | null> {
+  const token = getStoredToken();
+  if (!token) return null;
+
+  try {
+    // base64 decode JWT payload（无需第三方库）
+    const payloadB64 = token.split('.')[1];
+    if (!payloadB64) return token;
+    const payload = JSON.parse(atob(payloadB64.replace(/-/g, '+').replace(/_/g, '/')));
+    const exp: number | undefined = payload.exp;
+    const nowSec = Math.floor(Date.now() / 1000);
+
+    // 如果还有 60 秒以上，无需刷新
+    if (exp !== undefined && exp - nowSec > 60) return token;
+  } catch {
+    // decode 失败则忽略，继续尝试刷新
+  }
+
+  // token 已过期或剩余 < 60 秒，调用刷新接口
+  try {
+    const response = await api.post<Token>('/api/auth/refresh');
+    const { access_token } = response.data;
+    setStoredToken(access_token);
+    setAuthToken(access_token);
+    return access_token;
+  } catch {
+    // 刷新失败，返回现有 token，让后续请求自然触发 401 处理
+    return getStoredToken();
+  }
+}
+
 export const reviewApi = {
   // 上传投标文件
   uploadBidFile: async (
@@ -984,7 +1019,7 @@ export const reviewApi = {
     request: ReviewExecuteRequest,
     token?: string,
   ): Promise<Response> => {
-    const authToken = token || getStoredToken();
+    const authToken = token || await refreshTokenIfNeeded();
     const csrfToken = getCsrfToken() || getCsrfTokenFromCookie();
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
@@ -1017,7 +1052,7 @@ export const reviewApi = {
     request: ReviewExportRequest,
     token?: string,
   ): Promise<Blob> => {
-    const authToken = token || getStoredToken();
+    const authToken = token || await refreshTokenIfNeeded();
     const csrfToken = getCsrfToken() || getCsrfTokenFromCookie();
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
