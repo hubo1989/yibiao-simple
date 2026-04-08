@@ -42,6 +42,7 @@ export interface MaterialAsset {
   valid_from?: string | null;
   valid_until?: string | null;
   is_expired: boolean;
+  is_disabled: boolean;
   review_status: MaterialReviewStatus;
   usage_count: number;
   last_used_at?: string | null;

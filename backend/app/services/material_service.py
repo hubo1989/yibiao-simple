@@ -81,6 +81,7 @@ def _asset_to_response(asset: MaterialAsset) -> MaterialAssetResponse:
         valid_from=asset.valid_from,
         valid_until=asset.valid_until,
         is_expired=asset.is_expired,
+        is_disabled=asset.is_disabled,
         review_status=asset.review_status,
         usage_count=asset.usage_count,
         last_used_at=asset.last_used_at,

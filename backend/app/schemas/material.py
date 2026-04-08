@@ -55,6 +55,7 @@ class MaterialAssetResponse(MaterialAssetBase):
     file_size: int
     page_count: int | None = None
     is_expired: bool
+    is_disabled: bool = False
     usage_count: int
     last_used_at: datetime | None = None
     # 溯源字段

@@ -320,6 +320,7 @@ async def list_materials(
     db: Annotated[AsyncSession, Depends(get_db)],
     category: MaterialCategory | None = Query(None),
     expired: bool | None = Query(None),
+    disabled: bool | None = Query(None),
     keyword: str | None = Query(None),
 ):
     query = select(MaterialAsset).where(
@@ -329,10 +330,18 @@ async def list_materials(
     )
     if category:
         query = query.where(MaterialAsset.category == category)
-    if expired is not None:
-        query = query.where(MaterialAsset.is_expired == expired)
+    if disabled is not None:
+        query = query.where(MaterialAsset.is_disabled == disabled)
     result = await db.execute(query.order_by(MaterialAsset.updated_at.desc()))
     materials = result.scalars().all()
+
+    today = date.today()
+    # Dynamically compute is_expired based on valid_until
+    for item in materials:
+        item.is_expired = bool(item.valid_until and item.valid_until < today)
+
+    if expired is not None:
+        materials = [item for item in materials if item.is_expired == expired]
     if keyword:
         keyword_lower = keyword.lower()
         materials = [item for item in materials if keyword_lower in item.name.lower() or keyword_lower in (item.description or "").lower()]
@@ -396,6 +405,42 @@ async def delete_material(
         if path and os.path.exists(path):
             os.remove(path)
     await db.delete(material)
+
+
+@router.post("/api/materials/{material_id}/disable")
+async def disable_material(
+    material_id: uuid.UUID,
+    current_user: Annotated[User, Depends(require_editor)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """手动停用素材"""
+    result = await db.execute(select(MaterialAsset).where(MaterialAsset.id == material_id))
+    material = result.scalar_one_or_none()
+    if not material:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="素材不存在")
+    if material.owner_id not in (None, current_user.id) and material.uploaded_by != current_user.id and current_user.role != UserRole.ADMIN:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="无权操作该素材")
+    material.is_disabled = True
+    await db.flush()
+    return {"success": True}
+
+
+@router.post("/api/materials/{material_id}/enable")
+async def enable_material(
+    material_id: uuid.UUID,
+    current_user: Annotated[User, Depends(require_editor)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """启用已停用的素材"""
+    result = await db.execute(select(MaterialAsset).where(MaterialAsset.id == material_id))
+    material = result.scalar_one_or_none()
+    if not material:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="素材不存在")
+    if material.owner_id not in (None, current_user.id) and material.uploaded_by != current_user.id and current_user.role != UserRole.ADMIN:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="无权操作该素材")
+    material.is_disabled = False
+    await db.flush()
+    return {"success": True}
 
 
 @router.post("/api/projects/{project_id}/material-requirements/analyze", response_model=list[MaterialRequirementResponse])
