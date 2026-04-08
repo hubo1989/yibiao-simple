@@ -106,6 +106,7 @@ class ChapterContentRequest(BaseModel):
     rating_response_checklist: Optional[List[Dict[str, Any]]] = Field(None, description="评分响应检查表")
     source_chapter_content: Optional[str] = Field(None, description="原章节内容，用于改写")
     rewrite_suggestions: Optional[List[str]] = Field(None, description="改写建议列表")
+    confirmed_material_ids: List[str] = Field(default_factory=list, description="用户确认选中的素材 ID 列表")
 
 
 class ErrorResponse(BaseModel):

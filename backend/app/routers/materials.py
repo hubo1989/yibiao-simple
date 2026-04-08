@@ -32,8 +32,10 @@ from ..schemas.material import (
     ChapterMaterialBindingCreate,
     ChapterMaterialBindingResponse,
     ChapterMaterialBindingUpdate,
+    ChapterSuggestRequest,
     MaterialAssetResponse,
     MaterialAssetUpdate,
+    MaterialAssetWithScore,
     MaterialMatchConfirmRequest,
     MaterialRequirementResponse,
     MaterialRequirementUpdate,
@@ -228,6 +230,54 @@ def _extract_project_material_requirements(project: Project) -> list[dict]:
             }
         )
     return requirement_lines
+
+
+@router.post("/api/materials/suggest-for-chapter")
+async def suggest_materials_for_chapter(
+    request: ChapterSuggestRequest,
+    current_user: Annotated[User, Depends(require_editor)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """根据章节标题和内容推荐匹配素材"""
+    # 拉取当前用户可见且 confirmed 状态、未停用的所有素材
+    asset_result = await db.execute(
+        select(MaterialAsset).where(
+            (
+                (MaterialAsset.scope == Scope.GLOBAL.value)
+                | (MaterialAsset.owner_id == current_user.id)
+                | (MaterialAsset.uploaded_by == current_user.id)
+            )
+            & (MaterialAsset.review_status == MaterialReviewStatus.CONFIRMED)
+            & (MaterialAsset.is_disabled == False)  # noqa: E712
+        )
+    )
+    assets = list(asset_result.scalars().all())
+
+    today = date.today()
+    # 动态过滤过期素材
+    valid_assets = [a for a in assets if not (a.valid_until and a.valid_until < today)]
+
+    # 使用 build_material_requirement_candidates 打分
+    candidates = build_material_requirement_candidates(
+        requirement_name=request.chapter_title,
+        requirement_text=f"{request.chapter_title} {request.chapter_content}",
+        requirement_category=None,
+        requirement_tags=[],
+        assets=valid_assets,
+        today=today,
+    )
+
+    # 过滤 score > 30，返回 top_k
+    top_candidates = [c for c in candidates if c.score > 30][: request.top_k]
+
+    suggestions = []
+    for candidate in top_candidates:
+        if candidate.asset:
+            asset_dict = candidate.asset.model_dump()
+            asset_dict["score"] = candidate.score
+            suggestions.append(asset_dict)
+
+    return {"suggestions": suggestions}
 
 
 @router.post("/api/materials/upload", response_model=MaterialAssetResponse, status_code=status.HTTP_201_CREATED)

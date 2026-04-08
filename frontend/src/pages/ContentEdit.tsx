@@ -19,6 +19,7 @@ import { getCurrentModel, getCurrentProviderConfigId } from '../utils/modelCache
 import ChapterStatusBadge from '../components/ChapterStatusBadge';
 import ProofreadPanel from '../components/ProofreadPanel';
 import MaterialMarkerModal from '../components/content-edit/MaterialMarkerModal';
+import MaterialSuggestPanel from '../components/content-edit/MaterialSuggestPanel';
 import ReverseEnhanceModal from '../components/content-edit/ReverseEnhanceModal';
 import ClauseResponseModal from '../components/content-edit/ClauseResponseModal';
 import type { ChapterStatus } from '../types/chapter';
@@ -119,6 +120,10 @@ const ContentEdit: React.FC<ContentEditProps> = ({
   const [materialMarkerBindings, setMaterialMarkerBindings] = useState<ChapterMaterialBinding[]>([]);
   const [materialMarkerTarget, setMaterialMarkerTarget] = useState<{ chapterNumber: string; title: string } | null>(null);
   const [selectedBindingId, setSelectedBindingId] = useState<string>('');
+  const [showSuggestPanel, setShowSuggestPanel] = useState(false);
+  const [suggestLoading, setSuggestLoading] = useState(false);
+  const [suggestItems, setSuggestItems] = useState<Array<import('../types/material').MaterialAsset & { score: number }>>([]);
+  const [pendingGenerateItem, setPendingGenerateItem] = useState<{ item: OutlineItem; projectOverview: string } | null>(null);
 
 
   const loadProjectChapterMap = useCallback(async (): Promise<Record<string, string>> => {
@@ -816,6 +821,7 @@ const ContentEdit: React.FC<ContentEditProps> = ({
         model_name: getCurrentModel() || undefined,
         provider_config_id: getCurrentProviderConfigId() || undefined,
         use_knowledge: true,
+        confirmed_material_ids: item._confirmedMaterialIds || [],
       };
 
       const response = await contentApi.generateChapterContentStream(request);
@@ -912,6 +918,36 @@ const ContentEdit: React.FC<ContentEditProps> = ({
   const regenerateItemContent = async (item: OutlineItem) => {
     if (!item || !outlineData) return;
 
+    // 先拉素材推荐
+    if (projectId) {
+      setSuggestLoading(true);
+      setShowSuggestPanel(true);
+      setPendingGenerateItem({ item, projectOverview: outlineData.project_overview || '' });
+      try {
+        const result = await materialApi.suggestForChapter({
+          project_id: projectId,
+          chapter_title: item.title || '',
+          chapter_content: item.content || '',
+          top_k: 5,
+        });
+        setSuggestItems(result?.suggestions || []);
+      } catch {
+        setSuggestItems([]);
+      } finally {
+        setSuggestLoading(false);
+      }
+      // 实际生成在用户确认/跳过后触发（_doRegenerate）
+      return;
+    }
+
+    // 无项目ID时直接生成
+    const cleanItem = { ...item, generationError: undefined, content: undefined };
+    await generateItemContent(cleanItem, outlineData.project_overview || '');
+  };
+
+  const _doRegenerate = async (confirmedMaterialIds: string[]) => {
+    if (!pendingGenerateItem || !outlineData) return;
+    const { item } = pendingGenerateItem;
     setLeafItems(prevItems => {
       const newItems = [...prevItems];
       const index = newItems.findIndex(i => i.id === item.id);
@@ -920,8 +956,8 @@ const ContentEdit: React.FC<ContentEditProps> = ({
       }
       return newItems;
     });
-
-    const cleanItem = { ...item, generationError: undefined, content: undefined };
+    const cleanItem = { ...item, generationError: undefined, content: undefined, _confirmedMaterialIds: confirmedMaterialIds };
+    setPendingGenerateItem(null);
     await generateItemContent(cleanItem, outlineData.project_overview || '');
   };
 
@@ -1190,6 +1226,15 @@ const ContentEdit: React.FC<ContentEditProps> = ({
           visibilityHeight={300}
         />
       )}
+
+      <MaterialSuggestPanel
+        visible={showSuggestPanel}
+        loading={suggestLoading}
+        suggestions={suggestItems}
+        onConfirm={(ids) => { setShowSuggestPanel(false); void _doRegenerate(ids); }}
+        onSkip={() => { setShowSuggestPanel(false); void _doRegenerate([]); }}
+        onCancel={() => { setShowSuggestPanel(false); setPendingGenerateItem(null); }}
+      />
 
       <MaterialMarkerModal
         visible={showMaterialMarkerModal}
