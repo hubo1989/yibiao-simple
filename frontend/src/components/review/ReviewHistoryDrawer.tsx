@@ -44,8 +44,10 @@ const ReviewHistoryDrawer: React.FC<ReviewHistoryDrawerProps> = ({
                 </Tag>
               }
               title={
-                item.summary
-                  ? `得分 ${item.summary.overall_score} / 覆盖率 ${Math.round(item.summary.coverage_rate * 100)}%`
+                item.bid_filename
+                  ? item.summary
+                    ? `${item.bid_filename} — 得分 ${item.summary.overall_score} / 覆盖率 ${Math.round(item.summary.coverage_rate * 100)}%`
+                    : item.bid_filename
                   : '无结果'
               }
               description={`${item.model_name || '默认模型'} · ${new Date(item.created_at).toLocaleString()}`}

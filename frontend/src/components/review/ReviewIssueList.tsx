@@ -32,7 +32,8 @@ const ReviewIssueList: React.FC<ReviewIssueListProps> = ({
   const filteredIssues = allIssues.filter((entry) => {
     if (dimensionTab !== 'all' && entry.dimension !== dimensionTab) return false;
     if (severityFilter !== 'all') {
-      const sev = entry.item.severity || entry.item.coverage_status;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const sev = (entry.item as any).severity || (entry.item as any).coverage_status;
       const sevMap: Record<string, string> = {
         covered: 'info',
         partial: 'warning',

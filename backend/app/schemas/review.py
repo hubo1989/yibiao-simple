@@ -148,6 +148,7 @@ class ReviewHistoryItem(BaseModel):
     """审查历史条目"""
     task_id: uuid.UUID
     status: ReviewTaskStatus
+    bid_filename: str | None = None
     summary: ReviewSummary | None = None
     model_name: str | None = None
     created_at: datetime

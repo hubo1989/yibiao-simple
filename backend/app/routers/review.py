@@ -395,6 +395,7 @@ async def get_review_history(
         ReviewHistoryItem(
             task_id=task.id,
             status=task.status,
+            bid_filename=task.bid_filename,
             summary=task.summary,
             model_name=task.model_name,
             created_at=task.created_at,

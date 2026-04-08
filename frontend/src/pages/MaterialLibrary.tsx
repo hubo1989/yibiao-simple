@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Button, Card, Empty, Form, Image, Input, Modal, Popconfirm, Select, Space, Tag, Upload, message } from 'antd';
-import { InboxOutlined, PlusOutlined, ImportOutlined, EditOutlined, DeleteOutlined } from '@ant-design/icons';
+import { InboxOutlined, PlusOutlined, ImportOutlined, EditOutlined, DeleteOutlined, SearchOutlined, ReloadOutlined } from '@ant-design/icons';
 import { materialApi } from '../services/api';
 import type { MaterialAsset, MaterialCategory } from '../types/material';
 import { useLayoutHeader } from '../layouts/layoutHeader';
@@ -153,6 +153,12 @@ const MaterialLibrary: React.FC = () => {
                 value={category}
                 onChange={(value) => setCategory(value)}
               />
+              <Button icon={<SearchOutlined />} onClick={() => loadData()}>
+                查询
+              </Button>
+              <Button icon={<ReloadOutlined />} onClick={() => { setKeyword(''); setCategory(undefined); }}>
+                重置
+              </Button>
             </Space>
             <Space>
               <Button icon={<ImportOutlined />} onClick={() => setShowIngestion(true)}>
@@ -364,10 +370,12 @@ const MaterialLibrary: React.FC = () => {
       {/* 从历史标书导入 */}
       <IngestionWizard
         visible={showIngestion}
-        onClose={() => setShowIngestion(false)}
+        onClose={() => {
+          setShowIngestion(false);
+          loadData();
+        }}
         onSuccess={() => {
           loadData();
-          setShowIngestion(false);
         }}
       />
     </div>
