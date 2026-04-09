@@ -369,7 +369,11 @@ async def generate_project_outline_l1_stream(
                         full_content = json_match.group(1)
                 
                 outline_data = json.loads(full_content.strip())
-                outline_items = outline_data.get("outline", [])
+                # AI 可能返回 {"outline": [...]} 或直接返回 [...]
+                if isinstance(outline_data, list):
+                    outline_items = outline_data
+                else:
+                    outline_items = outline_data.get("outline", [])
 
                 if outline_items:
                     # 先删除项目现有的所有章节
