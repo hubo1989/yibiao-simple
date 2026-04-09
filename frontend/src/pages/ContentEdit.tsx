@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import ReactMarkdown from 'react-markdown';
 import { OutlineData, OutlineItem } from '../types';
 import {
@@ -57,6 +57,7 @@ import {
   BulbOutlined,
   ProfileOutlined,
   PaperClipOutlined,
+  StopOutlined,
 } from '@ant-design/icons';
 
 interface ContentEditProps {
@@ -124,6 +125,9 @@ const ContentEdit: React.FC<ContentEditProps> = ({
   const [suggestLoading, setSuggestLoading] = useState(false);
   const [suggestItems, setSuggestItems] = useState<Array<import('../types/material').MaterialAsset & { score: number }>>([]);
   const [pendingGenerateItem, setPendingGenerateItem] = useState<{ item: OutlineItem; projectOverview: string } | null>(null);
+  const [showGenerateModal, setShowGenerateModal] = useState(false);
+  const [itemsToGenerateCount, setItemsToGenerateCount] = useState(0);
+  const abortControllerRef = useRef<AbortController | null>(null);
 
 
   const loadProjectChapterMap = useCallback(async (): Promise<Record<string, string>> => {
@@ -388,7 +392,7 @@ const ContentEdit: React.FC<ContentEditProps> = ({
   };
 
   const getChapterStatus = (item: OutlineItem, isGenerating: boolean): ChapterStatus => {
-    if (isGenerating) return 'generated';
+    if (isGenerating) return 'generating';
     if (!isLeafNode(item)) {
       return 'pending';
     }
@@ -832,7 +836,7 @@ const ContentEdit: React.FC<ContentEditProps> = ({
         confirmed_material_ids: item._confirmedMaterialIds || [],
       };
 
-      const response = await contentApi.generateChapterContentStream(request);
+      const response = await contentApi.generateChapterContentStream(request, abortControllerRef.current?.signal);
 
       if (!response.ok) {
         const error = await response.json().catch(() => ({}));
@@ -844,54 +848,64 @@ const ContentEdit: React.FC<ContentEditProps> = ({
 
       let content = '';
       const updatedItem = { ...item };
+      let sseBuffer = '';
       
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
 
-        const chunk = new TextDecoder().decode(value);
-        const lines = chunk.split('\n');
-        
-        for (const line of lines) {
-          if (line.startsWith('data: ')) {
-            const data = line.slice(6);
-            if (data === '[DONE]') continue;
-            
-            try {
-              const parsed = JSON.parse(data);
+        sseBuffer += new TextDecoder().decode(value);
+        const parts = sseBuffer.split('\n\n');
+        sseBuffer = parts.pop() || '';
+
+        for (const part of parts) {
+          const lines = part.split('\n');
+          for (const line of lines) {
+            if (line.startsWith('data: ')) {
+              const data = line.slice(6);
+              if (data === '[DONE]') continue;
               
-              if (parsed.status === 'error') {
-                throw new Error(parsed.message || '生成失败');
-              }
-
-              if (parsed.status === 'knowledge_retrieved' && parsed.count > 0) {
-                message.info(`已检索知识库 ${parsed.count} 条参考`, 2);
-              }
-
-              if (parsed.status === 'streaming' && parsed.full_content) {
-                content = parsed.full_content;
-                updatedItem.content = content;
-                draftStorage.upsertChapterContent(item.id, content);
+              try {
+                const parsed = JSON.parse(data);
                 
-                setLeafItems(prevItems => {
-                  const newItems = [...prevItems];
-                  const index = newItems.findIndex(i => i.id === item.id);
-                  if (index !== -1) {
-                    newItems[index] = { ...updatedItem };
-                  }
-                  return newItems;
-                });
-              } else if (parsed.status === 'completed' && parsed.content) {
-                content = parsed.content;
-                updatedItem.content = content;
-                draftStorage.upsertChapterContent(item.id, content);
-                if (projectId) {
-                  chapterApi.updateContent(`${projectId}_${item.id}`, content).catch(() => {});
+                if (parsed.status === 'error') {
+                  throw new Error(parsed.message || '生成失败');
                 }
-              }
-            } catch (e) {
-              if (e instanceof Error) {
-                throw e;
+
+                if (parsed.status === 'knowledge_retrieved' && parsed.count > 0) {
+                  message.info(`已检索知识库 ${parsed.count} 条参考`, 2);
+                }
+
+                if (parsed.status === 'streaming' && parsed.full_content) {
+                  content = parsed.full_content;
+                  updatedItem.content = content;
+                  draftStorage.upsertChapterContent(item.id, content);
+                  
+                  setLeafItems(prevItems => {
+                    const newItems = [...prevItems];
+                    const index = newItems.findIndex(i => i.id === item.id);
+                    if (index !== -1) {
+                      newItems[index] = { ...updatedItem };
+                    }
+                    return newItems;
+                  });
+                } else if (parsed.status === 'completed' && parsed.content) {
+                  content = parsed.content;
+                  updatedItem.content = content;
+                  draftStorage.upsertChapterContent(item.id, content);
+                  if (projectId) {
+                    chapterApi.updateContent(`${projectId}_${item.id}`, content).catch(() => {});
+                  }
+                }
+              } catch (e) {
+                if (e instanceof Error && e.message !== data.slice(0, 100)) {
+                  // Re-throw application errors (e.g. parsed.status === 'error')
+                  // but not JSON syntax errors
+                  if (!(e instanceof SyntaxError)) {
+                    throw e;
+                  }
+                }
+                console.warn('[ContentEdit] SSE JSON parse failed, skipping:', data.slice(0, 100));
               }
             }
           }
@@ -974,7 +988,7 @@ const ContentEdit: React.FC<ContentEditProps> = ({
     await generateItemContent(cleanItem, outlineData.project_overview || '');
   };
 
-  const handleGenerateContent = async () => {
+  const handleGenerateContent = () => {
     console.log('[ContentEdit] handleGenerateContent called', {
       hasOutlineData: !!outlineData,
       outlineLength: outlineData?.outline?.length,
@@ -994,62 +1008,84 @@ const ContentEdit: React.FC<ContentEditProps> = ({
       return;
     }
 
-    const confirmed = window.confirm(
-      `确定要生成章节内容吗？\n\n将生成 ${itemsToGenerate.length} 个章节的内容（空内容或失败的章节），此操作可能需要较长时间。`
+    setItemsToGenerateCount(itemsToGenerate.length);
+    setShowGenerateModal(true);
+  };
+
+  const handleConfirmGenerate = async () => {
+    setShowGenerateModal(false);
+    if (!outlineData) return;
+
+    const itemsToGenerate = leafItems.filter(item =>
+      !item.content || item.generationError
     );
-    if (!confirmed) return;
+    if (itemsToGenerate.length === 0) return;
 
-    {
-        setIsGenerating(true);
-        setProgress({
-          total: itemsToGenerate.length,
-          completed: 0,
-          current: '',
-          failed: [],
-          generating: new Set<string>()
-        });
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
 
-        try {
-          const concurrency = 1;
-          const updatedItems = [...leafItems];
-          const delayBetweenRequests = 5000; 
-          
-          for (let i = 0; i < itemsToGenerate.length; i += concurrency) {
-            const batch = itemsToGenerate.slice(i, i + concurrency);
-            const promises = batch.map(item => 
-              generateItemContent(item, outlineData.project_overview || '')
-                .then(updatedItem => {
-                  const index = updatedItems.findIndex(ui => ui.id === updatedItem.id);
-                  if (index !== -1) {
-                    updatedItems[index] = updatedItem;
-                  }
-                  setProgress(prev => ({ ...prev, completed: prev.completed + 1 }));
-                  return updatedItem;
-                })
-                .catch(error => {
-                  console.error(`生成内容失败 ${item.title}:`, error);
-                  setProgress(prev => ({ ...prev, completed: prev.completed + 1 }));
-                  return item; 
-                })
-            );
+    setIsGenerating(true);
+    setProgress({
+      total: itemsToGenerate.length,
+      completed: 0,
+      current: '',
+      failed: [],
+      generating: new Set<string>()
+    });
 
-            await Promise.all(promises);
-            
-            if (i + concurrency < itemsToGenerate.length) {
-              await new Promise(resolve => setTimeout(resolve, delayBetweenRequests));
-            }
-          }
+    try {
+      const concurrency = 1;
+      const updatedItems = [...leafItems];
+      const delayBetweenRequests = 5000; 
+      
+      for (let i = 0; i < itemsToGenerate.length; i += concurrency) {
+        if (abortControllerRef.current?.signal.aborted) break;
 
-          setLeafItems(updatedItems);
-          message.success('标书生成完成');
-        } catch (error) {
-          console.error('生成内容时出错:', error);
-          message.error('部分内容生成出错，请查看日志或重试');
-        } finally {
-          setIsGenerating(false);
-          setProgress(prev => ({ ...prev, current: '', generating: new Set<string>() }));
+        const batch = itemsToGenerate.slice(i, i + concurrency);
+        const promises = batch.map(item => 
+          generateItemContent(item, outlineData.project_overview || '')
+            .then(updatedItem => {
+              const index = updatedItems.findIndex(ui => ui.id === updatedItem.id);
+              if (index !== -1) {
+                updatedItems[index] = updatedItem;
+              }
+              setProgress(prev => ({ ...prev, completed: prev.completed + 1 }));
+              return updatedItem;
+            })
+            .catch(error => {
+              console.error(`生成内容失败 ${item.title}:`, error);
+              setProgress(prev => ({ ...prev, completed: prev.completed + 1 }));
+              return item; 
+            })
+        );
+
+        await Promise.all(promises);
+        
+        if (i + concurrency < itemsToGenerate.length) {
+          await new Promise(resolve => setTimeout(resolve, delayBetweenRequests));
         }
+      }
+
+      setLeafItems(updatedItems);
+      if (!abortControllerRef.current?.signal.aborted) {
+        message.success('标书生成完成');
+      }
+    } catch (error) {
+      console.error('生成内容时出错:', error);
+      message.error('部分内容生成出错，请查看日志或重试');
+    } finally {
+      setIsGenerating(false);
+      abortControllerRef.current = null;
+      setProgress(prev => ({ ...prev, current: '', generating: new Set<string>() }));
     }
+  };
+
+  const handleStopGeneration = () => {
+    abortControllerRef.current?.abort();
+    abortControllerRef.current = null;
+    setIsGenerating(false);
+    setProgress(prev => ({ ...prev, current: '', generating: new Set<string>() }));
+    message.info('已停止生成');
   };
 
   const getLatestContent = (item: OutlineItem): string => {
@@ -1186,7 +1222,18 @@ const ContentEdit: React.FC<ContentEditProps> = ({
             <div style={{ marginTop: 8 }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
                 <Typography.Text type="secondary" style={{ fontSize: 13 }}>正在生成: {progress.current}</Typography.Text>
-                <Typography.Text type="secondary" style={{ fontSize: 13 }}>{progress.completed} / {progress.total}</Typography.Text>
+                <Space size="middle">
+                  <Typography.Text type="secondary" style={{ fontSize: 13 }}>{progress.completed} / {progress.total}</Typography.Text>
+                  <Button
+                    type="text"
+                    danger
+                    size="small"
+                    icon={<StopOutlined />}
+                    onClick={handleStopGeneration}
+                  >
+                    停止
+                  </Button>
+                </Space>
               </div>
               <Progress 
                 percent={Math.round((progress.completed / progress.total) * 100)} 
@@ -1301,6 +1348,21 @@ const ContentEdit: React.FC<ContentEditProps> = ({
         onEditContent={handleEditContent}
         chapterTitle={proofreadChapterTitle}
       />
+
+      {/* 生成确认弹窗 */}
+      <Modal
+        title="确认生成章节内容"
+        open={showGenerateModal}
+        onOk={() => { void handleConfirmGenerate(); }}
+        onCancel={() => setShowGenerateModal(false)}
+        okText="确定生成"
+        cancelText="取消"
+      >
+        <p>
+          将生成 <strong>{itemsToGenerateCount}</strong> 个章节的内容（空内容或失败的章节），此操作可能需要较长时间。
+        </p>
+        <p>确定要开始生成吗？</p>
+      </Modal>
     </div>
   );
 };

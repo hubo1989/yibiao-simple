@@ -664,7 +664,7 @@ export const contentApi = {
     api.post('/api/content/generate-chapter', data),
 
   // 流式生成单章节内容
-  generateChapterContentStream: async (data: ChapterContentRequest): Promise<Response> => {
+  generateChapterContentStream: async (data: ChapterContentRequest, signal?: AbortSignal): Promise<Response> => {
     const token = getStoredToken();
     const csrfToken = getCsrfToken() || getCsrfTokenFromCookie();
     const headers: Record<string, string> = {
@@ -678,6 +678,7 @@ export const contentApi = {
       headers,
       credentials: 'include',
       body: JSON.stringify(data),
+      signal,
     });
   },
 };
