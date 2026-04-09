@@ -12,7 +12,7 @@ interface Props {
 
 interface KnowledgeDoc {
   id: string;
-  filename: string;
+  title: string;
   doc_type: string;
   created_at: string;
 }
@@ -266,7 +266,7 @@ const IngestionWizard: React.FC<Props> = ({ visible, onClose, onSuccess }) => {
                       background: selectedDocId === doc.id ? '#e6f7ff' : '#fff',
                     }}
                   >
-                    <div style={{ fontWeight: 500 }}>{doc.filename}</div>
+                    <div style={{ fontWeight: 500 }}>{doc.title}</div>
                     <div style={{ fontSize: 12, color: '#999', marginTop: 4 }}>
                       上传时间: {new Date(doc.created_at).toLocaleString()}
                     </div>
