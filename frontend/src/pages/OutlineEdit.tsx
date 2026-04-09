@@ -249,9 +249,21 @@ const OutlineEdit: React.FC<OutlineEditProps> = ({
         
         const outlineJson = JSON.parse(cleanResult);
         // AI 可能返回 [{...}, ...] 数组或 {outline: [...]} 对象
-        const outlineData: OutlineData = Array.isArray(outlineJson)
-          ? { outline: outlineJson }
-          : outlineJson;
+        const rawItems: unknown[] = Array.isArray(outlineJson)
+          ? outlineJson
+          : (outlineJson.outline ?? []);
+        // AI prompt 返回 {rating_item, new_title, chapter_role, avoid_overlap}
+        // 前端 OutlineItem 需要 {id, title, description, rating_item, chapter_role, avoid_overlap}
+        const normalizedItems: OutlineItem[] = rawItems.map((raw: any, idx: number) => ({
+          id: raw.id ?? String(idx + 1),
+          title: raw.title ?? raw.new_title ?? raw.rating_item ?? '',
+          description: raw.description ?? raw.chapter_role ?? '',
+          rating_item: raw.rating_item,
+          chapter_role: raw.chapter_role,
+          avoid_overlap: raw.avoid_overlap,
+          children: raw.children,
+        }));
+        const outlineData: OutlineData = { outline: normalizedItems };
         onOutlineGenerated(outlineData);
         message.success('一级目录生成完成');
         setStreamingContent('');

@@ -375,6 +375,16 @@ async def generate_project_outline_l1_stream(
                 else:
                     outline_items = outline_data.get("outline", [])
 
+                # AI prompt 返回字段名可能是 new_title/chapter_role,
+                # 标准化为 _create_chapters_from_outline 期望的 id/title/description
+                for idx, item in enumerate(outline_items):
+                    if "id" not in item:
+                        item["id"] = str(idx + 1)
+                    if "title" not in item and "new_title" in item:
+                        item["title"] = item["new_title"]
+                    if "description" not in item and "chapter_role" in item:
+                        item["description"] = item["chapter_role"]
+
                 if outline_items:
                     # 先删除项目现有的所有章节
                     await db.execute(
