@@ -1219,26 +1219,62 @@ const ContentEdit: React.FC<ContentEditProps> = ({
           
           {/* 进度条 */}
           {isGenerating && (
-            <div style={{ marginTop: 8 }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
-                <Typography.Text type="secondary" style={{ fontSize: 13 }}>正在生成: {progress.current}</Typography.Text>
-                <Space size="middle">
-                  <Typography.Text type="secondary" style={{ fontSize: 13 }}>{progress.completed} / {progress.total}</Typography.Text>
-                  <Button
-                    type="text"
-                    danger
-                    size="small"
-                    icon={<StopOutlined />}
-                    onClick={handleStopGeneration}
+            <div style={{
+              marginTop: 8,
+              backgroundColor: '#f8fafc',
+              border: '1px solid #e2e8f0',
+              borderRadius: 8,
+              padding: '12px 16px',
+            }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, flex: 1, minWidth: 0 }}>
+                  <LoadingOutlined style={{ color: '#1677ff', fontSize: 14, flexShrink: 0 }} />
+                  <Typography.Text
+                    style={{ fontSize: 13, color: '#374151', flex: 1, minWidth: 0 }}
+                    ellipsis={{ tooltip: progress.current }}
                   >
-                    停止
-                  </Button>
-                </Space>
+                    {progress.current || '准备中...'}
+                  </Typography.Text>
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0, marginLeft: 12 }}>
+                  <span style={{
+                    fontSize: 13,
+                    fontWeight: 500,
+                    color: '#6b7280',
+                    backgroundColor: '#e5e7eb',
+                    borderRadius: 20,
+                    padding: '2px 10px',
+                    letterSpacing: '0.02em',
+                  }}>
+                    {progress.completed} / {progress.total}
+                  </span>
+                  <Tooltip title="停止生成">
+                    <Button
+                      type="text"
+                      size="small"
+                      icon={<StopOutlined />}
+                      onClick={handleStopGeneration}
+                      style={{
+                        color: '#9ca3af',
+                        padding: '0 6px',
+                        height: 26,
+                        borderRadius: 6,
+                        transition: 'color 0.15s',
+                      }}
+                      onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.color = '#ef4444'; }}
+                      onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.color = '#9ca3af'; }}
+                    />
+                  </Tooltip>
+                </div>
               </div>
-              <Progress 
-                percent={Math.round((progress.completed / progress.total) * 100)} 
-                status="active" 
-                strokeColor={{ '0%': '#108ee9', '100%': '#87d068' }}
+              <Progress
+                percent={Math.round((progress.completed / progress.total) * 100)}
+                status="active"
+                strokeColor={{ '0%': '#3b82f6', '100%': '#1677ff' }}
+                trailColor="#dbeafe"
+                strokeWidth={6}
+                showInfo={false}
+                style={{ margin: 0 }}
               />
             </div>
           )}
@@ -1351,17 +1387,56 @@ const ContentEdit: React.FC<ContentEditProps> = ({
 
       {/* 生成确认弹窗 */}
       <Modal
-        title="确认生成章节内容"
+        title={null}
         open={showGenerateModal}
         onOk={() => { void handleConfirmGenerate(); }}
         onCancel={() => setShowGenerateModal(false)}
-        okText="确定生成"
+        okText="开始生成"
         cancelText="取消"
+        okButtonProps={{ type: 'primary', size: 'middle' }}
+        width={400}
+        centered
       >
-        <p>
-          将生成 <strong>{itemsToGenerateCount}</strong> 个章节的内容（空内容或失败的章节），此操作可能需要较长时间。
-        </p>
-        <p>确定要开始生成吗？</p>
+        <div style={{ padding: '8px 0 4px' }}>
+          <div style={{ textAlign: 'center', marginBottom: 20 }}>
+            <div style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              width: 48,
+              height: 48,
+              borderRadius: '50%',
+              backgroundColor: '#eff6ff',
+              marginBottom: 12,
+            }}>
+              <PlayCircleOutlined style={{ fontSize: 22, color: '#1677ff' }} />
+            </div>
+            <Typography.Title level={5} style={{ margin: 0, color: '#111827' }}>
+              生成标书内容
+            </Typography.Title>
+          </div>
+
+          <div style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            gap: 6,
+            backgroundColor: '#f8fafc',
+            border: '1px solid #e2e8f0',
+            borderRadius: 8,
+            padding: '14px 20px',
+            marginBottom: 16,
+          }}>
+            <span style={{ fontSize: 28, fontWeight: 700, color: '#1677ff', lineHeight: 1 }}>
+              {itemsToGenerateCount}
+            </span>
+            <span style={{ fontSize: 14, color: '#6b7280' }}>个章节待生成</span>
+          </div>
+
+          <Typography.Text type="secondary" style={{ fontSize: 13, display: 'block', textAlign: 'center' }}>
+            将生成所有空内容及失败章节，过程中可随时停止
+          </Typography.Text>
+        </div>
       </Modal>
     </div>
   );
