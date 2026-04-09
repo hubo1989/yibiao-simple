@@ -144,6 +144,7 @@ class HistoricalBidIngestionService:
                 self.db.add(candidate)
 
             task.total_candidates = len(candidates)
+            task.status = IngestionTaskStatus.COMPLETED
             task.processing_log.append({
                 "time": datetime.now(timezone.utc).isoformat(),
                 "action": "extraction_complete",
