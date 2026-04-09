@@ -330,8 +330,14 @@ const ContentEdit: React.FC<ContentEditProps> = ({
   }, []);
 
   useEffect(() => {
+    console.log('[ContentEdit] outlineData changed:', {
+      hasData: !!outlineData,
+      outlineLength: outlineData?.outline?.length,
+      firstItem: outlineData?.outline?.[0] ? { id: outlineData.outline[0].id, title: outlineData.outline[0].title } : null,
+    });
     if (outlineData) {
       const leaves = collectLeafItems(outlineData.outline);
+      console.log('[ContentEdit] leafItems collected:', leaves.length, 'first:', leaves[0]?.id, leaves[0]?.title);
       const filtered = draftStorage.filterContentByOutlineLeaves(outlineData.outline);
       const mergedLeaves = leaves.map((leaf) => {
         const cached = filtered[leaf.id];
@@ -972,7 +978,15 @@ const ContentEdit: React.FC<ContentEditProps> = ({
   };
 
   const handleGenerateContent = async () => {
-    if (!outlineData || leafItems.length === 0) return;
+    console.log('[ContentEdit] handleGenerateContent called', {
+      hasOutlineData: !!outlineData,
+      outlineLength: outlineData?.outline?.length,
+      leafItemsLength: leafItems.length,
+    });
+    if (!outlineData || leafItems.length === 0) {
+      console.warn('[ContentEdit] Early return: outlineData or leafItems empty');
+      return;
+    }
 
     const itemsToGenerate = leafItems.filter(item => 
       !item.content || item.generationError

@@ -5,7 +5,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
-import { projectApi, consistencyApi, documentApi } from '../services/api';
+import { projectApi, consistencyApi, documentApi, outlineApi } from '../services/api';
 import { useAppState } from '../hooks/useAppState';
 import type { Project, ProjectProgress } from '../types/project';
 import type { ConsistencyCheckResponse } from '../types/consistency';
@@ -107,13 +107,51 @@ const ProjectWorkspace: React.FC = () => {
       } catch {
         // Ignore progress fail
       }
+
+      // 从后端加载已保存的章节目录（确保即使 draftStorage 丢失也能恢复）
+      try {
+        const chaptersResp = await outlineApi.getProjectChapters(projectId);
+        if (chaptersResp.chapters?.length) {
+          // 将扁平章节列表构建为 OutlineData 树形结构
+          const chapterMap = new Map<string | null, typeof chaptersResp.chapters>();
+          for (const ch of chaptersResp.chapters) {
+            const parentKey = ch.parent_id ?? null;
+            if (!chapterMap.has(parentKey)) chapterMap.set(parentKey, []);
+            chapterMap.get(parentKey)!.push(ch);
+          }
+          const buildTree = (parentId: string | null): import('../types').OutlineItem[] => {
+            const children = chapterMap.get(parentId) ?? [];
+            return children.map(ch => ({
+              id: ch.chapter_number,
+              title: ch.title,
+              description: '',
+              rating_item: undefined,
+              chapter_role: undefined,
+              avoid_overlap: undefined,
+              children: buildTree(ch.id),
+              status: ch.status === 'generated' ? 'generated' as const
+                    : ch.status === 'pending' ? 'pending' as const
+                    : undefined,
+            })).map(item => item.children?.length ? item : { ...item, children: undefined });
+          };
+          const outlineTree = buildTree(null);
+          if (outlineTree.length) {
+            updateOutline({
+              outline: outlineTree,
+              project_overview: projectData.project_overview || '',
+            });
+          }
+        }
+      } catch {
+        // 目录加载失败不阻塞
+      }
     } catch (err) {
       setError('加载项目失败，请稍后重试');
       console.error('加载项目失败:', err);
     } finally {
       setLoading(false);
     }
-  }, [projectId, user, updateFileContent, updateAnalysisResults]);
+  }, [projectId, user, updateFileContent, updateAnalysisResults, updateOutline]);
 
   useEffect(() => {
     loadProject();
