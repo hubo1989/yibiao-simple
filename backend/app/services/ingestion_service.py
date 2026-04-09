@@ -81,15 +81,25 @@ class HistoricalBidIngestionService:
         if not doc:
             raise ValueError(f"文档不存在: {document_id}")
 
-        # 检查是否已有进行中的任务
-        existing = await self.db.execute(
+        # 检查是否已有进行中的任务——超过 5 分钟的视为僵死，自动清理
+        from datetime import timedelta
+        stale_threshold = datetime.now(timezone.utc) - timedelta(minutes=5)
+        existing_result = await self.db.execute(
             select(IngestionTask).where(
                 IngestionTask.document_id == document_id,
                 IngestionTask.status.in_([IngestionTaskStatus.PENDING, IngestionTaskStatus.PROCESSING]),
             )
         )
-        if existing.scalar_one_or_none():
-            raise ValueError("该文档已有进行中的解析任务，请稍后再试")
+        existing_task = existing_result.scalar_one_or_none()
+        if existing_task:
+            if existing_task.created_at < stale_threshold:
+                # 僵死任务，自动标记为失败
+                existing_task.status = IngestionTaskStatus.FAILED
+                existing_task.error_message = "任务超时，已自动清理"
+                await self.db.commit()
+                logger.warning(f"自动清理僵死任务: {existing_task.id}")
+            else:
+                raise ValueError("该文档已有进行中的解析任务，请稍后再试")
 
         task = IngestionTask(
             document_id=document_id,
