@@ -406,16 +406,29 @@ export const documentApi = {
   },
 
   // 流式分析项目文档（保存到数据库）
-  analyzeProjectStream: (
+  analyzeProjectStream: async (
     data: {
       project_id: string;
       analysis_type: 'overview' | 'requirements';
       model_name?: string;
       provider_config_id?: string;
     }
-  ) => {
-    return api.post('/api/document/analyze-project-stream', data, {
-      responseType: 'stream',
+  ): Promise<Response> => {
+    // 必须使用原生 fetch 才能获得浏览器 ReadableStream 支持
+    // axios 的 responseType: 'stream' 在浏览器端不生效
+    const token = getStoredToken();
+    const csrfToken = getCsrfToken() || getCsrfTokenFromCookie();
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+    };
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+    if (csrfToken) headers['X-CSRF-Token'] = csrfToken;
+
+    return fetch(`${API_BASE_URL}/api/document/analyze-project-stream`, {
+      method: 'POST',
+      headers,
+      credentials: 'include',
+      body: JSON.stringify(data),
     });
   },
 
