@@ -248,7 +248,11 @@ const OutlineEdit: React.FC<OutlineEditProps> = ({
         }
         
         const outlineJson = JSON.parse(cleanResult);
-        onOutlineGenerated(outlineJson);
+        // AI 可能返回 [{...}, ...] 数组或 {outline: [...]} 对象
+        const outlineData: OutlineData = Array.isArray(outlineJson)
+          ? { outline: outlineJson }
+          : outlineJson;
+        onOutlineGenerated(outlineData);
         message.success('一级目录生成完成');
         setStreamingContent('');
 
@@ -261,7 +265,7 @@ const OutlineEdit: React.FC<OutlineEditProps> = ({
             }
           });
         };
-        collectIds(outlineJson.outline || []);
+        collectIds(outlineData.outline || []);
         setExpandedItems(allIds);
 
       } catch (parseError) {
