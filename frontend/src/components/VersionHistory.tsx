@@ -129,33 +129,21 @@ const VersionHistory: React.FC<VersionHistoryProps> = ({
     }
   };
 
-  const handleRollback = (version: VersionSummary) => {
-    Modal.confirm({
-      title: `确认回滚到 V${version.version_number}`,
-      content: (
-        <div>
-          <p>确定要回滚到版本 <strong>V{version.version_number}</strong> 吗？</p>
-          <p style={{ marginTop: 8, color: '#888', fontSize: 13 }}>
-            回滚前会自动创建当前状态的快照，以便需要时恢复。
-          </p>
-        </div>
-      ),
-      okText: '确认回滚',
-      okType: 'danger',
-      cancelText: '取消',
-      onOk: async () => {
-        setRollingBackId(version.id);
-        try {
-          await versionApi.rollback(projectId, version.id, true);
-          message.success('回滚成功，页面即将刷新');
-          setTimeout(() => window.location.reload(), 800);
-        } catch {
-          message.error('回滚失败');
-        } finally {
-          setRollingBackId(null);
-        }
-      },
-    });
+  const handleRollback = async (version: VersionSummary) => {
+    if (!window.confirm(
+      `确认回滚到 V${version.version_number} 吗？\n\n回滚前会自动创建当前状态的快照，以便需要时恢复。`
+    )) return;
+
+    setRollingBackId(version.id);
+    try {
+      await versionApi.rollback(projectId, version.id, true);
+      message.success('回滚成功，页面即将刷新');
+      setTimeout(() => window.location.reload(), 800);
+    } catch {
+      message.error('回滚失败');
+    } finally {
+      setRollingBackId(null);
+    }
   };
 
   const timelineItems = versions.map((version) => ({

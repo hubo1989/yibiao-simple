@@ -496,10 +496,7 @@ const ContentEdit: React.FC<ContentEditProps> = ({
   };
 
   const handleEditContent = (issue: ProofreadIssue) => {
-    Modal.info({
-      title: '手动编辑内容',
-      content: `请根据以下建议手动编辑内容：\n\n${issue.suggestion}`,
-    });
+    window.alert(`请根据以下建议手动编辑内容：\n\n${issue.suggestion}`);
   };
 
   const handleCloseProofreadPanel = () => {
@@ -997,10 +994,12 @@ const ContentEdit: React.FC<ContentEditProps> = ({
       return;
     }
 
-    Modal.confirm({
-      title: '生成确认',
-      content: `确定要生成章节内容吗？\n\n将生成 ${itemsToGenerate.length} 个章节的内容（空内容或失败的章节），此操作可能需要较长时间。`,
-      onOk: async () => {
+    const confirmed = window.confirm(
+      `确定要生成章节内容吗？\n\n将生成 ${itemsToGenerate.length} 个章节的内容（空内容或失败的章节），此操作可能需要较长时间。`
+    );
+    if (!confirmed) return;
+
+    {
         setIsGenerating(true);
         setProgress({
           total: itemsToGenerate.length,
@@ -1050,8 +1049,7 @@ const ContentEdit: React.FC<ContentEditProps> = ({
           setIsGenerating(false);
           setProgress(prev => ({ ...prev, current: '', generating: new Set<string>() }));
         }
-      }
-    });
+    }
   };
 
   const getLatestContent = (item: OutlineItem): string => {

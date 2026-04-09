@@ -466,32 +466,28 @@ const OutlineEdit: React.FC<OutlineEditProps> = ({
   const deleteItem = (itemId: string) => {
     if (!outlineData) return;
 
-    Modal.confirm({
-      title: '删除确认',
-      content: '确定要删除这个目录项吗？',
-      onOk: () => {
-        const deleteFromItems = (items: OutlineItem[]): OutlineItem[] => {
-          return items.filter(item => {
-            if (item.id === itemId) return false;
-            if (item.children) {
-              item.children = deleteFromItems(item.children);
-            }
-            return true;
-          });
-        };
+    if (!window.confirm('确定要删除这个目录项吗？')) return;
 
-        const filteredItems = deleteFromItems(outlineData.outline);
-        const reorderedItems = reorderItems(filteredItems);
+    const deleteFromItems = (items: OutlineItem[]): OutlineItem[] => {
+      return items.filter(item => {
+        if (item.id === itemId) return false;
+        if (item.children) {
+          item.children = deleteFromItems(item.children);
+        }
+        return true;
+      });
+    };
 
-        const updatedData = {
-          ...outlineData,
-          outline: reorderedItems
-        };
+    const filteredItems = deleteFromItems(outlineData.outline);
+    const reorderedItems = reorderItems(filteredItems);
 
-        onOutlineGenerated(updatedData);
-        message.success('目录项删除成功');
-      }
-    });
+    const updatedData = {
+      ...outlineData,
+      outline: reorderedItems
+    };
+
+    onOutlineGenerated(updatedData);
+    message.success('目录项删除成功');
   };
 
   const addChildItem = (parentId: string) => {
