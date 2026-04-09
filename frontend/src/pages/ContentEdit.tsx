@@ -412,7 +412,12 @@ const ContentEdit: React.FC<ContentEditProps> = ({
 
       const response = await proofreadApi.proofreadChapter(chapterId);
 
-      const reader = response.data?.getReader();
+      if (!response.ok) {
+        const error = await response.json().catch(() => ({}));
+        throw new Error((error as { detail?: string }).detail || `请求失败: ${response.status}`);
+      }
+
+      const reader = response.body?.getReader();
       if (!reader) throw new Error('无法读取响应');
 
       let fullContent = '';
@@ -826,7 +831,12 @@ const ContentEdit: React.FC<ContentEditProps> = ({
 
       const response = await contentApi.generateChapterContentStream(request);
 
-      const reader = response.data?.getReader();
+      if (!response.ok) {
+        const error = await response.json().catch(() => ({}));
+        throw new Error((error as { detail?: string }).detail || `请求失败: ${response.status}`);
+      }
+
+      const reader = response.body?.getReader();
       if (!reader) throw new Error('无法读取响应');
 
       let content = '';

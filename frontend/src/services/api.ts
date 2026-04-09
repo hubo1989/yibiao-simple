@@ -567,32 +567,76 @@ export const outlineApi = {
     api.post('/api/outline/generate', data),
 
   // 流式生成目录
-  generateOutlineStream: (data: OutlineRequest) => {
-    return api.post('/api/outline/generate-stream', data, {
-      responseType: 'stream',
+  generateOutlineStream: async (data: OutlineRequest): Promise<Response> => {
+    const token = getStoredToken();
+    const csrfToken = getCsrfToken() || getCsrfTokenFromCookie();
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+    };
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+    if (csrfToken) headers['X-CSRF-Token'] = csrfToken;
+
+    return fetch(`${API_BASE_URL}/api/outline/generate-stream`, {
+      method: 'POST',
+      headers,
+      credentials: 'include',
+      body: JSON.stringify(data),
     });
   },
 
   // 流式生成项目目录（保存到数据库）
-  generateProjectOutlineStream: (data: { project_id: string; model_name?: string; provider_config_id?: string }) => {
-    return api.post('/api/outline/generate-project-stream', data, {
-      responseType: 'stream',
+  generateProjectOutlineStream: async (data: { project_id: string; model_name?: string; provider_config_id?: string }): Promise<Response> => {
+    const token = getStoredToken();
+    const csrfToken = getCsrfToken() || getCsrfTokenFromCookie();
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+    };
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+    if (csrfToken) headers['X-CSRF-Token'] = csrfToken;
+
+    return fetch(`${API_BASE_URL}/api/outline/generate-project-stream`, {
+      method: 'POST',
+      headers,
+      credentials: 'include',
+      body: JSON.stringify(data),
     });
   },
 
   // 流式生成项目一级目录
-  generateProjectOutlineL1Stream: (data: { project_id: string; model_name?: string; provider_config_id?: string }) => {
-    return api.post('/api/outline/generate-project-l1-stream', data, {
-      responseType: 'stream',
+  generateProjectOutlineL1Stream: async (data: { project_id: string; model_name?: string; provider_config_id?: string }): Promise<Response> => {
+    const token = getStoredToken();
+    const csrfToken = getCsrfToken() || getCsrfTokenFromCookie();
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+    };
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+    if (csrfToken) headers['X-CSRF-Token'] = csrfToken;
+
+    return fetch(`${API_BASE_URL}/api/outline/generate-project-l1-stream`, {
+      method: 'POST',
+      headers,
+      credentials: 'include',
+      body: JSON.stringify(data),
     });
   },
 
   // 流式生成项目二三级目录
-  generateProjectOutlineL2L3Stream: (
+  generateProjectOutlineL2L3Stream: async (
     data: { project_id: string; model_name?: string; provider_config_id?: string; outline_data?: { outline: OutlineItem[] } }
-  ) => {
-    return api.post('/api/outline/generate-project-l2l3-stream', data, {
-      responseType: 'stream',
+  ): Promise<Response> => {
+    const token = getStoredToken();
+    const csrfToken = getCsrfToken() || getCsrfTokenFromCookie();
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+    };
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+    if (csrfToken) headers['X-CSRF-Token'] = csrfToken;
+
+    return fetch(`${API_BASE_URL}/api/outline/generate-project-l2l3-stream`, {
+      method: 'POST',
+      headers,
+      credentials: 'include',
+      body: JSON.stringify(data),
     });
   },
 
@@ -620,9 +664,20 @@ export const contentApi = {
     api.post('/api/content/generate-chapter', data),
 
   // 流式生成单章节内容
-  generateChapterContentStream: (data: ChapterContentRequest) => {
-    return api.post('/api/content/generate-chapter-stream', data, {
-      responseType: 'stream',
+  generateChapterContentStream: async (data: ChapterContentRequest): Promise<Response> => {
+    const token = getStoredToken();
+    const csrfToken = getCsrfToken() || getCsrfTokenFromCookie();
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+    };
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+    if (csrfToken) headers['X-CSRF-Token'] = csrfToken;
+
+    return fetch(`${API_BASE_URL}/api/content/generate-chapter-stream`, {
+      method: 'POST',
+      headers,
+      credentials: 'include',
+      body: JSON.stringify(data),
     });
   },
 };
@@ -744,9 +799,19 @@ export const commentApi = {
 // 校对相关 API
 export const proofreadApi = {
   // 触发章节校对（流式返回）
-  proofreadChapter: (chapterId: string) => {
-    return api.post(`/api/chapters/${chapterId}/proofread`, undefined, {
-      responseType: 'stream',
+  proofreadChapter: async (chapterId: string): Promise<Response> => {
+    const token = getStoredToken();
+    const csrfToken = getCsrfToken() || getCsrfTokenFromCookie();
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+    };
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+    if (csrfToken) headers['X-CSRF-Token'] = csrfToken;
+
+    return fetch(`${API_BASE_URL}/api/chapters/${chapterId}/proofread`, {
+      method: 'POST',
+      headers,
+      credentials: 'include',
     });
   },
 };

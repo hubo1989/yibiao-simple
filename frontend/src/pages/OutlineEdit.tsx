@@ -195,7 +195,12 @@ const OutlineEdit: React.FC<OutlineEditProps> = ({
         provider_config_id: currentProviderConfigId || undefined,
       });
 
-      const reader = response.data?.getReader();
+      if (!response.ok) {
+        const error = await response.json().catch(() => ({}));
+        throw new Error((error as { detail?: string }).detail || `请求失败: ${response.status}`);
+      }
+
+      const reader = response.body?.getReader();
       if (!reader) {
         throw new Error('无法读取响应流');
       }
@@ -302,7 +307,12 @@ const OutlineEdit: React.FC<OutlineEditProps> = ({
         outline_data: outlineData,
       });
 
-      const reader = response.data?.getReader();
+      if (!response.ok) {
+        const error = await response.json().catch(() => ({}));
+        throw new Error((error as { detail?: string }).detail || `请求失败: ${response.status}`);
+      }
+
+      const reader = response.body?.getReader();
       if (!reader) {
         throw new Error('无法读取响应流');
       }
