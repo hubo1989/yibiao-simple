@@ -391,9 +391,15 @@ export const documentApi = {
 
 
   // 流式分析文档
-  analyzeDocumentStream: (data: AnalysisRequest) => {
-    return api.post('/api/document/analyze-stream', data, {
-      responseType: 'stream',
+  analyzeDocumentStream: async (data: AnalysisRequest): Promise<Response> => {
+    const token = getStoredToken();
+    return fetch(`${API_BASE_URL}/api/document/analyze-stream`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+      body: JSON.stringify(data),
     });
   },
 

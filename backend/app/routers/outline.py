@@ -249,6 +249,9 @@ async def _create_chapters_from_outline(
     created_chapters = []
 
     for idx, item in enumerate(outline_items):
+        # 防御：AI 返回的 children 中可能混入非 dict 元素（如嵌套 list）
+        if not isinstance(item, dict):
+            continue
         chapter = Chapter(
             project_id=project_id,
             parent_id=parent_id,
@@ -354,26 +357,42 @@ async def generate_project_outline_l1_stream(
             try:
                 full_content = "".join(collected_result)
                 
-                # 清理Markdown代码块格式
-                if "```json" in full_content:
-                    # 提取 ```json 和 ``` 之间的内容
-                    import re
-                    json_match = re.search(r'```json\s*(.*?)\s*```', full_content, re.DOTALL)
-                    if json_match:
-                        full_content = json_match.group(1)
-                elif "```" in full_content:
-                    # 提取 ``` 和 ``` 之间的内容
-                    import re
-                    json_match = re.search(r'```\s*(.*?)\s*```', full_content, re.DOTALL)
-                    if json_match:
-                        full_content = json_match.group(1)
+                # 清理 Markdown 代码块格式（贪婪匹配最外层）
+                import re
+                json_match = re.search(r'```(?:json)?\s*(.*?)\s*```', full_content, re.DOTALL)
+                if json_match:
+                    full_content = json_match.group(1)
                 
-                outline_data = json.loads(full_content.strip())
+                # JSON 解析 + 容错：尝试修复常见的 AI 输出问题
+                full_content = full_content.strip()
+                try:
+                    outline_data = json.loads(full_content)
+                except json.JSONDecodeError:
+                    # 尝试修复：去除尾部多余逗号、截断到最后一个 ] 或 }
+                    cleaned = re.sub(r',\s*([}\]])', r'\1', full_content)
+                    # 找到最后一个完整的 JSON 结构
+                    last_bracket = max(cleaned.rfind(']'), cleaned.rfind('}'))
+                    if last_bracket > 0:
+                        cleaned = cleaned[:last_bracket + 1]
+                    try:
+                        outline_data = json.loads(cleaned)
+                    except json.JSONDecodeError as parse_err:
+                        print(f"L1 目录 JSON 解析失败: {parse_err}\n原文: {full_content[:500]}")
+                        yield f"data: {json.dumps({'error': True, 'message': '目录数据格式异常，请重试'}, ensure_ascii=False)}\n\n"
+                        return
+
                 # AI 可能返回 {"outline": [...]} 或直接返回 [...]
                 if isinstance(outline_data, list):
                     outline_items = outline_data
+                elif isinstance(outline_data, dict):
+                    outline_items = outline_data.get("outline", outline_data.get("chapters", []))
                 else:
-                    outline_items = outline_data.get("outline", [])
+                    print(f"L1 目录返回了非预期类型: {type(outline_data)}")
+                    yield f"data: {json.dumps({'error': True, 'message': '目录数据格式异常，请重试'}, ensure_ascii=False)}\n\n"
+                    return
+
+                # 过滤掉非 dict 元素，只保留有效的章节项
+                outline_items = [item for item in outline_items if isinstance(item, dict)]
 
                 # AI prompt 返回字段名可能是 new_title/chapter_role,
                 # 标准化为 _create_chapters_from_outline 期望的 id/title/description
@@ -579,8 +598,10 @@ async def generate_project_outline_l2l3_stream(
                     )
                     db.add(version)
                     await db.flush()
+                    await db.commit()
 
             except Exception as e:
+                await db.rollback()
                 error_msg = f"生成二三级目录失败: {str(e)}"
                 print(error_msg)
                 yield f"data: {json.dumps({'error': True, 'message': error_msg}, ensure_ascii=False)}\n\n"
@@ -696,9 +717,10 @@ async def generate_project_outline_stream(
                     db.add(version)
 
                     await db.flush()
+                    await db.commit()
 
             except Exception as e:
-                # 保存失败但不影响已返回的流式结果
+                await db.rollback()
                 print(f"保存目录到数据库失败: {e}")
 
         return sse_response(generate())
@@ -977,6 +999,7 @@ async def generate_project_content_stream(
             db.add(version)
 
             await db.flush()
+            await db.commit()
 
         return sse_response(generate())
 
