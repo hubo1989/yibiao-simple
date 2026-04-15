@@ -1131,6 +1131,47 @@ const ContentEdit: React.FC<ContentEditProps> = ({
     }
   };
 
+  const [exportingPdf, setExportingPdf] = useState(false);
+
+  const handleExportPdf = async () => {
+    if (!outlineData) return;
+
+    try {
+      setExportingPdf(true);
+
+      const buildExportOutline = (items: OutlineItem[]): OutlineItem[] => {
+        return items.map(item => {
+          const latestContent = getLatestContent(item);
+          const exportedItem: OutlineItem = {
+            ...item,
+            content: latestContent,
+          };
+          if (item.children && item.children.length > 0) {
+            exportedItem.children = buildExportOutline(item.children);
+          }
+          return exportedItem;
+        });
+      };
+
+      const exportPayload = {
+        project_name: outlineData.project_name || '标书文档',
+        project_overview: outlineData.project_overview,
+        project_id: projectId,
+        outline: buildExportOutline(outlineData.outline),
+      };
+
+      const response = await documentApi.exportPdf(exportPayload);
+      const blob = response.data;
+      saveAs(blob, `${outlineData.project_name || '标书文档'}.pdf`);
+      message.success('PDF 导出成功');
+    } catch (error) {
+      console.error('PDF 导出失败:', error);
+      message.error('PDF 导出失败，请重试');
+    } finally {
+      setExportingPdf(false);
+    }
+  };
+
   if (!outlineData) {
     return (
       <div style={{ maxWidth: 1000, margin: '0 auto' }}>
@@ -1204,6 +1245,14 @@ const ContentEdit: React.FC<ContentEditProps> = ({
                 disabled={isGenerating}
               >
                 导出Word
+              </Button>
+              <Button
+                icon={<DownloadOutlined />}
+                onClick={handleExportPdf}
+                disabled={isGenerating || exportingPdf}
+                loading={exportingPdf}
+              >
+                导出PDF
               </Button>
             </Space>
           }

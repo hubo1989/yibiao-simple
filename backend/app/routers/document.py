@@ -32,9 +32,12 @@ import json
 import io
 import re
 import docx
-from docx.shared import Pt
+from docx.shared import Pt, Cm, Inches, Emu
 from docx.enum.text import WD_ALIGN_PARAGRAPH
-from docx.oxml.ns import qn
+from docx.enum.table import WD_TABLE_ALIGNMENT
+from docx.enum.section import WD_ORIENT
+from docx.oxml.ns import qn, nsdecls
+from docx.oxml import parse_xml, OxmlElement
 from urllib.parse import quote
 
 router = APIRouter(prefix="/api/document", tags=["文档处理"])
@@ -52,6 +55,155 @@ def set_paragraph_font_simsun(paragraph: docx.text.paragraph.Paragraph) -> None:
     """将段落内所有 runs 字体设置为宋体"""
     for run in paragraph.runs:
         set_run_font_simsun(run)
+
+
+def _set_paragraph_format(paragraph, *, line_spacing=1.5, first_line_indent_chars=2, space_before_pt=0, space_after_pt=6, font_size_pt=12):
+    """设置段落格式：行间距、首行缩进、段前段后"""
+    pf = paragraph.paragraph_format
+    pf.line_spacing = line_spacing
+    if first_line_indent_chars and first_line_indent_chars > 0:
+        # 首行缩进 = 字符数 × 字号
+        pf.first_line_indent = Pt(font_size_pt * first_line_indent_chars)
+    if space_before_pt:
+        pf.space_before = Pt(space_before_pt)
+    pf.space_after = Pt(space_after_pt)
+
+
+def _add_toc(doc):
+    """添加自动目录页（使用 Word XML 字段代码）"""
+    toc_heading = doc.add_heading("目  录", level=0)
+    toc_heading.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    set_paragraph_font_simsun(toc_heading)
+    for run in toc_heading.runs:
+        run.font.size = Pt(18)
+
+    # 插入 TOC 字段 —— Word 打开时会自动更新
+    paragraph = doc.add_paragraph()
+    run = paragraph.add_run()
+    fldChar1 = OxmlElement('w:fldChar')
+    fldChar1.set(qn('w:fldCharType'), 'begin')
+    run._r.append(fldChar1)
+
+    instrText = OxmlElement('w:instrText')
+    instrText.set(qn('xml:space'), 'preserve')
+    instrText.text = ' TOC \\o "1-3" \\h \\z \\u '
+    run._r.append(instrText)
+
+    fldChar2 = OxmlElement('w:fldChar')
+    fldChar2.set(qn('w:fldCharType'), 'separate')
+    run._r.append(fldChar2)
+
+    # 占位文本，Word 打开后会替换
+    run2 = paragraph.add_run("（请右键目录 → 更新域 以显示完整目录）")
+    run2.font.size = Pt(10)
+    run2.font.color.rgb = docx.shared.RGBColor(0x99, 0x99, 0x99)
+
+    fldChar3 = OxmlElement('w:fldChar')
+    fldChar3.set(qn('w:fldCharType'), 'end')
+    run2._r.append(fldChar3)
+
+    # 目录页后分页
+    doc.add_page_break()
+
+
+def _setup_header_footer(doc, project_name: str):
+    """设置页眉（项目名称）和页脚（页码）"""
+    section = doc.sections[0]
+    # 页边距
+    section.top_margin = Cm(2.54)
+    section.bottom_margin = Cm(2.54)
+    section.left_margin = Cm(3.17)
+    section.right_margin = Cm(3.17)
+
+    # 页眉：项目名称，右对齐，小五号
+    header = section.header
+    header.is_linked_to_previous = False
+    hp = header.paragraphs[0] if header.paragraphs else header.add_paragraph()
+    hp.text = ""
+    run = hp.add_run(project_name)
+    run.font.size = Pt(9)
+    run.font.name = "宋体"
+    rpr = run._element.rPr
+    if rpr is not None and rpr.rFonts is not None:
+        rpr.rFonts.set(qn("w:eastAsia"), "宋体")
+    run.font.color.rgb = docx.shared.RGBColor(0x99, 0x99, 0x99)
+    hp.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+    # 页眉下边线
+    pBdr = OxmlElement('w:pBdr')
+    bottom = OxmlElement('w:bottom')
+    bottom.set(qn('w:val'), 'single')
+    bottom.set(qn('w:sz'), '4')
+    bottom.set(qn('w:space'), '1')
+    bottom.set(qn('w:color'), 'CCCCCC')
+    pBdr.append(bottom)
+    hp._p.get_or_add_pPr().append(pBdr)
+
+    # 页脚：居中页码
+    footer = section.footer
+    footer.is_linked_to_previous = False
+    fp = footer.paragraphs[0] if footer.paragraphs else footer.add_paragraph()
+    fp.text = ""
+    fp.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    # 页码字段
+    run = fp.add_run()
+    fldChar1 = OxmlElement('w:fldChar')
+    fldChar1.set(qn('w:fldCharType'), 'begin')
+    run._r.append(fldChar1)
+    instrText = OxmlElement('w:instrText')
+    instrText.text = ' PAGE '
+    run._r.append(instrText)
+    fldChar2 = OxmlElement('w:fldChar')
+    fldChar2.set(qn('w:fldCharType'), 'separate')
+    run._r.append(fldChar2)
+    run2 = fp.add_run("1")
+    run2.font.size = Pt(9)
+    fldChar3 = OxmlElement('w:fldChar')
+    fldChar3.set(qn('w:fldCharType'), 'end')
+    run2._r.append(fldChar3)
+
+
+def _add_word_table(doc, rows_text: list[str], add_markdown_runs_fn):
+    """将 Markdown 表格行渲染为真正的 Word 表格"""
+    if not rows_text:
+        return
+
+    # 解析行为单元格
+    parsed_rows = []
+    for row_text in rows_text:
+        cells = [c.strip() for c in row_text.split("|") if c.strip()]
+        if cells:
+            parsed_rows.append(cells)
+
+    if not parsed_rows:
+        return
+
+    max_cols = max(len(r) for r in parsed_rows)
+    table = doc.add_table(rows=len(parsed_rows), cols=max_cols)
+    table.style = 'Table Grid'
+    table.alignment = WD_TABLE_ALIGNMENT.CENTER
+
+    for r_idx, row_cells in enumerate(parsed_rows):
+        row = table.rows[r_idx]
+        for c_idx, cell_text in enumerate(row_cells):
+            if c_idx < max_cols:
+                cell = row.cells[c_idx]
+                # 清空默认段落
+                cell.paragraphs[0].text = ""
+                add_markdown_runs_fn(cell.paragraphs[0], cell_text)
+                # 单元格字号
+                for run in cell.paragraphs[0].runs:
+                    if run.font.size is None:
+                        run.font.size = Pt(10.5)
+                cell.paragraphs[0].paragraph_format.space_after = Pt(2)
+
+        # 首行加灰色底色（表头）
+        if r_idx == 0:
+            for c_idx in range(max_cols):
+                shading = parse_xml(f'<w:shd {nsdecls("w")} w:fill="F2F2F2"/>')
+                row.cells[c_idx]._tc.get_or_add_tcPr().append(shading)
+
+    # 表格后空一行
+    doc.add_paragraph()
 
 
 @router.post("/upload", response_model=FileUploadResponse)
@@ -165,7 +317,7 @@ async def export_word(
     try:
         doc = docx.Document()
 
-        # 统一设置文档的基础字体为宋体，取消普通段落默认加粗
+        # 统一设置文档的基础字体和段落格式
         try:
             styles = doc.styles
             base_styles = ["Normal", "Heading 1", "Heading 2", "Heading 3", "Title"]
@@ -174,33 +326,50 @@ async def export_word(
                     style = styles[style_name]
                     font = style.font
                     font.name = "宋体"
-                    # 设置中文字体
+                    font.size = Pt(12) if style_name == "Normal" else font.size
                     if style._element.rPr is None:
                         style._element._add_rPr()
                     rpr = style._element.rPr
                     rpr.rFonts.set(qn("w:eastAsia"), "宋体")
                     if style_name == "Normal":
                         font.bold = False
+                        # 全局行间距 1.5 倍
+                        style.paragraph_format.line_spacing = 1.5
         except Exception:
-            # 字体设置失败不影响文档生成，忽略
             pass
 
-        # AI 生成声明
-        p = doc.add_paragraph()
-        run = p.add_run("内容由AI生成")
-        run.italic = True
-        run.font.size = Pt(9)
-        set_run_font_simsun(run)
-        p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-
-        # 文档标题
         title = request.project_name or "投标技术文件"
+
+        # 页眉页脚 + 页边距
+        _setup_header_footer(doc, title)
+
+        # 封面标题
+        # 留白
+        for _ in range(6):
+            doc.add_paragraph()
         title_p = doc.add_paragraph()
         title_run = title_p.add_run(title)
         title_run.bold = True
-        title_run.font.size = Pt(16)
+        title_run.font.size = Pt(22)
         set_run_font_simsun(title_run)
         title_p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        title_p.paragraph_format.space_after = Pt(24)
+
+        # 封面副标题（项目概述摘要，如果有的话取前 100 字）
+        if request.project_overview:
+            subtitle_text = request.project_overview[:100] + ("..." if len(request.project_overview) > 100 else "")
+            sub_p = doc.add_paragraph()
+            sub_run = sub_p.add_run(subtitle_text)
+            sub_run.font.size = Pt(12)
+            sub_run.font.color.rgb = docx.shared.RGBColor(0x66, 0x66, 0x66)
+            set_run_font_simsun(sub_run)
+            sub_p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+
+        # 封面后分页
+        doc.add_page_break()
+
+        # 自动目录页
+        _add_toc(doc)
 
         # 项目概述
         if request.project_overview:
@@ -209,8 +378,7 @@ async def export_word(
             set_paragraph_font_simsun(heading)
             overview_p = doc.add_paragraph(request.project_overview)
             set_paragraph_font_simsun(overview_p)
-            overview_p_format = overview_p.paragraph_format
-            overview_p_format.space_after = Pt(12)
+            _set_paragraph_format(overview_p, space_after_pt=12)
 
         # 简单的 Markdown 段落解析：支持标题、列表、表格和基础加粗/斜体
         def add_markdown_runs(para: docx.text.paragraph.Paragraph, text: str) -> None:
@@ -241,7 +409,7 @@ async def export_word(
             """将一段 Markdown 文本解析为一个普通段落，保留加粗/斜体效果"""
             para = doc.add_paragraph()
             add_markdown_runs(para, text)
-            para.paragraph_format.space_after = Pt(6)
+            _set_paragraph_format(para)
 
         def parse_markdown_blocks(content: str):
             """
@@ -356,20 +524,19 @@ async def export_word(
                     for item_kind, num_str, text in items:
                         p = doc.add_paragraph()
                         if item_kind == "unordered":
-                            # 使用"• "模拟项目符号
                             run = p.add_run("• ")
                             set_run_font_simsun(run)
                         else:
-                            # 有序列表：输出 "1. " 这样的前缀
                             prefix = f"{num_str}."
                             run = p.add_run(prefix + " ")
                             set_run_font_simsun(run)
-                        # 紧跟在同一段落中追加列表文本
                         add_markdown_runs(p, text)
+                        # 列表项：左缩进、无首行缩进
+                        _set_paragraph_format(p, first_line_indent_chars=0, space_after_pt=3)
+                        p.paragraph_format.left_indent = Cm(0.75)
                 elif kind == "table":
                     rows = block[1]
-                    for row in rows:
-                        add_markdown_paragraph(row)
+                    _add_word_table(doc, rows, add_markdown_runs)
                 elif kind == "heading":
                     _, level, text = block
                     heading = doc.add_heading(text, level=level)
@@ -468,6 +635,71 @@ async def export_word(
         print(logger_msg)
         traceback.print_exc()
         raise HTTPException(status_code=500, detail="导出Word失败，请稍后重试")
+
+
+@router.post("/export-pdf")
+async def export_pdf(
+    request: WordExportRequest,
+    current_user: Annotated[User, Depends(require_editor)] = None,
+    db: Annotated[AsyncSession, Depends(get_db)] = None,
+):
+    """先生成 Word 文档，再通过 LibreOffice 转换为 PDF"""
+    import tempfile
+    import subprocess
+    import os
+
+    # 复用 export_word 的文档生成逻辑
+    word_response = await export_word(request, current_user, db)
+
+    # 读取生成的 Word 文档内容
+    word_bytes = b""
+    async for chunk in word_response.body_iterator:
+        if isinstance(chunk, bytes):
+            word_bytes += chunk
+        else:
+            word_bytes += chunk.encode()
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        docx_path = os.path.join(tmpdir, "output.docx")
+        pdf_path = os.path.join(tmpdir, "output.pdf")
+
+        with open(docx_path, "wb") as f:
+            f.write(word_bytes)
+
+        # 使用 LibreOffice headless 转换
+        try:
+            result = subprocess.run(
+                ["soffice", "--headless", "--convert-to", "pdf", "--outdir", tmpdir, docx_path],
+                capture_output=True,
+                text=True,
+                timeout=60,
+            )
+            if result.returncode != 0:
+                raise RuntimeError(f"LibreOffice 转换失败: {result.stderr}")
+        except FileNotFoundError:
+            # 回退到 docx2pdf
+            try:
+                from docx2pdf import convert
+                convert(docx_path, pdf_path)
+            except Exception as e2:
+                raise HTTPException(status_code=500, detail=f"PDF 转换工具不可用: {e2}")
+
+        if not os.path.exists(pdf_path):
+            raise HTTPException(status_code=500, detail="PDF 转换失败，未生成输出文件")
+
+        with open(pdf_path, "rb") as f:
+            pdf_bytes = f.read()
+
+    buffer = io.BytesIO(pdf_bytes)
+    filename = f"{request.project_name or '标书文档'}.pdf"
+    encoded_filename = quote(filename)
+    content_disposition = f"attachment; filename*=UTF-8''{encoded_filename}"
+
+    return StreamingResponse(
+        buffer,
+        media_type="application/pdf",
+        headers={"Content-Disposition": content_disposition},
+    )
 
 
 # ============ 项目上下文版本的接口 ============

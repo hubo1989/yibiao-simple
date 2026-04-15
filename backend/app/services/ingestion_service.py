@@ -215,6 +215,11 @@ class HistoricalBidIngestionService:
 
     async def _parse_pdf(self, file_path: str) -> list[tuple[str, list]]:
         """解析 PDF 文件，返回每页的 (文本, 图片列表)"""
+        import asyncio
+        return await asyncio.to_thread(self._parse_pdf_sync, file_path)
+
+    def _parse_pdf_sync(self, file_path: str) -> list[tuple[str, list]]:
+        """同步解析 PDF"""
         try:
             import fitz  # PyMuPDF
         except ImportError:
@@ -228,7 +233,6 @@ class HistoricalBidIngestionService:
             page = doc[page_num]
             text = page.get_text()
 
-            # 提取图片
             images = []
             for img in page.get_images():
                 xref = img[0]
@@ -245,14 +249,85 @@ class HistoricalBidIngestionService:
         return page_contents
 
     async def _parse_docx(self, file_path: str) -> list[tuple[str, list]]:
-        """解析 DOCX 文件"""
+        """解析 DOCX 文件，按大纲级别分段，提取图片"""
+        import asyncio
+        return await asyncio.to_thread(self._parse_docx_sync, file_path)
+
+    def _parse_docx_sync(self, file_path: str) -> list[tuple[str, list]]:
+        """同步解析 DOCX，按标题拆分为逻辑分段"""
         from docx import Document
+        from docx.opc.constants import RELATIONSHIP_TYPE as RT
+        import zipfile
+        import os
 
         doc = Document(file_path)
 
-        # 简单处理：将段落作为一页
-        text = "\n".join([p.text for p in doc.paragraphs if p.text.strip()])
-        return [(text, [])]
+        # 提取所有图片（通过 rels）
+        image_map: dict[str, dict] = {}
+        try:
+            with zipfile.ZipFile(file_path, 'r') as zf:
+                for rel in doc.part.rels.values():
+                    if "image" in rel.reltype:
+                        target = rel.target_ref
+                        # target 可能是 "media/image1.png" 或 "word/media/image1.png"
+                        for prefix in [f"word/{target}", target]:
+                            if prefix in zf.namelist():
+                                data = zf.read(prefix)
+                                ext = os.path.splitext(target)[1].lstrip('.')
+                                image_map[rel.rId] = {
+                                    "ext": ext or "png",
+                                    "data": data,
+                                    "xref": rel.rId,
+                                }
+                                break
+        except Exception as e:
+            logger.warning(f"DOCX 图片提取失败: {e}")
+
+        # 按标题分段
+        sections: list[tuple[str, list]] = []
+        current_lines: list[str] = []
+        current_images: list[dict] = []
+
+        def _flush_section():
+            nonlocal current_lines, current_images
+            text = "\n".join(current_lines).strip()
+            if text:
+                sections.append((text, current_images))
+            current_lines = []
+            current_images = []
+
+        for para in doc.paragraphs:
+            # 检查是否是标题段落（Heading 样式）
+            style_name = para.style.name if para.style else ""
+            is_heading = style_name.startswith("Heading") or style_name.startswith("标题")
+
+            if is_heading and current_lines:
+                _flush_section()
+
+            if para.text.strip():
+                current_lines.append(para.text)
+
+            # 检查段落中的图片引用
+            for run in para.runs:
+                for drawing in run._element.findall('.//{http://schemas.openxmlformats.org/wordprocessingml/2006/main}drawing'):
+                    # 从 drawing 中提取 blip rId
+                    blips = drawing.findall('.//{http://schemas.openxmlformats.org/drawingml/2006/main}blip')
+                    for blip in blips:
+                        embed = blip.get('{http://schemas.openxmlformats.org/officeDocument/2006/relationships}embed')
+                        if embed and embed in image_map:
+                            current_images.append(image_map[embed])
+
+        # 最后一段
+        _flush_section()
+
+        # 如果没有标题分段，退化为单段
+        if not sections:
+            all_text = "\n".join([p.text for p in doc.paragraphs if p.text.strip()])
+            all_imgs = list(image_map.values())
+            if all_text:
+                sections = [(all_text, all_imgs)]
+
+        return sections
 
     def _rule_match(self, text: str) -> dict[MaterialCategory, float]:
         """规则匹配，返回类别和置信度"""

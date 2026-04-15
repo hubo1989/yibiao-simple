@@ -449,6 +449,13 @@ export const documentApi = {
       responseType: 'blob',
     });
   },
+
+  exportPdf: (data: { project_name: string; project_overview?: string; project_id?: string; outline: OutlineItem[] }) => {
+    return api.post('/api/document/export-pdf', data, {
+      responseType: 'blob',
+      timeout: 120000,  // PDF 转换可能较慢
+    });
+  },
 };
 
 export const materialApi = {
