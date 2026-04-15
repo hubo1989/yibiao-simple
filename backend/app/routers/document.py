@@ -43,12 +43,48 @@ from urllib.parse import quote
 router = APIRouter(prefix="/api/document", tags=["文档处理"])
 
 
+# ============ GB/T 9704 标准排版常量 ============
+# 字号对照表（磅值）
+FONT_SIZE_CHU = Pt(42)    # 初号
+FONT_SIZE_XIAO_CHU = Pt(36)  # 小初
+FONT_SIZE_YI = Pt(26)     # 一号
+FONT_SIZE_XIAO_YI = Pt(24)   # 小一
+FONT_SIZE_ER = Pt(22)     # 二号
+FONT_SIZE_XIAO_ER = Pt(18)   # 小二
+FONT_SIZE_SAN = Pt(16)    # 三号
+FONT_SIZE_XIAO_SAN = Pt(15)  # 小三
+FONT_SIZE_SI = Pt(14)     # 四号
+FONT_SIZE_XIAO_SI = Pt(12)   # 小四号
+FONT_SIZE_WU = Pt(10.5)   # 五号
+FONT_SIZE_XIAO_WU = Pt(9)    # 小五号
+
+LINE_SPACING_FIXED = Pt(28)  # 固定行间距 28 磅（GB/T 9704 标准）
+
+FONT_HEITI = "黑体"       # 标题字体
+FONT_FANGSONG = "仿宋"    # 正文字体
+FONT_SONGTI = "宋体"      # 备用字体
+
+
+def _set_run_font(run, *, font_name=FONT_FANGSONG, font_size=None, bold=False):
+    """设置 run 的字体（中西文统一）"""
+    run.font.name = font_name
+    if font_size:
+        run.font.size = font_size
+    run.bold = bold
+    # 确保 rPr 存在
+    if run._element.rPr is None:
+        run._element._add_rPr()
+    rpr = run._element.rPr
+    # 设置 eastAsia 字体
+    if rpr.rFonts is None:
+        rFonts = OxmlElement('w:rFonts')
+        rpr.insert(0, rFonts)
+    rpr.rFonts.set(qn("w:eastAsia"), font_name)
+
+
 def set_run_font_simsun(run: docx.text.run.Run) -> None:
-    """统一将 run 字体设置为宋体（包含 EastAsia 字体设置）"""
-    run.font.name = "宋体"
-    r = run._element.rPr
-    if r is not None and r.rFonts is not None:
-        r.rFonts.set(qn("w:eastAsia"), "宋体")
+    """兼容旧调用：设置宋体"""
+    _set_run_font(run, font_name=FONT_SONGTI)
 
 
 def set_paragraph_font_simsun(paragraph: docx.text.paragraph.Paragraph) -> None:
@@ -57,27 +93,37 @@ def set_paragraph_font_simsun(paragraph: docx.text.paragraph.Paragraph) -> None:
         set_run_font_simsun(run)
 
 
-def _set_paragraph_format(paragraph, *, line_spacing=1.5, first_line_indent_chars=2, space_before_pt=0, space_after_pt=6, font_size_pt=12):
-    """设置段落格式：行间距、首行缩进、段前段后"""
+def _set_paragraph_format(paragraph, *, line_spacing_pt=28, first_line_indent_chars=2, space_before_pt=0, space_after_pt=0, font_size_pt=12):
+    """设置段落格式：固定行间距、首行缩进、段前段后（GB/T 9704 标准）"""
     pf = paragraph.paragraph_format
-    pf.line_spacing = line_spacing
+    # 固定值行间距
+    from docx.enum.text import WD_LINE_SPACING
+    pf.line_spacing_rule = WD_LINE_SPACING.EXACTLY
+    pf.line_spacing = Pt(line_spacing_pt)
     if first_line_indent_chars and first_line_indent_chars > 0:
-        # 首行缩进 = 字符数 × 字号
         pf.first_line_indent = Pt(font_size_pt * first_line_indent_chars)
+    else:
+        pf.first_line_indent = Pt(0)
     if space_before_pt:
         pf.space_before = Pt(space_before_pt)
+    else:
+        pf.space_before = Pt(0)
     pf.space_after = Pt(space_after_pt)
 
 
 def _add_toc(doc):
-    """添加自动目录页（使用 Word XML 字段代码）"""
-    toc_heading = doc.add_heading("目  录", level=0)
+    """添加自动目录页（GB/T 9704 样式：前导符点线 + 页码右对齐 + 层级缩进）"""
+    # 目录标题：黑体小二号，居中
+    toc_heading = doc.add_paragraph()
     toc_heading.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    set_paragraph_font_simsun(toc_heading)
-    for run in toc_heading.runs:
-        run.font.size = Pt(18)
+    run = toc_heading.add_run("目  录")
+    _set_run_font(run, font_name=FONT_HEITI, font_size=FONT_SIZE_XIAO_ER, bold=True)
+    toc_heading.paragraph_format.space_after = Pt(12)
 
-    # 插入 TOC 字段 —— Word 打开时会自动更新
+    # 创建 TOC 样式（TOC 1 / TOC 2 / TOC 3）带前导符和右对齐制表位
+    _ensure_toc_styles(doc)
+
+    # 插入 TOC 字段 —— Word 打开时按 Ctrl+A → F9 更新
     paragraph = doc.add_paragraph()
     run = paragraph.add_run()
     fldChar1 = OxmlElement('w:fldChar')
@@ -86,6 +132,7 @@ def _add_toc(doc):
 
     instrText = OxmlElement('w:instrText')
     instrText.set(qn('xml:space'), 'preserve')
+    # \\o "1-3"：收录 1-3 级标题 \\h：超链接 \\z：隐藏页码标签 \\u：使用大纲级别
     instrText.text = ' TOC \\o "1-3" \\h \\z \\u '
     run._r.append(instrText)
 
@@ -93,73 +140,139 @@ def _add_toc(doc):
     fldChar2.set(qn('w:fldCharType'), 'separate')
     run._r.append(fldChar2)
 
-    # 占位文本，Word 打开后会替换
-    run2 = paragraph.add_run("（请右键目录 → 更新域 以显示完整目录）")
-    run2.font.size = Pt(10)
+    # 占位提示
+    run2 = paragraph.add_run("（打开 Word 后按 Ctrl+A → F9 更新目录）")
+    _set_run_font(run2, font_name=FONT_FANGSONG, font_size=FONT_SIZE_WU)
     run2.font.color.rgb = docx.shared.RGBColor(0x99, 0x99, 0x99)
 
     fldChar3 = OxmlElement('w:fldChar')
     fldChar3.set(qn('w:fldCharType'), 'end')
     run2._r.append(fldChar3)
 
-    # 目录页后分页
     doc.add_page_break()
 
 
-def _setup_header_footer(doc, project_name: str):
-    """设置页眉（项目名称）和页脚（页码）"""
+def _ensure_toc_styles(doc):
+    """确保 TOC 1/2/3 样式存在且带前导符点线、页码右对齐制表位"""
     section = doc.sections[0]
-    # 页边距
-    section.top_margin = Cm(2.54)
-    section.bottom_margin = Cm(2.54)
-    section.left_margin = Cm(3.17)
-    section.right_margin = Cm(3.17)
+    # 计算右边界位置（页面宽度 - 左右页边距）
+    page_width = section.page_width or Cm(21.0)
+    left_margin = section.left_margin or Cm(3.17)
+    right_margin = section.right_margin or Cm(3.17)
+    tab_pos = page_width - left_margin - right_margin
 
-    # 页眉：项目名称，右对齐，小五号
+    toc_configs = [
+        ("TOC 1", FONT_SIZE_SI, Cm(0), True),     # 一级：四号，无缩进，加粗
+        ("TOC 2", FONT_SIZE_XIAO_SI, Cm(0.75), False),  # 二级：小四，缩进 0.75cm
+        ("TOC 3", FONT_SIZE_XIAO_SI, Cm(1.5), False),   # 三级：小四，缩进 1.5cm
+    ]
+
+    for style_name, font_size, indent, bold in toc_configs:
+        try:
+            if style_name in doc.styles:
+                style = doc.styles[style_name]
+            else:
+                style = doc.styles.add_style(style_name, docx.enum.style.WD_STYLE_TYPE.PARAGRAPH)
+
+            style.font.name = FONT_FANGSONG
+            style.font.size = font_size
+            style.font.bold = bold
+            if style._element.rPr is None:
+                style._element._add_rPr()
+            style._element.rPr.rFonts.set(qn("w:eastAsia"), FONT_FANGSONG)
+
+            pf = style.paragraph_format
+            pf.left_indent = indent
+            pf.space_before = Pt(2)
+            pf.space_after = Pt(2)
+
+            # 添加右对齐制表位 + 前导符点线
+            pPr = style._element.get_or_add_pPr()
+            # 移除已有 tabs
+            for old_tabs in pPr.findall(qn('w:tabs')):
+                pPr.remove(old_tabs)
+            tabs = OxmlElement('w:tabs')
+            tab = OxmlElement('w:tab')
+            tab.set(qn('w:val'), 'right')
+            tab.set(qn('w:leader'), 'dot')
+            tab.set(qn('w:pos'), str(int(tab_pos.emu / 635)))  # EMU → twips
+            tabs.append(tab)
+            pPr.append(tabs)
+
+        except Exception:
+            pass  # 样式设置失败不影响文档生成
+
+
+def _setup_header_footer(doc, project_name: str):
+    """设置页眉（项目名称）和页脚（第X页 共Y页）—— GB/T 9704 标准"""
+    section = doc.sections[0]
+    # A4 页边距（GB/T 9704 推荐）
+    section.page_width = Cm(21.0)
+    section.page_height = Cm(29.7)
+    section.top_margin = Cm(3.7)   # 上边距 37mm
+    section.bottom_margin = Cm(3.5)  # 下边距 35mm
+    section.left_margin = Cm(2.8)   # 左边距 28mm
+    section.right_margin = Cm(2.6)  # 右边距 26mm
+
+    # 页眉：项目名称，居中，仿宋小五号，底部单线
     header = section.header
     header.is_linked_to_previous = False
     hp = header.paragraphs[0] if header.paragraphs else header.add_paragraph()
     hp.text = ""
     run = hp.add_run(project_name)
-    run.font.size = Pt(9)
-    run.font.name = "宋体"
-    rpr = run._element.rPr
-    if rpr is not None and rpr.rFonts is not None:
-        rpr.rFonts.set(qn("w:eastAsia"), "宋体")
-    run.font.color.rgb = docx.shared.RGBColor(0x99, 0x99, 0x99)
-    hp.alignment = WD_ALIGN_PARAGRAPH.RIGHT
+    _set_run_font(run, font_name=FONT_FANGSONG, font_size=FONT_SIZE_XIAO_WU)
+    run.font.color.rgb = docx.shared.RGBColor(0x66, 0x66, 0x66)
+    hp.alignment = WD_ALIGN_PARAGRAPH.CENTER
     # 页眉下边线
     pBdr = OxmlElement('w:pBdr')
     bottom = OxmlElement('w:bottom')
     bottom.set(qn('w:val'), 'single')
-    bottom.set(qn('w:sz'), '4')
+    bottom.set(qn('w:sz'), '6')
     bottom.set(qn('w:space'), '1')
-    bottom.set(qn('w:color'), 'CCCCCC')
+    bottom.set(qn('w:color'), '000000')
     pBdr.append(bottom)
     hp._p.get_or_add_pPr().append(pBdr)
 
-    # 页脚：居中页码
+    # 页脚：居中 "第 X 页 共 Y 页"，仿宋小五号
     footer = section.footer
     footer.is_linked_to_previous = False
     fp = footer.paragraphs[0] if footer.paragraphs else footer.add_paragraph()
     fp.text = ""
     fp.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    # 页码字段
-    run = fp.add_run()
-    fldChar1 = OxmlElement('w:fldChar')
-    fldChar1.set(qn('w:fldCharType'), 'begin')
-    run._r.append(fldChar1)
-    instrText = OxmlElement('w:instrText')
-    instrText.text = ' PAGE '
-    run._r.append(instrText)
-    fldChar2 = OxmlElement('w:fldChar')
-    fldChar2.set(qn('w:fldCharType'), 'separate')
-    run._r.append(fldChar2)
-    run2 = fp.add_run("1")
-    run2.font.size = Pt(9)
-    fldChar3 = OxmlElement('w:fldChar')
-    fldChar3.set(qn('w:fldCharType'), 'end')
-    run2._r.append(fldChar3)
+
+    def _add_field(para, field_code, default_text="1"):
+        """插入 Word 字段"""
+        run = para.add_run()
+        _set_run_font(run, font_name=FONT_FANGSONG, font_size=FONT_SIZE_XIAO_WU)
+        fldChar1 = OxmlElement('w:fldChar')
+        fldChar1.set(qn('w:fldCharType'), 'begin')
+        run._r.append(fldChar1)
+        instrText = OxmlElement('w:instrText')
+        instrText.set(qn('xml:space'), 'preserve')
+        instrText.text = field_code
+        run._r.append(instrText)
+        fldChar2 = OxmlElement('w:fldChar')
+        fldChar2.set(qn('w:fldCharType'), 'separate')
+        run._r.append(fldChar2)
+        run2 = para.add_run(default_text)
+        _set_run_font(run2, font_name=FONT_FANGSONG, font_size=FONT_SIZE_XIAO_WU)
+        fldChar3 = OxmlElement('w:fldChar')
+        fldChar3.set(qn('w:fldCharType'), 'end')
+        run2._r.append(fldChar3)
+
+    # "第 "
+    r = fp.add_run("第 ")
+    _set_run_font(r, font_name=FONT_FANGSONG, font_size=FONT_SIZE_XIAO_WU)
+    # PAGE 字段
+    _add_field(fp, ' PAGE ')
+    # " 页 共 "
+    r = fp.add_run(" 页  共 ")
+    _set_run_font(r, font_name=FONT_FANGSONG, font_size=FONT_SIZE_XIAO_WU)
+    # NUMPAGES 字段
+    _add_field(fp, ' NUMPAGES ')
+    # " 页"
+    r = fp.add_run(" 页")
+    _set_run_font(r, font_name=FONT_FANGSONG, font_size=FONT_SIZE_XIAO_WU)
 
 
 def _add_word_table(doc, rows_text: list[str], add_markdown_runs_fn):
@@ -190,10 +303,9 @@ def _add_word_table(doc, rows_text: list[str], add_markdown_runs_fn):
                 # 清空默认段落
                 cell.paragraphs[0].text = ""
                 add_markdown_runs_fn(cell.paragraphs[0], cell_text)
-                # 单元格字号
+                # 单元格字号：仿宋五号
                 for run in cell.paragraphs[0].runs:
-                    if run.font.size is None:
-                        run.font.size = Pt(10.5)
+                    _set_run_font(run, font_name=FONT_FANGSONG, font_size=FONT_SIZE_WU)
                 cell.paragraphs[0].paragraph_format.space_after = Pt(2)
 
         # 首行加灰色底色（表头）
@@ -316,25 +428,67 @@ async def export_word(
     """根据目录数据导出Word文档"""
     try:
         doc = docx.Document()
+        from docx.enum.text import WD_LINE_SPACING
 
-        # 统一设置文档的基础字体和段落格式
+        # ============ GB/T 9704 样式初始化 ============
         try:
             styles = doc.styles
-            base_styles = ["Normal", "Heading 1", "Heading 2", "Heading 3", "Title"]
-            for style_name in base_styles:
-                if style_name in styles:
-                    style = styles[style_name]
-                    font = style.font
-                    font.name = "宋体"
-                    font.size = Pt(12) if style_name == "Normal" else font.size
-                    if style._element.rPr is None:
-                        style._element._add_rPr()
-                    rpr = style._element.rPr
-                    rpr.rFonts.set(qn("w:eastAsia"), "宋体")
-                    if style_name == "Normal":
-                        font.bold = False
-                        # 全局行间距 1.5 倍
-                        style.paragraph_format.line_spacing = 1.5
+            # Normal（正文）：仿宋小四号，固定行间距 28 磅
+            if "Normal" in styles:
+                style = styles["Normal"]
+                style.font.name = FONT_FANGSONG
+                style.font.size = FONT_SIZE_XIAO_SI
+                style.font.bold = False
+                if style._element.rPr is None:
+                    style._element._add_rPr()
+                style._element.rPr.rFonts.set(qn("w:eastAsia"), FONT_FANGSONG)
+                style.paragraph_format.line_spacing_rule = WD_LINE_SPACING.EXACTLY
+                style.paragraph_format.line_spacing = LINE_SPACING_FIXED
+
+            # Heading 1（一级标题）：黑体三号，段前 24 磅段后 12 磅
+            if "Heading 1" in styles:
+                h1 = styles["Heading 1"]
+                h1.font.name = FONT_HEITI
+                h1.font.size = FONT_SIZE_SAN
+                h1.font.bold = True
+                h1.font.color.rgb = docx.shared.RGBColor(0, 0, 0)
+                if h1._element.rPr is None:
+                    h1._element._add_rPr()
+                h1._element.rPr.rFonts.set(qn("w:eastAsia"), FONT_HEITI)
+                h1.paragraph_format.space_before = Pt(24)
+                h1.paragraph_format.space_after = Pt(12)
+                h1.paragraph_format.line_spacing_rule = WD_LINE_SPACING.EXACTLY
+                h1.paragraph_format.line_spacing = Pt(32)
+
+            # Heading 2（二级标题）：黑体四号，段前 12 磅段后 6 磅
+            if "Heading 2" in styles:
+                h2 = styles["Heading 2"]
+                h2.font.name = FONT_HEITI
+                h2.font.size = FONT_SIZE_SI
+                h2.font.bold = True
+                h2.font.color.rgb = docx.shared.RGBColor(0, 0, 0)
+                if h2._element.rPr is None:
+                    h2._element._add_rPr()
+                h2._element.rPr.rFonts.set(qn("w:eastAsia"), FONT_HEITI)
+                h2.paragraph_format.space_before = Pt(12)
+                h2.paragraph_format.space_after = Pt(6)
+                h2.paragraph_format.line_spacing_rule = WD_LINE_SPACING.EXACTLY
+                h2.paragraph_format.line_spacing = Pt(30)
+
+            # Heading 3（三级标题）：黑体小四号，段前 6 磅段后 3 磅
+            if "Heading 3" in styles:
+                h3 = styles["Heading 3"]
+                h3.font.name = FONT_HEITI
+                h3.font.size = FONT_SIZE_XIAO_SI
+                h3.font.bold = True
+                h3.font.color.rgb = docx.shared.RGBColor(0, 0, 0)
+                if h3._element.rPr is None:
+                    h3._element._add_rPr()
+                h3._element.rPr.rFonts.set(qn("w:eastAsia"), FONT_HEITI)
+                h3.paragraph_format.space_before = Pt(6)
+                h3.paragraph_format.space_after = Pt(3)
+                h3.paragraph_format.line_spacing_rule = WD_LINE_SPACING.EXACTLY
+                h3.paragraph_format.line_spacing = Pt(28)
         except Exception:
             pass
 
@@ -343,27 +497,39 @@ async def export_word(
         # 页眉页脚 + 页边距
         _setup_header_footer(doc, title)
 
-        # 封面标题
-        # 留白
-        for _ in range(6):
+        # ============ 封面页 ============
+        for _ in range(4):
             doc.add_paragraph()
-        title_p = doc.add_paragraph()
-        title_run = title_p.add_run(title)
-        title_run.bold = True
-        title_run.font.size = Pt(22)
-        set_run_font_simsun(title_run)
-        title_p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-        title_p.paragraph_format.space_after = Pt(24)
 
-        # 封面副标题（项目概述摘要，如果有的话取前 100 字）
-        if request.project_overview:
-            subtitle_text = request.project_overview[:100] + ("..." if len(request.project_overview) > 100 else "")
-            sub_p = doc.add_paragraph()
-            sub_run = sub_p.add_run(subtitle_text)
-            sub_run.font.size = Pt(12)
-            sub_run.font.color.rgb = docx.shared.RGBColor(0x66, 0x66, 0x66)
-            set_run_font_simsun(sub_run)
-            sub_p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        # 主标题：黑体二号，居中
+        title_p = doc.add_paragraph()
+        title_p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        title_run = title_p.add_run(title)
+        _set_run_font(title_run, font_name=FONT_HEITI, font_size=FONT_SIZE_ER, bold=True)
+        title_p.paragraph_format.space_after = Pt(6)
+
+        # 副标题：仿宋三号，居中
+        sub_p = doc.add_paragraph()
+        sub_p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        sub_run = sub_p.add_run("投标技术文件")
+        _set_run_font(sub_run, font_name=FONT_FANGSONG, font_size=FONT_SIZE_SAN)
+        sub_p.paragraph_format.space_after = Pt(48)
+
+        # 封面信息表：投标人 / 日期 / 编号
+        import datetime
+        cover_info = [
+            ("投标人", "（请填写投标单位名称）"),
+            ("编制日期", datetime.date.today().strftime("%Y 年 %m 月 %d 日")),
+        ]
+        for label, value in cover_info:
+            p = doc.add_paragraph()
+            p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            r1 = p.add_run(f"{label}：")
+            _set_run_font(r1, font_name=FONT_HEITI, font_size=FONT_SIZE_SI)
+            r2 = p.add_run(value)
+            _set_run_font(r2, font_name=FONT_FANGSONG, font_size=FONT_SIZE_SI)
+            p.paragraph_format.space_before = Pt(6)
+            p.paragraph_format.space_after = Pt(6)
 
         # 封面后分页
         doc.add_page_break()
@@ -375,10 +541,10 @@ async def export_word(
         if request.project_overview:
             heading = doc.add_heading("项目概述", level=1)
             heading.alignment = WD_ALIGN_PARAGRAPH.LEFT
-            set_paragraph_font_simsun(heading)
             overview_p = doc.add_paragraph(request.project_overview)
-            set_paragraph_font_simsun(overview_p)
-            _set_paragraph_format(overview_p, space_after_pt=12)
+            for run in overview_p.runs:
+                _set_run_font(run, font_name=FONT_FANGSONG, font_size=FONT_SIZE_XIAO_SI)
+            _set_paragraph_format(overview_p)
 
         # 简单的 Markdown 段落解析：支持标题、列表、表格和基础加粗/斜体
         def add_markdown_runs(para: docx.text.paragraph.Paragraph, text: str) -> None:
@@ -402,8 +568,8 @@ async def export_word(
                     run.text = part[1:-1]
                 else:
                     run.text = part
-                # 确保字体为宋体
-                set_run_font_simsun(run)
+                # 正文字体：仿宋小四号
+                _set_run_font(run, font_name=FONT_FANGSONG, font_size=FONT_SIZE_XIAO_SI)
 
         def add_markdown_paragraph(text: str) -> None:
             """将一段 Markdown 文本解析为一个普通段落，保留加粗/斜体效果"""
@@ -525,23 +691,23 @@ async def export_word(
                         p = doc.add_paragraph()
                         if item_kind == "unordered":
                             run = p.add_run("• ")
-                            set_run_font_simsun(run)
+                            _set_run_font(run, font_name=FONT_FANGSONG, font_size=FONT_SIZE_XIAO_SI)
                         else:
                             prefix = f"{num_str}."
                             run = p.add_run(prefix + " ")
-                            set_run_font_simsun(run)
+                            _set_run_font(run, font_name=FONT_FANGSONG, font_size=FONT_SIZE_XIAO_SI)
                         add_markdown_runs(p, text)
                         # 列表项：左缩进、无首行缩进
-                        _set_paragraph_format(p, first_line_indent_chars=0, space_after_pt=3)
+                        _set_paragraph_format(p, first_line_indent_chars=0)
                         p.paragraph_format.left_indent = Cm(0.75)
                 elif kind == "table":
                     rows = block[1]
                     _add_word_table(doc, rows, add_markdown_runs)
                 elif kind == "heading":
                     _, level, text = block
-                    heading = doc.add_heading(text, level=level)
+                    heading = doc.add_heading(text, level=min(level, 3))
                     heading.alignment = WD_ALIGN_PARAGRAPH.LEFT
-                    set_paragraph_font_simsun(heading)
+                    # 标题字体已由样式定义（黑体），无需额外设置
                 elif kind == "paragraph":
                     _, text = block
                     add_markdown_paragraph(text)
@@ -577,23 +743,16 @@ async def export_word(
         # 递归构建文档内容（章节和内容）
         def add_outline_items(items, level: int = 1):
             for item in items:
-                # 章节标题
+                # 章节标题：使用 Heading 样式（黑体，字号由样式定义）
                 if level <= 3:
                     heading = doc.add_heading(f"{item.id} {item.title}", level=level)
                     heading.alignment = WD_ALIGN_PARAGRAPH.LEFT
-                    for hr in heading.runs:
-                        hr.font.name = "宋体"
-                        rr = hr._element.rPr
-                        if rr is not None and rr.rFonts is not None:
-                            rr.rFonts.set(qn("w:eastAsia"), "宋体")
+                    # 标题字体已由 Heading 样式统一设置为黑体
                 else:
+                    # 四级及以下：黑体小四号加粗
                     para = doc.add_paragraph()
                     run = para.add_run(f"{item.id} {item.title}")
-                    run.bold = True
-                    run.font.name = "宋体"
-                    rr = run._element.rPr
-                    if rr is not None and rr.rFonts is not None:
-                        rr.rFonts.set(qn("w:eastAsia"), "宋体")
+                    _set_run_font(run, font_name=FONT_HEITI, font_size=FONT_SIZE_XIAO_SI, bold=True)
                     para.paragraph_format.space_before = Pt(6)
                     para.paragraph_format.space_after = Pt(3)
 
