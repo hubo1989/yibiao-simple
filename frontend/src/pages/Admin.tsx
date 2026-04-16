@@ -302,7 +302,7 @@ const Admin: React.FC = () => {
       resetUserForm();
       loadUsers();
     } catch (err: any) {
-      alert(err.response?.data?.detail || '创建用户失败');
+      message.error(err.response?.data?.detail || '创建用户失败');
     } finally {
       setSaving(false);
     }
@@ -324,7 +324,7 @@ const Admin: React.FC = () => {
       resetUserForm();
       loadUsers();
     } catch (err: any) {
-      alert(err.response?.data?.detail || '更新用户失败');
+      message.error(err.response?.data?.detail || '更新用户失败');
     } finally {
       setSaving(false);
     }
@@ -332,16 +332,17 @@ const Admin: React.FC = () => {
 
   const handleResetPassword = async (userId: string) => {
     if (!newPassword || newPassword.length < 8) {
-      alert('密码长度至少 8 位');
+      message.warning('密码长度至少 8 位');
       return;
     }
     try {
       setSaving(true);
       await adminApi.resetPassword(userId, { new_password: newPassword });
+      message.success('密码重置成功');
       setShowResetPassword(null);
       setNewPassword('');
     } catch (err: any) {
-      alert(err.response?.data?.detail || '重置密码失败');
+      message.error(err.response?.data?.detail || '重置密码失败');
     } finally {
       setSaving(false);
     }
@@ -349,14 +350,14 @@ const Admin: React.FC = () => {
 
   const handleToggleUserStatus = async (u: AdminUser) => {
     if (u.id === user?.id) {
-      alert('不能禁用自己的账户');
+      message.warning('不能禁用自己的账户');
       return;
     }
     try {
       await adminApi.updateUser(u.id, { is_active: !u.is_active });
       loadUsers();
     } catch (err: any) {
-      alert(err.response?.data?.detail || '操作失败');
+      message.error(err.response?.data?.detail || '操作失败');
     }
   };
 
@@ -419,15 +420,15 @@ const Admin: React.FC = () => {
     const normalizedModelConfigs = normalizeKeyModelConfigs(keyForm.model_configs);
 
     if (!keyForm.provider.trim()) {
-      alert('请输入提供商名称');
+      message.warning('请输入提供商名称');
       return;
     }
     if (!editingKey && !keyForm.api_key.trim()) {
-      alert('请输入 API Key');
+      message.warning('请输入 API Key');
       return;
     }
     if (!normalizedModelConfigs.length) {
-      alert('请至少配置一个模型 ID');
+      message.warning('请至少配置一个模型 ID');
       return;
     }
 
@@ -461,7 +462,7 @@ const Admin: React.FC = () => {
       closeKeyModal();
       loadApiKeys();
     } catch (err: any) {
-      alert(err.response?.data?.detail || (editingKey ? '更新 API Key 失败' : '创建 API Key 失败'));
+      message.error(err.response?.data?.detail || (editingKey ? '更新 API Key 失败' : '创建 API Key 失败'));
     } finally {
       setSaving(false);
     }
@@ -512,23 +513,31 @@ const Admin: React.FC = () => {
     });
   };
 
-  const handleDeleteApiKey = async (id: string) => {
-    // eslint-disable-next-line no-restricted-globals
-    if (!confirm('确定要删除这个 API Key 吗？')) return;
-    try {
-      await adminApi.deleteApiKey(id);
-      loadApiKeys();
-    } catch (err: any) {
-      alert(err.response?.data?.detail || '删除失败');
-    }
+  const handleDeleteApiKey = (id: string) => {
+    Modal.confirm({
+      title: '确定要删除这个 API Key 吗？',
+      okText: '删除',
+      okButtonProps: { danger: true },
+      cancelText: '取消',
+      onOk: async () => {
+        try {
+          await adminApi.deleteApiKey(id);
+          message.success('API Key 已删除');
+          loadApiKeys();
+        } catch (err: any) {
+          message.error(err.response?.data?.detail || '删除失败');
+        }
+      },
+    });
   };
 
   const handleSetDefaultKey = async (id: string) => {
     try {
       await adminApi.setDefaultApiKey(id);
+      message.success('已设为默认');
       loadApiKeys();
     } catch (err: any) {
-      alert(err.response?.data?.detail || '设置失败');
+      message.error(err.response?.data?.detail || '设置失败');
     }
   };
 
@@ -1106,17 +1115,19 @@ const Admin: React.FC = () => {
                               await promptApi.updatePrompt(prompt.scene_key, {
                                 prompt: newPrompt,
                               });
+                              message.success('提示词已保存');
                               loadPrompts();
                             } catch (err: any) {
-                              alert(err.response?.data?.detail || '保存失败');
+                              message.error(err.response?.data?.detail || '保存失败');
                             }
                           }}
                           onReset={async () => {
                             try {
                               await promptApi.resetPrompt(prompt.scene_key);
+                              message.success('已重置为默认提示词');
                               loadPrompts();
                             } catch (err: any) {
-                              alert(err.response?.data?.detail || '重置失败');
+                              message.error(err.response?.data?.detail || '重置失败');
                             }
                           }}
                         />
