@@ -33,8 +33,10 @@ import type { ProjectChapterListResponse } from '../types/chapter';
 const { Text, Title } = Typography;
 const { Panel } = Collapse;
 
-interface ScoringPanelProps {
+export interface ScoringPanelProps {
   projectId: string;
+  isOpen: boolean;
+  onClose: () => void;
 }
 
 // 按 category 分组
@@ -55,7 +57,7 @@ function coverageColor(rate: number): string {
   return '#ff4d4f';
 }
 
-const ScoringPanel: React.FC<ScoringPanelProps> = ({ projectId }) => {
+const ScoringPanel: React.FC<ScoringPanelProps> = ({ projectId, isOpen, onClose }) => {
   const [items, setItems] = useState<ScoringCriteriaItem[]>([]);
   const [coverage, setCoverage] = useState<ScoringCoverageResponse | null>(null);
   const [chapters, setChapters] = useState<ProjectChapterListResponse['chapters']>([]);
@@ -85,8 +87,10 @@ const ScoringPanel: React.FC<ScoringPanelProps> = ({ projectId }) => {
   }, [projectId]);
 
   useEffect(() => {
-    void loadData();
-  }, [loadData]);
+    if (isOpen) void loadData();
+  }, [isOpen, loadData]);
+
+  if (!isOpen) return null;
 
   const handleExtract = async () => {
     setIsExtracting(true);
@@ -144,7 +148,16 @@ const ScoringPanel: React.FC<ScoringPanelProps> = ({ projectId }) => {
   ];
 
   return (
-    <div style={{ padding: '0 4px' }}>
+    <div style={{
+      position: 'fixed', right: 0, top: 0, bottom: 0, width: 480,
+      background: '#fff', boxShadow: '-2px 0 8px rgba(0,0,0,0.15)',
+      zIndex: 1000, overflowY: 'auto', padding: 20,
+    }}>
+      {/* 标题栏 */}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+        <Typography.Title level={5} style={{ margin: 0 }}>评分标准</Typography.Title>
+        <Button size="small" onClick={onClose}>关闭</Button>
+      </div>
       {/* 顶部操作栏 */}
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
         <Space>

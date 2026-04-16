@@ -194,10 +194,11 @@ const BidReview: React.FC = () => {
 
         pending += decoder.decode(value, { stream: true });
         const sseResult = consumeSseEvents(pending, (event) => {
-          if (event.type === 'progress') {
-            setProgress((prev) => ({ ...prev, [event.dimension]: event.status }));
-          } else if (event.type === 'error') {
-            message.error(event.message);
+          const e = event as Record<string, any>;
+          if (e.type === 'progress') {
+            setProgress((prev) => ({ ...prev, [e.dimension]: e.status }));
+          } else if (e.type === 'error') {
+            message.error(e.message);
           }
         });
         pending = sseResult.remainder;
