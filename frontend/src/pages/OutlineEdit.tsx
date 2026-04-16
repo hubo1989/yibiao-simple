@@ -4,7 +4,6 @@ import { outlineApi, expandApi, consistencyApi, scoringApi } from '../services/a
 import type { ScoringCoverageResponse } from '../services/api';
 import { getErrorMessage } from '../utils/error';
 import { consumeSseEvents } from '../utils/sse';
-import { useAuth } from '../contexts/AuthContext';
 import ChapterStatusBadge from '../components/ChapterStatusBadge';
 import RatingChecklistModal from '../components/outline-edit/RatingChecklistModal';
 import OutlineEditModal from '../components/outline-edit/OutlineEditModal';
@@ -47,7 +46,6 @@ const OutlineEdit: React.FC<OutlineEditProps> = ({
   projectId,
   onContinue,
 }) => {
-  const { token } = useAuth();
   const [generatingL1, setGeneratingL1] = useState(false);
   const [generatingL2L3, setGeneratingL2L3] = useState(false);
   const [expandedItems, setExpandedItems] = useState<Set<string>>(new Set());

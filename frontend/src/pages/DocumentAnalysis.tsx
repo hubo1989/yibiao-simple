@@ -5,6 +5,7 @@ import { MarkdownComponentProps } from '../utils/error';
 import { useAuth } from '../contexts/AuthContext';
 import { draftStorage } from '../utils/draftStorage';
 import { getCurrentModel, getCurrentProviderConfigId } from '../utils/modelCache';
+import { consumeSseEvents } from '../utils/sse';
 import { ProCard } from '@ant-design/pro-components';
 import { Button, Typography, Alert, message } from 'antd';
 import { InboxOutlined, FileTextOutlined, LoadingOutlined, ArrowRightOutlined } from '@ant-design/icons';
@@ -19,45 +20,30 @@ interface DocumentAnalysisProps {
   onContinue?: () => void;
 }
 
-const consumeSseEvents = (
-  buffer: string,
-  onChunk: (chunk: string) => void
-): { remainder: string; done: boolean } => {
-  const normalizedBuffer = buffer.replace(/\r\n/g, '\n');
-  const events = normalizedBuffer.split('\n\n');
-  const remainder = events.pop() ?? '';
+// Markdown 渲染组件定义移到模块级别，避免每次 render 重新创建对象引用
+const markdownComponents = {
+  p: ({ children }: MarkdownComponentProps) => <p style={{ whiteSpace: 'pre-wrap', lineHeight: '1.5', margin: '0 0 1em 0' }}>{children}</p>,
+  ul: ({ children }: MarkdownComponentProps) => <ul style={{ paddingLeft: 20, marginBottom: '1em' }}>{children}</ul>,
+  ol: ({ children }: MarkdownComponentProps) => <ol style={{ paddingLeft: 20, marginBottom: '1em' }}>{children}</ol>,
+  li: ({ children }: MarkdownComponentProps) => <li style={{ lineHeight: '1.5' }}>{children}</li>,
+  h1: ({ children }: MarkdownComponentProps) => <h1 style={{ fontSize: '1.25em', fontWeight: 600, margin: '1em 0 0.5em 0' }}>{children}</h1>,
+  h2: ({ children }: MarkdownComponentProps) => <h2 style={{ fontSize: '1.1em', fontWeight: 600, margin: '1em 0 0.5em 0' }}>{children}</h2>,
+  h3: ({ children }: MarkdownComponentProps) => <h3 style={{ fontSize: '1em', fontWeight: 600, margin: '1em 0 0.5em 0' }}>{children}</h3>,
+  strong: ({ children }: MarkdownComponentProps) => <strong style={{ fontWeight: 600 }}>{children}</strong>,
+  em: ({ children }: MarkdownComponentProps) => <em style={{ fontStyle: 'italic' }}>{children}</em>,
+  blockquote: ({ children }: MarkdownComponentProps) => <blockquote style={{ borderLeft: '4px solid #1677ff', paddingLeft: 16, margin: '1em 0', color: 'rgba(0, 0, 0, 0.45)' }}>{children}</blockquote>,
+  code: ({ children }: MarkdownComponentProps) => <code style={{ backgroundColor: 'rgba(0, 0, 0, 0.04)', padding: '0.2em 0.4em', borderRadius: 3, fontFamily: 'monospace' }}>{children}</code>,
+  table: ({ children }: MarkdownComponentProps) => <table style={{ width: '100%', borderCollapse: 'collapse', margin: '1em 0' }}>{children}</table>,
+  thead: ({ children }: MarkdownComponentProps) => <thead style={{ backgroundColor: '#fafafa' }}>{children}</thead>,
+  th: ({ children }: MarkdownComponentProps) => <th style={{ border: '1px solid #f0f0f0', padding: '8px 16px', textAlign: 'left', fontWeight: 600 }}>{children}</th>,
+  td: ({ children }: MarkdownComponentProps) => <td style={{ border: '1px solid #f0f0f0', padding: '8px 16px' }}>{children}</td>,
+  text: ({ children }: MarkdownComponentProps) => <span style={{ whiteSpace: 'pre-wrap' }}>{children}</span>,
+};
 
-  for (const event of events) {
-    if (!event.trim()) {
-      continue;
-    }
-
-    const data = event
-      .split('\n')
-      .filter((line) => line.startsWith('data: '))
-      .map((line) => line.slice(6))
-      .join('\n')
-      .trim();
-
-    if (!data) {
-      continue;
-    }
-
-    if (data === '[DONE]') {
-      return { remainder: '', done: true };
-    }
-
-    try {
-      const parsed = JSON.parse(data);
-      if (parsed.chunk) {
-        onChunk(parsed.chunk);
-      }
-    } catch {
-      // Ignore malformed complete SSE events but keep processing the stream.
-    }
-  }
-
-  return { remainder, done: false };
+const streamingComponents = {
+  ...markdownComponents,
+  p: ({ children }: MarkdownComponentProps) => <p style={{ whiteSpace: 'pre-wrap', lineHeight: '1.3', margin: '0 0 0.5em 0', color: '#1677ff' }}>{children}</p>,
+  text: ({ children }: MarkdownComponentProps) => <span style={{ whiteSpace: 'pre-wrap', color: '#1677ff' }}>{children}</span>,
 };
 
 const DocumentAnalysis: React.FC<DocumentAnalysisProps> = ({
@@ -99,31 +85,6 @@ const DocumentAnalysis: React.FC<DocumentAnalysisProps> = ({
   useEffect(() => {
     setLocalRequirements(techRequirements);
   }, [techRequirements]);
-
-  const markdownComponents = {
-    p: ({ children }: MarkdownComponentProps) => <p style={{ whiteSpace: 'pre-wrap', lineHeight: '1.5', margin: '0 0 1em 0' }}>{children}</p>,
-    ul: ({ children }: MarkdownComponentProps) => <ul style={{ paddingLeft: 20, marginBottom: '1em' }}>{children}</ul>,
-    ol: ({ children }: MarkdownComponentProps) => <ol style={{ paddingLeft: 20, marginBottom: '1em' }}>{children}</ol>,
-    li: ({ children }: MarkdownComponentProps) => <li style={{ lineHeight: '1.5' }}>{children}</li>,
-    h1: ({ children }: MarkdownComponentProps) => <h1 style={{ fontSize: '1.25em', fontWeight: 600, margin: '1em 0 0.5em 0' }}>{children}</h1>,
-    h2: ({ children }: MarkdownComponentProps) => <h2 style={{ fontSize: '1.1em', fontWeight: 600, margin: '1em 0 0.5em 0' }}>{children}</h2>,
-    h3: ({ children }: MarkdownComponentProps) => <h3 style={{ fontSize: '1em', fontWeight: 600, margin: '1em 0 0.5em 0' }}>{children}</h3>,
-    strong: ({ children }: MarkdownComponentProps) => <strong style={{ fontWeight: 600 }}>{children}</strong>,
-    em: ({ children }: MarkdownComponentProps) => <em style={{ fontStyle: 'italic' }}>{children}</em>,
-    blockquote: ({ children }: MarkdownComponentProps) => <blockquote style={{ borderLeft: '4px solid #1677ff', paddingLeft: 16, margin: '1em 0', color: 'rgba(0, 0, 0, 0.45)' }}>{children}</blockquote>,
-    code: ({ children }: MarkdownComponentProps) => <code style={{ backgroundColor: 'rgba(0, 0, 0, 0.04)', padding: '0.2em 0.4em', borderRadius: 3, fontFamily: 'monospace' }}>{children}</code>,
-    table: ({ children }: MarkdownComponentProps) => <table style={{ width: '100%', borderCollapse: 'collapse', margin: '1em 0' }}>{children}</table>,
-    thead: ({ children }: MarkdownComponentProps) => <thead style={{ backgroundColor: '#fafafa' }}>{children}</thead>,
-    th: ({ children }: MarkdownComponentProps) => <th style={{ border: '1px solid #f0f0f0', padding: '8px 16px', textAlign: 'left', fontWeight: 600 }}>{children}</th>,
-    td: ({ children }: MarkdownComponentProps) => <td style={{ border: '1px solid #f0f0f0', padding: '8px 16px' }}>{children}</td>,
-    text: ({ children }: MarkdownComponentProps) => <span style={{ whiteSpace: 'pre-wrap' }}>{children}</span>,
-  };
-
-  const streamingComponents = {
-    ...markdownComponents,
-    p: ({ children }: MarkdownComponentProps) => <p style={{ whiteSpace: 'pre-wrap', lineHeight: '1.3', margin: '0 0 0.5em 0', color: '#1677ff' }}>{children}</p>,
-    text: ({ children }: MarkdownComponentProps) => <span style={{ whiteSpace: 'pre-wrap', color: '#1677ff' }}>{children}</span>,
-  };
 
   const handleFileSelect = (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
@@ -204,7 +165,11 @@ const DocumentAnalysis: React.FC<DocumentAnalysisProps> = ({
             }
 
             pending += decoder.decode(value, { stream: true });
-            const { remainder, done: isStreamDone } = consumeSseEvents(pending, onChunk);
+            const { remainder, done: isStreamDone } = consumeSseEvents(pending, (parsed) => {
+              if (parsed.chunk && typeof parsed.chunk === 'string') {
+                onChunk(parsed.chunk);
+              }
+            });
             pending = remainder;
 
             if (isStreamDone) {
@@ -213,7 +178,11 @@ const DocumentAnalysis: React.FC<DocumentAnalysisProps> = ({
           }
 
           pending += decoder.decode();
-          const { done: isStreamDone } = consumeSseEvents(`${pending}\n\n`, onChunk);
+          const { done: isStreamDone } = consumeSseEvents(`${pending}\n\n`, (parsed) => {
+            if (parsed.chunk && typeof parsed.chunk === 'string') {
+              onChunk(parsed.chunk);
+            }
+          });
           if (isStreamDone) {
             return;
           }

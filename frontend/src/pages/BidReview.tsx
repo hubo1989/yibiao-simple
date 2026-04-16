@@ -3,6 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { reviewApi, projectApi } from '../services/api';
 import { getCurrentModel, getCurrentProviderConfigId } from '../utils/modelCache';
+import { consumeSseEvents } from '../utils/sse';
 import ContentPageHeader from '../components/ContentPageHeader';
 import ReviewConfig from '../components/review/ReviewConfig';
 import BidFileUpload from '../components/review/BidFileUpload';
@@ -38,33 +39,6 @@ import {
 } from '@ant-design/icons';
 
 type PageStep = 'config' | 'upload' | 'reviewing' | 'report';
-
-const consumeSseEvents = (
-  buffer: string,
-  onEvent: (event: any) => void,
-): { remainder: string; done: boolean } => {
-  const normalized = buffer.replace(/\r\n/g, '\n');
-  const events = normalized.split('\n\n');
-  const remainder = events.pop() ?? '';
-
-  for (const event of events) {
-    if (!event.trim()) continue;
-    const data = event
-      .split('\n')
-      .filter((l) => l.startsWith('data: '))
-      .map((l) => l.slice(6))
-      .join('\n')
-      .trim();
-    if (!data) continue;
-    if (data === '[DONE]') return { remainder: '', done: true };
-    try {
-      onEvent(JSON.parse(data));
-    } catch {
-      // ignore malformed events
-    }
-  }
-  return { remainder, done: false };
-};
 
 const BidReview: React.FC = () => {
   const { projectId } = useParams<{ projectId: string }>();

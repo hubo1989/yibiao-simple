@@ -14,7 +14,6 @@ import {
 import type { ScoringCriteriaItem } from '../services/api';
 import ExportDialog from '../components/ExportDialog';
 import { getErrorMessage, ApiError } from '../utils/error';
-import { useAuth } from '../contexts/AuthContext';
 
 import { draftStorage } from '../utils/draftStorage';
 import { getCurrentModel, getCurrentProviderConfigId } from '../utils/modelCache';
@@ -89,7 +88,7 @@ const ContentEdit: React.FC<ContentEditProps> = ({
   onToggleConsistency,
   highlightedChapters,
 }) => {
-  const { token } = useAuth();
+
   const [isGenerating, setIsGenerating] = useState(false);
   const [progress, setProgress] = useState<GenerationProgress>({
     total: 0,
@@ -758,6 +757,27 @@ const ContentEdit: React.FC<ContentEditProps> = ({
               </Space>
             </div>
           )}
+          {/* 评分标准绑定标签 */}
+          {(() => {
+            const chapterDbId = chapterIdMap[item.id];
+            const boundScoring = chapterDbId ? (chapterScoringMap[chapterDbId] || []) : [];
+            if (boundScoring.length === 0) return null;
+            return (
+              <div style={{ marginLeft: !isLeaf && hasChildren ? 32 : 0, marginBottom: 8 }}>
+                <Space wrap size={[6, 6]}>
+                  {boundScoring.map(sc => (
+                    <Tag
+                      key={sc.id}
+                      color={(sc.max_score ?? 0) >= 8 ? 'volcano' : 'geekblue'}
+                      style={{ fontSize: 11 }}
+                    >
+                      📊 {sc.item}{sc.max_score != null ? ` ${sc.max_score}分` : ''}
+                    </Tag>
+                  ))}
+                </Space>
+              </div>
+            );
+          })()}
 
           {isLeaf && (
             <div 

@@ -17,6 +17,7 @@ import ConsistencyPanel from '../components/ConsistencyPanel';
 import CommentPanel from '../components/CommentPanel';
 import MaterialRequirementDrawer from '../components/MaterialRequirementDrawer';
 import DisqualificationPanel from '../components/DisqualificationPanel';
+import ScoringPanel from '../components/ScoringPanel';
 import { useLayoutHeader } from '../layouts/layoutHeader';
 import DocumentAnalysis from './DocumentAnalysis';
 import OutlineEdit from './OutlineEdit';
@@ -30,6 +31,7 @@ import {
   ArrowLeftOutlined,
   PaperClipOutlined,
   SafetyOutlined,
+  TrophyOutlined,
 } from '@ant-design/icons';
 
 const { Content } = Layout;
@@ -37,7 +39,7 @@ const { Content } = Layout;
 const ProjectWorkspace: React.FC = () => {
   const { projectId } = useParams<{ projectId: string }>();
   const navigate = useNavigate();
-  const { user, token } = useAuth();
+  const { user } = useAuth();
   const { setLayoutHeader } = useLayoutHeader();
   const [project, setProject] = useState<Project | null>(null);
   const [progress, setProgress] = useState<ProjectProgress | null>(null);
@@ -51,6 +53,7 @@ const ProjectWorkspace: React.FC = () => {
   const [activeCommentChapter, setActiveCommentChapter] = useState<string | null>(null);
   const [showMaterialDrawer, setShowMaterialDrawer] = useState(false);
   const [showDisqualificationPanel, setShowDisqualificationPanel] = useState(false);
+  const [showScoringPanel, setShowScoringPanel] = useState(false);
   const [lastChapterSummaries, setLastChapterSummaries] = useState<{ chapter_number: string; title: string; summary: string }[]>([]);
   const [highlightedChapters, setHighlightedChapters] = useState<Set<string>>(new Set());
 
@@ -210,6 +213,14 @@ const ProjectWorkspace: React.FC = () => {
                 废标检查
               </Button>
             </Tooltip>
+            <Tooltip title="评分标准 — 提取评分项并绑定章节，驱动目录和内容生成">
+              <Button
+                icon={<TrophyOutlined />}
+                onClick={() => setShowScoringPanel(true)}
+              >
+                评分标准
+              </Button>
+            </Tooltip>
             <Button icon={<SettingOutlined />} onClick={() => navigate(`/project/${projectId}/settings`)}>设置</Button>
             <Button icon={<HistoryOutlined />} onClick={() => setShowVersionHistory(true)}>版本历史</Button>
           </div>
@@ -241,7 +252,7 @@ const ProjectWorkspace: React.FC = () => {
         console.error('保存分析结果失败:', error);
       }
     }
-  }, [projectId, state.projectOverview, state.techRequirements, token]);
+  }, [projectId, state.projectOverview, state.techRequirements]);
 
   const handleStepChange = useCallback(async (targetStep: number) => {
     if (targetStep === state.currentStep) {
@@ -527,6 +538,13 @@ const ProjectWorkspace: React.FC = () => {
           projectId={projectId}
           isOpen={showDisqualificationPanel}
           onClose={() => setShowDisqualificationPanel(false)}
+        />
+      )}
+      {projectId && (
+        <ScoringPanel
+          projectId={projectId}
+          isOpen={showScoringPanel}
+          onClose={() => setShowScoringPanel(false)}
         />
       )}
     </Layout>
