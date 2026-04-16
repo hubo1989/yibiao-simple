@@ -8,9 +8,11 @@ import {
   outlineApi,
   consistencyApi,
   materialApi,
+  materialSmartApi,
   scoringApi,
   ChapterContentRequest,
 } from '../services/api';
+import type { SmartMatchResult, SmartMatchRecommendation } from '../services/api';
 import type { ScoringCriteriaItem } from '../services/api';
 import ExportDialog from '../components/ExportDialog';
 import { getErrorMessage, ApiError } from '../utils/error';
@@ -59,6 +61,9 @@ import {
   ProfileOutlined,
   PaperClipOutlined,
   StopOutlined,
+  ThunderboltOutlined,
+  TagOutlined,
+  LinkOutlined,
 } from '@ant-design/icons';
 
 interface ContentEditProps {
@@ -131,6 +136,16 @@ const ContentEdit: React.FC<ContentEditProps> = ({
   const abortControllerRef = useRef<AbortController | null>(null);
   // 章节ID -> 绑定的评分项列表（用于章节卡片上显示评分标签）
   const [chapterScoringMap, setChapterScoringMap] = useState<Record<string, ScoringCriteriaItem[]>>({});
+
+  // 素材智能匹配面板
+  const [smartMatchResults, setSmartMatchResults] = useState<SmartMatchResult[]>([]);
+  const [smartMatchLoading, setSmartMatchLoading] = useState(false);
+  const [autoBindLoading, setAutoBindLoading] = useState(false);
+  // 章节ID -> 推荐素材列表（展开时懒查询）
+  const [chapterMatchMap, setChapterMatchMap] = useState<Record<string, SmartMatchRecommendation[]>>({});
+  // 当前展开推荐面板的章节ID
+  const [expandedMatchChapter, setExpandedMatchChapter] = useState<string | null>(null);
+  const [matchChapterLoading, setMatchChapterLoading] = useState<string | null>(null);
 
 
   // 加载评分标准，建立 chapterId -> items 映射（静默加载）
@@ -224,6 +239,71 @@ const ContentEdit: React.FC<ContentEditProps> = ({
     },
     [getProjectChapterId, projectId]
   );
+
+  /** 为单个章节拉取推荐素材（切换展开） */
+  const handleToggleSmartMatch = useCallback(async (chapterDbId: string) => {
+    if (!projectId) return;
+    if (expandedMatchChapter === chapterDbId) {
+      setExpandedMatchChapter(null);
+      return;
+    }
+    setExpandedMatchChapter(chapterDbId);
+    if (chapterMatchMap[chapterDbId]) return; // 已加载过
+    setMatchChapterLoading(chapterDbId);
+    try {
+      const results = await materialSmartApi.match(projectId, chapterDbId);
+      const recommendations = results[0]?.recommended_materials ?? [];
+      setChapterMatchMap(prev => ({ ...prev, [chapterDbId]: recommendations }));
+    } catch {
+      setChapterMatchMap(prev => ({ ...prev, [chapterDbId]: [] }));
+    } finally {
+      setMatchChapterLoading(null);
+    }
+  }, [projectId, expandedMatchChapter, chapterMatchMap]);
+
+  /** 一键绑定单条推荐素材 */
+  const handleBindRecommendedMaterial = useCallback(async (chapterDbId: string, materialId: string, materialName: string) => {
+    if (!projectId) return;
+    try {
+      await materialApi.createBinding(projectId, chapterDbId, {
+        material_asset_id: materialId,
+      });
+      message.success(`已绑定素材：${materialName}`);
+      // 刷新该章节的推荐列表（清除缓存，重新加载）
+      setChapterMatchMap(prev => {
+        const next = { ...prev };
+        delete next[chapterDbId];
+        return next;
+      });
+      setExpandedMatchChapter(null);
+    } catch (error: unknown) {
+      const detail = (error as any)?.response?.data?.detail;
+      message.error(detail || '绑定素材失败');
+    }
+  }, [projectId]);
+
+  /** 批量一键自动绑定 */
+  const handleAutoBind = useCallback(async () => {
+    if (!projectId) {
+      message.warning('缺少项目 ID，无法自动绑定');
+      return;
+    }
+    setAutoBindLoading(true);
+    try {
+      const result = await materialSmartApi.autoBind(projectId);
+      message.success(
+        `智能绑定完成：新绑定 ${result.bound_count} 个章节，跳过 ${result.skipped_count} 个`,
+      );
+      // 清空本地推荐缓存，强制刷新
+      setChapterMatchMap({});
+      setExpandedMatchChapter(null);
+    } catch (error: unknown) {
+      const detail = (error as any)?.response?.data?.detail;
+      message.error(detail || '自动绑定失败');
+    } finally {
+      setAutoBindLoading(false);
+    }
+  }, [projectId]);
 
   const handleInsertMaterialMarker = useCallback(async () => {
     if (!materialMarkerTarget || !selectedBindingId) {
@@ -703,6 +783,26 @@ const ContentEdit: React.FC<ContentEditProps> = ({
               </Tooltip>
             )}
 
+            {isLeaf && projectId && (() => {
+              const chapterDbId = chapterIdMap[item.id];
+              if (!chapterDbId) return null;
+              const isExpanded = expandedMatchChapter === chapterDbId;
+              const isLoadingThis = matchChapterLoading === chapterDbId;
+              return (
+                <Tooltip title="根据章节主题推荐相关素材">
+                  <Button
+                    type="text"
+                    size="small"
+                    icon={isLoadingThis ? <LoadingOutlined /> : <TagOutlined />}
+                    onClick={() => { void handleToggleSmartMatch(chapterDbId); }}
+                    style={{ color: isExpanded ? '#1677ff' : '#6b7280' }}
+                  >
+                    推荐素材
+                  </Button>
+                </Tooltip>
+              );
+            })()}
+
             {isLeaf && currentContent && !generationError && projectId && (
               <Tooltip title="根据评分点分析本章覆盖情况并给出补强建议">
                 <Button
@@ -840,6 +940,75 @@ const ContentEdit: React.FC<ContentEditProps> = ({
               )}
             </div>
           )}
+
+          {/* 推荐素材内联面板 */}
+          {isLeaf && projectId && (() => {
+            const chapterDbId = chapterIdMap[item.id];
+            if (!chapterDbId || expandedMatchChapter !== chapterDbId) return null;
+            const recommendations = chapterMatchMap[chapterDbId] ?? [];
+            const isLoadingThis = matchChapterLoading === chapterDbId;
+            return (
+              <div style={{
+                marginLeft: 0,
+                marginBottom: 16,
+                border: '1px solid #bae6fd',
+                borderRadius: 8,
+                backgroundColor: '#f0f9ff',
+                padding: '12px 16px',
+              }}>
+                <div style={{ display: 'flex', alignItems: 'center', marginBottom: 8 }}>
+                  <TagOutlined style={{ color: '#0284c7', marginRight: 6 }} />
+                  <Typography.Text strong style={{ color: '#0284c7', fontSize: 13 }}>
+                    推荐素材
+                  </Typography.Text>
+                  {isLoadingThis && <Spin size="small" style={{ marginLeft: 8 }} />}
+                </div>
+                {!isLoadingThis && recommendations.length === 0 && (
+                  <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                    暂无匹配的素材推荐，可先上传相关素材后重试
+                  </Typography.Text>
+                )}
+                {recommendations.map(rec => (
+                  <div key={rec.material_id} style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    padding: '6px 10px',
+                    marginBottom: 6,
+                    backgroundColor: '#fff',
+                    borderRadius: 6,
+                    border: '1px solid #e0f2fe',
+                  }}>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <Typography.Text style={{ fontSize: 13, fontWeight: 500 }} ellipsis>
+                        {rec.material_name}
+                      </Typography.Text>
+                      <div style={{ display: 'flex', gap: 8, marginTop: 2, flexWrap: 'wrap' }}>
+                        <Tag color="blue" style={{ fontSize: 11, margin: 0 }}>{rec.category}</Tag>
+                        <Tag color="green" style={{ fontSize: 11, margin: 0 }}>
+                          相关度 {Math.round(rec.relevance_score)}
+                        </Tag>
+                        {rec.reason && (
+                          <Typography.Text type="secondary" style={{ fontSize: 11 }}>
+                            {rec.reason}
+                          </Typography.Text>
+                        )}
+                      </div>
+                    </div>
+                    <Button
+                      type="primary"
+                      size="small"
+                      icon={<LinkOutlined />}
+                      onClick={() => { void handleBindRecommendedMaterial(chapterDbId, rec.material_id, rec.material_name); }}
+                      style={{ marginLeft: 12, flexShrink: 0 }}
+                    >
+                      绑定
+                    </Button>
+                  </div>
+                ))}
+              </div>
+            );
+          })()}
 
           {hasChildren && !isCollapsed && (
             <div style={{ marginLeft: 24, marginTop: 8 }}>
@@ -1177,6 +1346,16 @@ const ContentEdit: React.FC<ContentEditProps> = ({
           headerBordered
           extra={
             <Space>
+              {projectId && (
+                <Button
+                  icon={<ThunderboltOutlined />}
+                  loading={autoBindLoading}
+                  onClick={() => { void handleAutoBind(); }}
+                  title="根据章节关键词自动匹配并绑定最佳素材"
+                >
+                  智能绑定素材
+                </Button>
+              )}
               {projectId && (
                 <Button
                   icon={<ProfileOutlined />}

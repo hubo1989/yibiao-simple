@@ -613,6 +613,60 @@ export const materialApi = {
   },
 };
 
+/** 素材智能匹配推荐项 */
+export interface SmartMatchRecommendation {
+  material_id: string;
+  material_name: string;
+  category: string;
+  relevance_score: number;
+  reason: string;
+}
+
+/** 素材智能匹配结果（一章节一条） */
+export interface SmartMatchResult {
+  chapter_id: string;
+  chapter_title: string;
+  chapter_number: string;
+  recommended_materials: SmartMatchRecommendation[];
+}
+
+/** 自动绑定结果 */
+export interface AutoBindResult {
+  bound_count: number;
+  skipped_count: number;
+  total_chapters: number;
+  details: Array<{
+    chapter_id: string;
+    chapter_title: string;
+    material_id: string;
+    material_name: string;
+    status: 'bound' | 'already_bound';
+  }>;
+}
+
+export const materialSmartApi = {
+  /** 智能匹配：返回各章节推荐素材列表 */
+  match: async (projectId: string, chapterId?: string): Promise<SmartMatchResult[]> => {
+    try {
+      const response = await api.post<SmartMatchResult[]>('/api/materials/smart-match', {
+        project_id: projectId,
+        chapter_id: chapterId,
+      });
+      return response.data;
+    } catch (error) { handleApiError(error, '素材智能匹配失败'); }
+  },
+
+  /** 一键自动绑定：为所有章节自动创建最优素材绑定 */
+  autoBind: async (projectId: string): Promise<AutoBindResult> => {
+    try {
+      const response = await api.post<AutoBindResult>('/api/materials/auto-bind', {
+        project_id: projectId,
+      });
+      return response.data;
+    } catch (error) { handleApiError(error, '自动绑定素材失败'); }
+  },
+};
+
 // 目录相关API
 export const outlineApi = {
   // 生成目录
@@ -872,7 +926,7 @@ export const proofreadApi = {
 
 // 一致性检查相关 API
 export const consistencyApi = {
-  // 检查项目跨章节一致性
+  // 检查项目跨章节一致性（旧接口，从项目路由调用）
   checkConsistency: async (
     projectId: string,
     chapterSummaries?: { chapter_number: string; title: string; summary: string; chapter_id?: string }[]
@@ -890,6 +944,38 @@ export const consistencyApi = {
         `/api/projects/${projectId}/consistency-check`
       );
       return response.data;
+    }
+  },
+
+  // 执行全文一致性校验（新接口，从数据库读取章节内容）
+  check: async (projectId: string): Promise<ConsistencyCheckResult> => {
+    try {
+      const response = await api.post<ConsistencyCheckResult>('/api/consistency/check', {
+        project_id: projectId,
+      });
+      return response.data;
+    } catch (error) {
+      handleApiError(error, '一致性校验失败');
+    }
+  },
+
+  // 获取最近一次校验结果
+  latest: async (projectId: string): Promise<ConsistencyCheckResult> => {
+    try {
+      const response = await api.get<ConsistencyCheckResult>(`/api/consistency/${projectId}/latest`);
+      return response.data;
+    } catch (error) {
+      handleApiError(error, '获取校验结果失败');
+    }
+  },
+
+  // 获取校验历史
+  history: async (projectId: string): Promise<ConsistencyHistoryItem[]> => {
+    try {
+      const response = await api.get<ConsistencyHistoryItem[]>(`/api/consistency/${projectId}/history`);
+      return response.data;
+    } catch (error) {
+      handleApiError(error, '获取校验历史失败');
     }
   },
 
@@ -1373,6 +1459,87 @@ export const disqualificationApi = {
       const response = await api.post<ValidateBeforeExportResponse>(`/api/disqualification/${projectId}/validate-before-export`);
       return response.data;
     } catch (error) { handleApiError(error, '导出前废标校验失败'); }
+  },
+};
+
+// ==================== 章节模板（标书知识库）API ====================
+
+export interface ChapterTemplate {
+  id: string;
+  name: string;
+  description?: string;
+  category?: string;
+  tags: string[];
+  content: string;
+  source_project_id?: string;
+  source_project_name?: string;
+  source_chapter_id?: string;
+  created_by: string;
+  usage_count: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export const chapterTemplateApi = {
+  list: async (params?: { category?: string; keyword?: string; tags?: string }): Promise<ChapterTemplate[]> => {
+    try {
+      const response = await api.get<ChapterTemplate[]>('/api/chapter-templates', { params });
+      return response.data;
+    } catch (error) { handleApiError(error, '获取章节模板列表失败'); }
+  },
+
+  get: async (id: string): Promise<ChapterTemplate> => {
+    try {
+      const response = await api.get<ChapterTemplate>(`/api/chapter-templates/${id}`);
+      return response.data;
+    } catch (error) { handleApiError(error, '获取章节模板失败'); }
+  },
+
+  create: async (data: { name: string; description?: string; category?: string; tags?: string[]; content: string }): Promise<ChapterTemplate> => {
+    try {
+      const response = await api.post<ChapterTemplate>('/api/chapter-templates', data);
+      return response.data;
+    } catch (error) { handleApiError(error, '创建章节模板失败'); }
+  },
+
+  fromChapter: async (chapterId: string, data?: { name?: string; category?: string; tags?: string[] }): Promise<ChapterTemplate> => {
+    try {
+      const response = await api.post<ChapterTemplate>('/api/chapter-templates/from-chapter', {
+        chapter_id: chapterId,
+        ...data,
+      });
+      return response.data;
+    } catch (error) { handleApiError(error, '从章节创建模板失败'); }
+  },
+
+  update: async (id: string, data: { name?: string; description?: string; category?: string; tags?: string[]; content?: string }): Promise<ChapterTemplate> => {
+    try {
+      const response = await api.put<ChapterTemplate>(`/api/chapter-templates/${id}`, data);
+      return response.data;
+    } catch (error) { handleApiError(error, '更新章节模板失败'); }
+  },
+
+  delete: async (id: string): Promise<void> => {
+    try {
+      await api.delete(`/api/chapter-templates/${id}`);
+    } catch (error) { handleApiError(error, '删除章节模板失败'); }
+  },
+
+  apply: async (templateId: string, targetChapterId: string): Promise<{ success: boolean; message: string; content: string }> => {
+    try {
+      const response = await api.post<{ success: boolean; message: string; content: string }>(
+        `/api/chapter-templates/${templateId}/apply`,
+        { target_chapter_id: targetChapterId }
+      );
+      return response.data;
+    } catch (error) { handleApiError(error, '套用模板失败'); }
+  },
+
+  search: async (query: string): Promise<ChapterTemplate[]> => {
+    try {
+      const response = await api.post<ChapterTemplate[]>('/api/chapter-templates/search', { query });
+      return response.data;
+    } catch (error) { handleApiError(error, '搜索章节模板失败'); }
   },
 };
 

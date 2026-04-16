@@ -25,6 +25,7 @@ from ..models.project import Project, project_members, ProjectMemberRole
 from ..models.chapter import Chapter, ChapterStatus
 from ..models.version import ProjectVersion, ChangeType
 from ..models.scoring import ScoringCriteria
+from ..models.material import ChapterMaterialBinding, MaterialAsset
 from ..db.database import get_db
 from ..services.openai_service import OpenAIService
 from ..services.prompt_service import PromptService
@@ -997,7 +998,54 @@ async def generate_project_content_stream(
         # 如果有知识库上下文，添加到模板变量
         if knowledge_context:
             template_vars["knowledge_context"] = knowledge_context
-        
+
+        # ---- 素材注入：查询本章绑定的素材，追加到 system_prompt ----
+        material_injection = ""
+        try:
+            mat_binding_result = await db.execute(
+                select(ChapterMaterialBinding)
+                .where(
+                    and_(
+                        ChapterMaterialBinding.chapter_id == chapter_uuid,
+                        ChapterMaterialBinding.project_id == project_uuid,
+                    )
+                )
+            )
+            mat_bindings = mat_binding_result.scalars().all()
+            if mat_bindings:
+                # 加载关联素材
+                mat_ids = [b.material_asset_id for b in mat_bindings]
+                mat_asset_result = await db.execute(
+                    select(MaterialAsset).where(MaterialAsset.id.in_(mat_ids))
+                )
+                mat_assets = {str(a.id): a for a in mat_asset_result.scalars().all()}
+                mat_lines: list[str] = []
+                for b in mat_bindings:
+                    asset = mat_assets.get(str(b.material_asset_id))
+                    if not asset:
+                        continue
+                    line = f"- {asset.name}（分类：{asset.category.value}）"
+                    # 附加 AI 提取字段中的关键信息
+                    extracted = asset.ai_extracted_fields or {}
+                    if extracted.get("valid_until"):
+                        line += f"（有效期至：{extracted['valid_until']}）"
+                    if extracted.get("cert_number"):
+                        line += f"（证书编号：{extracted['cert_number']}）"
+                    if asset.description:
+                        line += f"（{asset.description[:60]}）"
+                    mat_lines.append(line)
+                if mat_lines:
+                    material_injection = (
+                        "\n\n【本章节已绑定以下素材，请在内容中自然地引用这些素材，"
+                        "体现企业真实能力和资质，但不要生硬地罗列：】\n"
+                        + "\n".join(mat_lines)
+                    )
+        except Exception as mat_err:
+            logger.warning(f"素材注入失败，跳过: {mat_err}")
+
+        if material_injection:
+            system_prompt = system_prompt + material_injection
+
         user_prompt = prompt_service.render_prompt(
             user_template,
             template_vars,

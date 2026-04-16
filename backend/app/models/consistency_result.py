@@ -59,6 +59,10 @@ class ConsistencyResult(Base):
         Integer, nullable=False, default=0,
         comment="严重矛盾数量"
     )
+    warning_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0,
+        comment="一般不一致数量"
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )

@@ -11,7 +11,8 @@ import os
 
 from .config import settings
 from .db.database import engine
-from .routers import config, document, outline, content, search, expand, auth, admin, projects, versions, chapters, comments, templates, knowledge, request_logs, materials, ingestion, review, export_template, disqualification, scoring
+from .routers import config, document, outline, content, search, expand, auth, admin, projects, versions, chapters, comments, templates, knowledge, request_logs, materials, ingestion, review, export_template, disqualification, scoring, consistency
+from .routers import chapter_templates
 from .middleware import AuditMiddleware, RequestLoggingMiddleware
 from .auth.csrf import CSRFMiddleware
 
@@ -151,6 +152,8 @@ app.include_router(review.router)
 app.include_router(export_template.router)
 app.include_router(disqualification.router)
 app.include_router(scoring.router)
+app.include_router(consistency.router)
+app.include_router(chapter_templates.router)
 
 # 健康检查端点
 @app.get("/health")
