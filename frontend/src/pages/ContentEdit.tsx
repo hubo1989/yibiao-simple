@@ -8,8 +8,10 @@ import {
   outlineApi,
   consistencyApi,
   materialApi,
+  scoringApi,
   ChapterContentRequest,
 } from '../services/api';
+import type { ScoringCriteriaItem } from '../services/api';
 import ExportDialog from '../components/ExportDialog';
 import { getErrorMessage, ApiError } from '../utils/error';
 import { useAuth } from '../contexts/AuthContext';
@@ -128,7 +130,24 @@ const ContentEdit: React.FC<ContentEditProps> = ({
   const [showGenerateModal, setShowGenerateModal] = useState(false);
   const [itemsToGenerateCount, setItemsToGenerateCount] = useState(0);
   const abortControllerRef = useRef<AbortController | null>(null);
+  // 章节ID -> 绑定的评分项列表（用于章节卡片上显示评分标签）
+  const [chapterScoringMap, setChapterScoringMap] = useState<Record<string, ScoringCriteriaItem[]>>({});
 
+
+  // 加载评分标准，建立 chapterId -> items 映射（静默加载）
+  useEffect(() => {
+    if (!projectId) return;
+    scoringApi.list(projectId).then(items => {
+      const map: Record<string, ScoringCriteriaItem[]> = {};
+      for (const sc of items) {
+        if (sc.bound_chapter_id) {
+          if (!map[sc.bound_chapter_id]) map[sc.bound_chapter_id] = [];
+          map[sc.bound_chapter_id].push(sc);
+        }
+      }
+      setChapterScoringMap(map);
+    }).catch(() => {/* 静默忽略 */});
+  }, [projectId]);
 
   const loadProjectChapterMap = useCallback(async (): Promise<Record<string, string>> => {
     if (!projectId) {

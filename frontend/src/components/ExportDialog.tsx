@@ -1,12 +1,12 @@
 /**
- * 导出文档弹窗 — 选择模板 + 导出格式
+ * 导出文档弹窗 — 选择模板 + 导出格式 + 废标校验
  */
 import React, { useState, useEffect, useCallback } from 'react';
-import { Modal, Select, Radio, Button, Space, Typography, Spin, Image, message, Divider } from 'antd';
-import { DownloadOutlined, EyeOutlined, PlusOutlined } from '@ant-design/icons';
+import { Modal, Select, Radio, Button, Space, Typography, Spin, Image, message, Divider, Alert, List } from 'antd';
+import { DownloadOutlined, EyeOutlined, PlusOutlined, ThunderboltOutlined } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
 import { saveAs } from 'file-saver';
-import { documentApi, exportTemplateApi, ExportTemplate } from '../services/api';
+import { documentApi, exportTemplateApi, disqualificationApi, ExportTemplate, DisqualificationItem } from '../services/api';
 import type { OutlineItem } from '../types';
 
 const { Text } = Typography;
@@ -39,6 +39,10 @@ const ExportDialog: React.FC<ExportDialogProps> = ({
   const [exporting, setExporting] = useState(false);
   const [previewing, setPreviewing] = useState(false);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  // 废标校验状态
+  const [validating, setValidating] = useState(false);
+  const [riskItems, setRiskItems] = useState<DisqualificationItem[] | null>(null);
+  const [showRiskWarning, setShowRiskWarning] = useState(false);
 
   const loadTemplates = useCallback(async () => {
     setLoadingTemplates(true);
@@ -62,6 +66,8 @@ const ExportDialog: React.FC<ExportDialogProps> = ({
     if (visible) {
       void loadTemplates();
       setPreviewUrl(null);
+      setRiskItems(null);
+      setShowRiskWarning(false);
     }
   }, [visible, loadTemplates]);
 
@@ -73,7 +79,7 @@ const ExportDialog: React.FC<ExportDialogProps> = ({
     ...(selectedTemplateId ? { template_id: selectedTemplateId } : {}),
   });
 
-  const handleExport = async () => {
+  const doExport = async () => {
     setExporting(true);
     try {
       if (format === 'word') {
@@ -90,6 +96,26 @@ const ExportDialog: React.FC<ExportDialogProps> = ({
     } finally {
       setExporting(false);
     }
+  };
+
+  const handleExport = async () => {
+    // 如果有 projectId，先做废标校验
+    if (projectId) {
+      setValidating(true);
+      try {
+        const result = await disqualificationApi.validateBeforeExport(projectId);
+        if (result.has_risk) {
+          setRiskItems(result.fatal_unresolved_items);
+          setShowRiskWarning(true);
+          return; // 先展示警告，由用户决定是否继续
+        }
+      } catch {
+        // 校验失败静默跳过，不阻塞导出
+      } finally {
+        setValidating(false);
+      }
+    }
+    await doExport();
   };
 
   const handlePreview = async () => {
@@ -167,9 +193,9 @@ const ExportDialog: React.FC<ExportDialogProps> = ({
               type="primary"
               icon={<DownloadOutlined />}
               onClick={() => void handleExport()}
-              loading={exporting}
+              loading={exporting || validating}
             >
-              导出
+              {validating ? '校验中...' : '导出'}
             </Button>
           </Space>
         </Space>
@@ -221,6 +247,55 @@ const ExportDialog: React.FC<ExportDialogProps> = ({
             <Radio value="pdf">PDF</Radio>
           </Radio.Group>
         </div>
+
+        {/* 废标风险警告 */}
+        {showRiskWarning && riskItems && riskItems.length > 0 && (
+          <div>
+            <Alert
+              type="error"
+              showIcon
+              icon={<ThunderboltOutlined />}
+              message={`发现 ${riskItems.length} 项废标风险（fatal 级别未通过）`}
+              description={
+                <div>
+                  <div style={{ marginBottom: 6, fontSize: 12, color: '#64748b' }}>
+                    以下检查项未通过，继续导出可能导致废标风险：
+                  </div>
+                  <List
+                    size="small"
+                    dataSource={riskItems.slice(0, 5)}
+                    renderItem={(item) => (
+                      <List.Item style={{ padding: '4px 0' }}>
+                        <span style={{ fontSize: 12, color: '#ef4444' }}>
+                          [{item.item_id}] {item.requirement}
+                        </span>
+                      </List.Item>
+                    )}
+                  />
+                  {riskItems.length > 5 && (
+                    <div style={{ fontSize: 12, color: '#94a3b8' }}>
+                      ...还有 {riskItems.length - 5} 项，请在废标检查面板中查看
+                    </div>
+                  )}
+                  <div style={{ marginTop: 10, display: 'flex', gap: 8 }}>
+                    <Button
+                      size="small"
+                      danger
+                      onClick={() => void doExport()}
+                      loading={exporting}
+                    >
+                      忽略风险，强制导出
+                    </Button>
+                    <Button size="small" onClick={() => setShowRiskWarning(false)}>
+                      取消，返回检查
+                    </Button>
+                  </div>
+                </div>
+              }
+              style={{ marginTop: 4 }}
+            />
+          </div>
+        )}
 
         {/* 预览图 */}
         {(previewing || previewUrl) && (

@@ -16,18 +16,20 @@ import MemberSidebar from '../components/MemberSidebar';
 import ConsistencyPanel from '../components/ConsistencyPanel';
 import CommentPanel from '../components/CommentPanel';
 import MaterialRequirementDrawer from '../components/MaterialRequirementDrawer';
+import DisqualificationPanel from '../components/DisqualificationPanel';
 import { useLayoutHeader } from '../layouts/layoutHeader';
 import DocumentAnalysis from './DocumentAnalysis';
 import OutlineEdit from './OutlineEdit';
 import ContentEdit from './ContentEdit';
 
-import { Layout, Button, Typography, Spin, message } from 'antd';
+import { Layout, Button, Typography, Spin, message, Badge, Tooltip } from 'antd';
 import {
   TeamOutlined,
   SettingOutlined,
   HistoryOutlined,
   ArrowLeftOutlined,
   PaperClipOutlined,
+  SafetyOutlined,
 } from '@ant-design/icons';
 
 const { Content } = Layout;
@@ -48,6 +50,7 @@ const ProjectWorkspace: React.FC = () => {
   const [isCheckingConsistency, setIsCheckingConsistency] = useState(false);
   const [activeCommentChapter, setActiveCommentChapter] = useState<string | null>(null);
   const [showMaterialDrawer, setShowMaterialDrawer] = useState(false);
+  const [showDisqualificationPanel, setShowDisqualificationPanel] = useState(false);
   const [lastChapterSummaries, setLastChapterSummaries] = useState<{ chapter_number: string; title: string; summary: string }[]>([]);
   const [highlightedChapters, setHighlightedChapters] = useState<Set<string>>(new Set());
 
@@ -199,6 +202,14 @@ const ProjectWorkspace: React.FC = () => {
           <div className="flex shrink-0 flex-wrap items-center gap-3">
             <Button icon={<TeamOutlined />} onClick={() => setShowMemberSidebar(true)}>成员</Button>
             <Button icon={<PaperClipOutlined />} onClick={() => setShowMaterialDrawer(true)}>材料需求</Button>
+            <Tooltip title="废标项检查 — 自动提取否决性条款并逐项核实">
+              <Button
+                icon={<SafetyOutlined />}
+                onClick={() => setShowDisqualificationPanel(true)}
+              >
+                废标检查
+              </Button>
+            </Tooltip>
             <Button icon={<SettingOutlined />} onClick={() => navigate(`/project/${projectId}/settings`)}>设置</Button>
             <Button icon={<HistoryOutlined />} onClick={() => setShowVersionHistory(true)}>版本历史</Button>
           </div>
@@ -510,6 +521,14 @@ const ProjectWorkspace: React.FC = () => {
           onClose={() => setShowMaterialDrawer(false)}
         />
       ) : null}
+
+      {projectId && (
+        <DisqualificationPanel
+          projectId={projectId}
+          isOpen={showDisqualificationPanel}
+          onClose={() => setShowDisqualificationPanel(false)}
+        />
+      )}
     </Layout>
   );
 };

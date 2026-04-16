@@ -910,6 +910,49 @@ JSON 格式要求：
         "available_vars": {"content": "投标文件内容 + 项目概述"},
     },
 
+    # ===== 评分标准提取场景 =====
+    "extract_scoring_criteria": {
+        "scene_name": "评分标准提取",
+        "category": "analysis",
+        "prompt": """# 系统指令
+
+你是专业的招标文件分析专家。请从招标文件中精确提取评分标准，输出结构化 JSON。
+
+## 提取原则
+1. 以招标文件原文为准，保留原始分值、评分规则措辞
+2. 覆盖技术评分的所有评分项，不漏项、不合并独立评分项
+3. 若文件中无明确分值，可估填 null
+4. category 只能取：技术方案 / 商务条件 / 资质业绩 / 服务保障 / 其他
+5. keywords 为该评分项的关键词，3-6 个，用于后续与章节自动绑定
+
+## 输出 JSON 格式（只输出 JSON，不要任何其他说明）
+{
+  "scoring_criteria": [
+    {
+      "id": "SC001",
+      "category": "技术方案",
+      "item": "系统架构设计",
+      "max_score": 10,
+      "scoring_rule": "方案合理完整得8-10分，基本合理得5-7分，不合理得0-4分",
+      "keywords": ["架构", "系统设计", "技术路线"],
+      "source_text": "评分标准表 第2项"
+    }
+  ],
+  "total_score": 100,
+  "technical_score": 60,
+  "commercial_score": 30,
+  "other_score": 10
+}
+
+---
+
+# 用户输入
+
+请从以下招标文件中提取评分标准：
+
+{{file_content}}""",
+        "available_vars": {"file_content": "招标文件文本内容"},
+    },
     # ===== 格式提取场景 =====
     "extract_format_requirements": {
         "scene_name": "格式提取-导出格式要求",
@@ -982,6 +1025,72 @@ JSON 格式要求：
 # 用户输入
 
 请分析以下招标文件内容，提取文档排版格式要求：
+
+{{file_content}}""",
+        "available_vars": {"file_content": "招标文件文本内容"},
+    },
+
+    # ===== 废标检查场景 =====
+    "extract_disqualification_items": {
+        "scene_name": "废标检查-否决性条款提取",
+        "category": "analysis",
+        "prompt": """# 系统指令
+
+你是一名专业的投标文件合规审查专家，擅长从招标文件中识别所有可能导致废标的否决性条款和强制性要求。
+
+## 任务目标
+从招标文件中提取全部可能导致投标文件被否决、废标或无效的条款，输出结构化 JSON。
+
+## 提取范围
+重点关注以下类型的否决性条款：
+1. **资质要求**（certificate）：营业执照、行业资质、ISO认证、安全生产许可等强制资质
+2. **文件要求**（document）：投标保证金、法定代表人授权书、业绩证明、财务报表等缺失即废标的文件
+3. **格式要求**（format）：装订要求、签章要求、正副本份数、密封要求等
+4. **时限要求**（deadline）：投标文件递交截止时间、投标有效期、保证金缴纳期限等
+5. **其他否决项**（other）：联合体规定、分包限制、禁止条款等
+
+## 严重程度判定
+- **fatal**：缺失或不满足直接导致废标，招标文件明确写"否决投标""视为废标""无效投标"
+- **warning**：招标文件要求但未明确写废标，可能导致扣分或引发质疑
+
+## 输出要求
+返回严格的 JSON 格式，不要输出任何额外说明：
+
+```json
+{
+  "disqualification_items": [
+    {
+      "id": "DQ001",
+      "category": "资质要求",
+      "requirement": "投标人须具有有效的建筑工程施工总承包贰级及以上资质",
+      "check_type": "certificate",
+      "severity": "fatal",
+      "source_text": "第三章 资格审查 3.1.2：不具备本条所列资质条件的投标人将被否决"
+    }
+  ]
+}
+```
+
+## 字段说明
+- `id`：顺序编号，格式为 DQ001、DQ002...
+- `category`：中文分类名称（资质要求/文件要求/格式要求/时限要求/其他）
+- `requirement`：具体要求描述，简洁清晰，便于投标人自查
+- `check_type`：certificate / document / format / deadline / other
+- `severity`：fatal（直接废标）/ warning（潜在风险）
+- `source_text`：招标文件原文或来源位置（章节号+关键原文）
+
+## 提取规则
+1. 优先提取有明确废标表述的条款
+2. 不重复提取同一要求，若同一事项在多处出现，合并为一条
+3. 若招标文件较简单，没有明确废标条款，提取所有强制性资质和文件要求并标记为 warning
+4. source_text 引用招标文件原文，控制在 100 字以内
+5. 只返回 JSON，不输出任何解释或代码块标记
+
+---
+
+# 用户输入
+
+请分析以下招标文件内容，提取所有否决性条款：
 
 {{file_content}}""",
         "available_vars": {"file_content": "招标文件文本内容"},

@@ -1228,4 +1228,152 @@ export const reviewApi = {
   },
 };
 
+// ==================== 评分标准 API ====================
+
+export interface ScoringCriteriaItem {
+  id: string;
+  item_id: string;
+  category: string | null;
+  item: string;
+  max_score: number | null;
+  scoring_rule: string | null;
+  keywords: string[];
+  source_text: string | null;
+  bound_chapter_id: string | null;
+}
+
+export interface ScoringExtractResponse {
+  success: boolean;
+  count: number;
+  total_score: number | null;
+  technical_score: number | null;
+  commercial_score: number | null;
+  other_score: number | null;
+  items: ScoringCriteriaItem[];
+}
+
+export interface ScoringCoverageResponse {
+  total: number;
+  bound: number;
+  unbound: number;
+  bound_score: number;
+  unbound_score: number;
+  total_score: number;
+  coverage_rate: number;
+  high_score_unbound: ScoringCriteriaItem[];
+}
+
+export const scoringApi = {
+  extract: async (projectId: string, modelName?: string, providerConfigId?: string): Promise<ScoringExtractResponse> => {
+    try {
+      const response = await api.post<ScoringExtractResponse>('/api/scoring/extract', {
+        project_id: projectId,
+        model_name: modelName,
+        provider_config_id: providerConfigId,
+      });
+      return response.data;
+    } catch (error) { handleApiError(error, '提取评分标准失败'); }
+  },
+
+  list: async (projectId: string): Promise<ScoringCriteriaItem[]> => {
+    try {
+      const response = await api.get<ScoringCriteriaItem[]>(`/api/scoring/${projectId}`);
+      return response.data;
+    } catch (error) { handleApiError(error, '获取评分标准列表失败'); }
+  },
+
+  updateItem: async (projectId: string, scoringId: string, data: Partial<ScoringCriteriaItem>): Promise<ScoringCriteriaItem> => {
+    try {
+      const response = await api.put<ScoringCriteriaItem>(`/api/scoring/${projectId}/${scoringId}`, data);
+      return response.data;
+    } catch (error) { handleApiError(error, '更新评分项失败'); }
+  },
+
+  autoBind: async (projectId: string): Promise<{ success: boolean; bound_count: number; total_count: number }> => {
+    try {
+      const response = await api.post(`/api/scoring/${projectId}/auto-bind`);
+      return response.data;
+    } catch (error) { handleApiError(error, '自动绑定失败'); }
+  },
+
+  coverage: async (projectId: string): Promise<ScoringCoverageResponse> => {
+    try {
+      const response = await api.get<ScoringCoverageResponse>(`/api/scoring/${projectId}/coverage`);
+      return response.data;
+    } catch (error) { handleApiError(error, '获取评分覆盖率失败'); }
+  },
+};
+
+// ==================== 废标检查 API ====================
+
+export interface DisqualificationItem {
+  id: string;
+  item_id: string;
+  category: string;
+  requirement: string;
+  check_type: string;
+  severity: string; // fatal | warning
+  source_text?: string;
+  status: string; // unchecked | passed | failed | not_applicable
+  checked_by?: string;
+  checked_at?: string;
+  note?: string;
+}
+
+export interface DisqualificationSummary {
+  total: number;
+  checked: number;
+  passed: number;
+  failed: number;
+  not_applicable: number;
+  unchecked: number;
+  fatal_unresolved: number;
+}
+
+export interface ValidateBeforeExportResponse {
+  has_risk: boolean;
+  fatal_unresolved_items: DisqualificationItem[];
+  message: string;
+}
+
+export const disqualificationApi = {
+  extract: async (projectId: string, modelName?: string): Promise<DisqualificationItem[]> => {
+    try {
+      const response = await api.post<DisqualificationItem[]>('/api/disqualification/extract', {
+        project_id: projectId,
+        ...(modelName ? { model_name: modelName } : {}),
+      });
+      return response.data;
+    } catch (error) { handleApiError(error, '提取废标检查项失败'); }
+  },
+
+  list: async (projectId: string): Promise<DisqualificationItem[]> => {
+    try {
+      const response = await api.get<DisqualificationItem[]>(`/api/disqualification/${projectId}`);
+      return response.data;
+    } catch (error) { handleApiError(error, '获取废标检查清单失败'); }
+  },
+
+  updateItem: async (projectId: string, itemId: string, data: { status: string; note?: string }): Promise<DisqualificationItem> => {
+    try {
+      const response = await api.put<DisqualificationItem>(`/api/disqualification/${projectId}/${itemId}`, data);
+      return response.data;
+    } catch (error) { handleApiError(error, '更新检查项状态失败'); }
+  },
+
+  summary: async (projectId: string): Promise<DisqualificationSummary> => {
+    try {
+      const response = await api.get<DisqualificationSummary>(`/api/disqualification/${projectId}/summary`);
+      return response.data;
+    } catch (error) { handleApiError(error, '获取废标检查摘要失败'); }
+  },
+
+  validateBeforeExport: async (projectId: string): Promise<ValidateBeforeExportResponse> => {
+    try {
+      const response = await api.post<ValidateBeforeExportResponse>(`/api/disqualification/${projectId}/validate-before-export`);
+      return response.data;
+    } catch (error) { handleApiError(error, '导出前废标校验失败'); }
+  },
+};
+
 export default api;

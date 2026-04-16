@@ -1,6 +1,7 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState, useCallback } from 'react';
 import { OutlineData, OutlineItem } from '../types';
-import { outlineApi, expandApi, consistencyApi } from '../services/api';
+import { outlineApi, expandApi, consistencyApi, scoringApi } from '../services/api';
+import type { ScoringCoverageResponse } from '../services/api';
 import { getErrorMessage } from '../utils/error';
 import { consumeSseEvents } from '../utils/sse';
 import { useAuth } from '../contexts/AuthContext';
@@ -61,6 +62,7 @@ const OutlineEdit: React.FC<OutlineEditProps> = ({
   const [showRatingChecklist, setShowRatingChecklist] = useState(false);
   const [isLoadingRatingChecklist, setIsLoadingRatingChecklist] = useState(false);
   const [ratingChecklist, setRatingChecklist] = useState<RatingChecklistResponse | null>(null);
+  const [scoringCoverage, setScoringCoverage] = useState<ScoringCoverageResponse | null>(null);
 
   const outlineStats = useMemo(() => {
     const stats = {
@@ -143,6 +145,16 @@ const OutlineEdit: React.FC<OutlineEditProps> = ({
       setExpandedItems(collectOutlineIds(outlineData.outline));
     }
   }, [expandedItems.size, outlineData]);
+
+  // 加载评分标准覆盖率（静默）
+  useEffect(() => {
+    if (!projectId) return;
+    scoringApi.list(projectId).then(items => {
+      if (items.length > 0) {
+        return scoringApi.coverage(projectId).then(setScoringCoverage);
+      }
+    }).catch(() => {/* 静默忽略 */});
+  }, [projectId]);
 
   const handleExpandUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
@@ -653,6 +665,26 @@ const OutlineEdit: React.FC<OutlineEditProps> = ({
           width: 18px;
         }
       `}</style>
+
+      {/* 评分标准提示条 */}
+      {scoringCoverage && scoringCoverage.total > 0 && (
+        <Alert
+          style={{ marginBottom: 16, borderRadius: 10 }}
+          type="info"
+          showIcon
+          message={
+            <span>
+              已加载 <strong>{scoringCoverage.total}</strong> 个评分项（总分{' '}
+              <strong>{scoringCoverage.total_score}</strong> 分），生成目录时将自动参考评分权重。
+              {scoringCoverage.unbound > 0 && (
+                <span style={{ marginLeft: 8, color: '#faad14' }}>
+                  ⚠ 还有 {scoringCoverage.unbound} 项未绑定章节
+                </span>
+              )}
+            </span>
+          }
+        />
+      )}
 
       <div className="grid gap-6 xl:grid-cols-[380px_minmax(0,1fr)]">
         <ProCard

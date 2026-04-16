@@ -24,6 +24,7 @@ from ..models.user import User
 from ..models.project import Project, project_members, ProjectMemberRole
 from ..models.chapter import Chapter, ChapterStatus
 from ..models.version import ProjectVersion, ChangeType
+from ..models.scoring import ScoringCriteria
 from ..db.database import get_db
 from ..services.openai_service import OpenAIService
 from ..services.prompt_service import PromptService
@@ -330,10 +331,33 @@ async def generate_project_outline_l1_stream(
             openai_service.set_model(request.model_name)
 
         async def generate():
+            # 查询项目的评分标准，注入到目录生成 prompt 中
+            sc_result = await db.execute(
+                select(ScoringCriteria)
+                .where(ScoringCriteria.project_id == project_uuid)
+                .order_by(ScoringCriteria.created_at)
+            )
+            scoring_items = sc_result.scalars().all()
+
+            effective_requirements = project.tech_requirements
+            if scoring_items:
+                scoring_lines = [
+                    f"- {sc.item_id or ''} {sc.item}"
+                    f"（满分{sc.max_score}分）"
+                    f"：{sc.scoring_rule or '见原文'}"
+                    for sc in scoring_items
+                ]
+                scoring_hint = (
+                    "\n\n【评分标准提示】以下是从招标文件中提取的评分项，"
+                    "请确保一级目录结构能覆盖所有高分评分项，高分项应有独立章节：\n"
+                    + "\n".join(scoring_lines)
+                )
+                effective_requirements = project.tech_requirements + scoring_hint
+
             # 使用 prompt_manager 生成一级目录
             system_prompt, user_prompt = prompt_manager.generate_outline_prompt(
                 project.project_overview,
-                project.tech_requirements,
+                effective_requirements,
             )
 
             messages = [
@@ -925,6 +949,29 @@ async def generate_project_content_stream(
         chapter_role = getattr(chapter, "chapter_role", "") or chapter.content or ""
         chapter_rating_focus = getattr(chapter, "rating_item", "") or ""
         adjacent_boundary = getattr(chapter, "avoid_overlap", "") or ""
+
+        # 如果该章节绑定了评分标准，把评分信息追加到 chapter_rating_focus
+        sc_for_chapter_result = await db.execute(
+            select(ScoringCriteria).where(
+                and_(
+                    ScoringCriteria.project_id == project_uuid,
+                    ScoringCriteria.bound_chapter_id == chapter_uuid,
+                )
+            )
+        )
+        bound_scoring = sc_for_chapter_result.scalars().all()
+        if bound_scoring:
+            sc_lines = []
+            for sc in bound_scoring:
+                line = f"【{sc.item}】满分 {sc.max_score} 分"
+                if sc.scoring_rule:
+                    line += f"，评分规则：{sc.scoring_rule}"
+                sc_lines.append(line)
+            scoring_injection = (
+                "\n\n【本章绑定评分项】请确保内容充分覆盖以下评分要点，"
+                "篇幅和深度应与分值相匹配：\n" + "\n".join(sc_lines)
+            )
+            chapter_rating_focus = chapter_rating_focus + scoring_injection if chapter_rating_focus else scoring_injection
 
         if sibling_chapters_formatted and not adjacent_boundary:
             sibling_titles = "；".join([
