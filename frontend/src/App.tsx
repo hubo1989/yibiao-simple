@@ -19,6 +19,7 @@ const MaterialLibrary = lazy(() => import('./pages/MaterialLibrary'));
 const ProjectManager = lazy(() => import('./pages/ProjectManager'));
 const RequestLogs = lazy(() => import('./pages/RequestLogs'));
 const BasicLayout = lazy(() => import('./layouts/BasicLayout'));
+const TemplateManage = lazy(() => import('./pages/TemplateManage'));
 
 const routeFallback = (
   <div
@@ -82,6 +83,9 @@ function App() {
               {/* 知识库管理 */}
               <Route path="knowledge" element={<KnowledgeBase />} />
               <Route path="materials" element={<MaterialLibrary />} />
+
+              {/* 导出模板管理 */}
+              <Route path="templates" element={<TemplateManage />} />
             </Route>
 
             {/* 默认重定向 */}

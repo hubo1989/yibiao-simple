@@ -8,7 +8,8 @@ import {
   PictureOutlined,
   LogoutOutlined,
   UserOutlined,
-  FolderOpenOutlined
+  FolderOpenOutlined,
+  FileTextOutlined,
 } from '@ant-design/icons';
 import { Dropdown } from 'antd';
 import { useAuth } from '../contexts/AuthContext';
@@ -45,6 +46,11 @@ const BasicLayout: React.FC = () => {
       path: '/materials',
       name: '素材库',
       icon: <PictureOutlined />,
+    },
+    {
+      path: '/templates',
+      name: '导出模板',
+      icon: <FileTextOutlined />,
     },
     ...(user?.role === 'admin' ? [{
       path: '/admin',

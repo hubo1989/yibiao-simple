@@ -376,6 +376,46 @@ export const configApi = {
     api.post<ProviderModelsResponse>('/api/config/models'),
 };
 
+// 导出模板相关类型
+export interface ExportTemplate {
+  id: string;
+  name: string;
+  description?: string;
+  is_builtin: boolean;
+  format_config: any;
+  created_at: string;
+  updated_at: string;
+}
+
+// 导出模板 API
+export const exportTemplateApi = {
+  list: async (): Promise<ExportTemplate[]> => {
+    const response = await api.get<ExportTemplate[]>('/api/export-templates');
+    return response.data;
+  },
+  get: async (id: string): Promise<ExportTemplate> => {
+    const response = await api.get<ExportTemplate>(`/api/export-templates/${id}`);
+    return response.data;
+  },
+  create: async (data: any): Promise<ExportTemplate> => {
+    const response = await api.post<ExportTemplate>('/api/export-templates', data);
+    return response.data;
+  },
+  update: async (id: string, data: any): Promise<ExportTemplate> => {
+    const response = await api.put<ExportTemplate>(`/api/export-templates/${id}`, data);
+    return response.data;
+  },
+  delete: async (id: string): Promise<void> => {
+    await api.delete(`/api/export-templates/${id}`);
+  },
+  extractFromDocument: async (data: { project_id: string; file_content?: string }): Promise<any> => {
+    const response = await api.post('/api/export-templates/extract-from-document', data);
+    return response.data;
+  },
+  preview: (data: any) =>
+    api.post('/api/document/export-preview', data, { responseType: 'blob' }),
+};
+
 // 文档相关API
 export const documentApi = {
   // 上传文件
@@ -444,13 +484,13 @@ export const documentApi = {
   },
 
   // 导出Word文档
-  exportWord: (data: { project_name: string; project_overview?: string; project_id?: string; outline: OutlineItem[] }) => {
+  exportWord: (data: { project_name: string; project_overview?: string; project_id?: string; outline: OutlineItem[]; template_id?: string }) => {
     return api.post('/api/document/export-word', data, {
       responseType: 'blob',
     });
   },
 
-  exportPdf: (data: { project_name: string; project_overview?: string; project_id?: string; outline: OutlineItem[] }) => {
+  exportPdf: (data: { project_name: string; project_overview?: string; project_id?: string; outline: OutlineItem[]; template_id?: string }) => {
     return api.post('/api/document/export-pdf', data, {
       responseType: 'blob',
       timeout: 120000,  // PDF 转换可能较慢

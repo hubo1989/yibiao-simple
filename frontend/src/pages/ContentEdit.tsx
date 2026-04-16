@@ -3,7 +3,6 @@ import ReactMarkdown from 'react-markdown';
 import { OutlineData, OutlineItem } from '../types';
 import {
   contentApi,
-  documentApi,
   proofreadApi,
   chapterApi,
   outlineApi,
@@ -11,9 +10,10 @@ import {
   materialApi,
   ChapterContentRequest,
 } from '../services/api';
+import ExportDialog from '../components/ExportDialog';
 import { getErrorMessage, ApiError } from '../utils/error';
 import { useAuth } from '../contexts/AuthContext';
-import { saveAs } from 'file-saver';
+
 import { draftStorage } from '../utils/draftStorage';
 import { getCurrentModel, getCurrentProviderConfigId } from '../utils/modelCache';
 import ChapterStatusBadge from '../components/ChapterStatusBadge';
@@ -1096,81 +1096,19 @@ const ContentEdit: React.FC<ContentEditProps> = ({
     return item.content || '';
   };
 
-  const handleExportWord = async () => {
-    if (!outlineData) return;
+  const [showExportDialog, setShowExportDialog] = useState(false);
 
-    try {
-      const buildExportOutline = (items: OutlineItem[]): OutlineItem[] => {
-        return items.map(item => {
-          const latestContent = getLatestContent(item);
-          const exportedItem: OutlineItem = {
-            ...item,
-            content: latestContent,
-          };
-          if (item.children && item.children.length > 0) {
-            exportedItem.children = buildExportOutline(item.children);
-          }
-          return exportedItem;
-        });
-      };
-
-      const exportPayload = {
-        project_name: outlineData.project_name || '标书文档',
-        project_overview: outlineData.project_overview,
-        project_id: projectId,
-        outline: buildExportOutline(outlineData.outline),
-      };
-
-      const response = await documentApi.exportWord(exportPayload);
-      const blob = response.data;
-      saveAs(blob, `${outlineData.project_name || '标书文档'}.docx`);
-      message.success('导出成功');
-    } catch (error) {
-      console.error('导出失败:', error);
-      message.error('导出失败，请重试');
-    }
-  };
-
-  const [exportingPdf, setExportingPdf] = useState(false);
-
-  const handleExportPdf = async () => {
-    if (!outlineData) return;
-
-    try {
-      setExportingPdf(true);
-
-      const buildExportOutline = (items: OutlineItem[]): OutlineItem[] => {
-        return items.map(item => {
-          const latestContent = getLatestContent(item);
-          const exportedItem: OutlineItem = {
-            ...item,
-            content: latestContent,
-          };
-          if (item.children && item.children.length > 0) {
-            exportedItem.children = buildExportOutline(item.children);
-          }
-          return exportedItem;
-        });
-      };
-
-      const exportPayload = {
-        project_name: outlineData.project_name || '标书文档',
-        project_overview: outlineData.project_overview,
-        project_id: projectId,
-        outline: buildExportOutline(outlineData.outline),
-      };
-
-      const response = await documentApi.exportPdf(exportPayload);
-      const blob = response.data;
-      saveAs(blob, `${outlineData.project_name || '标书文档'}.pdf`);
-      message.success('PDF 导出成功');
-    } catch (error) {
-      console.error('PDF 导出失败:', error);
-      message.error('PDF 导出失败，请重试');
-    } finally {
-      setExportingPdf(false);
-    }
-  };
+  const buildExportOutline = useCallback((items: OutlineItem[]): OutlineItem[] => {
+    return items.map(item => {
+      const latestContent = getLatestContent(item);
+      const exportedItem: OutlineItem = { ...item, content: latestContent };
+      if (item.children && item.children.length > 0) {
+        exportedItem.children = buildExportOutline(item.children);
+      }
+      return exportedItem;
+    });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [leafItems]);
 
   if (!outlineData) {
     return (
@@ -1241,18 +1179,10 @@ const ContentEdit: React.FC<ContentEditProps> = ({
 
               <Button
                 icon={<DownloadOutlined />}
-                onClick={handleExportWord}
+                onClick={() => setShowExportDialog(true)}
                 disabled={isGenerating}
               >
-                导出Word
-              </Button>
-              <Button
-                icon={<DownloadOutlined />}
-                onClick={handleExportPdf}
-                disabled={isGenerating || exportingPdf}
-                loading={exportingPdf}
-              >
-                导出PDF
+                导出文档
               </Button>
             </Space>
           }
@@ -1487,6 +1417,16 @@ const ContentEdit: React.FC<ContentEditProps> = ({
           </Typography.Text>
         </div>
       </Modal>
+
+      {/* 导出文档弹窗 */}
+      <ExportDialog
+        visible={showExportDialog}
+        onClose={() => setShowExportDialog(false)}
+        projectName={outlineData?.project_name || '标书文档'}
+        projectOverview={outlineData?.project_overview}
+        projectId={projectId}
+        getExportOutline={() => outlineData ? buildExportOutline(outlineData.outline) : []}
+      />
     </div>
   );
 };

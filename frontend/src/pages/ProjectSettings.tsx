@@ -5,7 +5,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
-import { promptApi, projectApi } from '../services/api';
+import { promptApi, projectApi, exportTemplateApi, ExportTemplate } from '../services/api';
 import type { Project } from '../types/project';
 import type { ProjectPromptConfig, PromptCategory } from '../types/prompt';
 import { PROMPT_CATEGORY_NAMES } from '../types/prompt';
@@ -28,6 +28,11 @@ const ProjectSettings: React.FC = () => {
   const [promptCategoryFilter, setPromptCategoryFilter] = useState<PromptCategory | ''>('');
   const [expandedPrompt, setExpandedPrompt] = useState<string | null>(null);
 
+  // 导出模板
+  const [exportTemplates, setExportTemplates] = useState<ExportTemplate[]>([]);
+  const [defaultTemplateId, setDefaultTemplateId] = useState<string | undefined>(undefined);
+  const [savingTemplate, setSavingTemplate] = useState(false);
+
   // 加载项目信息
   const loadProject = useCallback(async () => {
     if (!projectId) return;
@@ -44,6 +49,16 @@ const ProjectSettings: React.FC = () => {
       setLoading(false);
     }
   }, [projectId, navigate]);
+
+  // 加载导出模板列表
+  const loadExportTemplates = useCallback(async () => {
+    try {
+      const list = await exportTemplateApi.list();
+      setExportTemplates(list);
+    } catch {
+      // 后端未实现时静默忽略
+    }
+  }, []);
 
   // 加载项目提示词配置
   const loadPrompts = useCallback(async () => {
@@ -69,8 +84,11 @@ const ProjectSettings: React.FC = () => {
   useEffect(() => {
     if (project) {
       loadPrompts();
+      void loadExportTemplates();
+      // 从 project.format_config 或 default_template_id 读取默认模板（若后端已支持）
+      setDefaultTemplateId((project as any).default_template_id ?? undefined);
     }
-  }, [project, loadPrompts]);
+  }, [project, loadPrompts, loadExportTemplates]);
 
   useEffect(() => {
     return () => {
@@ -144,6 +162,50 @@ const ProjectSettings: React.FC = () => {
         <div className="grid gap-8 xl:grid-cols-3 items-start">
           <div className="space-y-8 xl:col-span-1 xl:sticky xl:top-8">
             <ConfigPanel />
+          </div>
+
+          {/* 默认导出模板 */}
+          <div className="bg-white shadow rounded-lg xl:col-span-2">
+            <div className="px-6 py-4 border-b border-gray-200">
+              <h2 className="text-lg font-medium text-gray-900">默认导出模板</h2>
+              <p className="text-sm text-gray-500 mt-1">
+                导出文档时默认使用的排版格式，也可在导出弹窗中临时切换。
+              </p>
+            </div>
+            <div className="px-6 py-4 flex items-center gap-4">
+              <select
+                value={defaultTemplateId ?? ''}
+                onChange={(e) => setDefaultTemplateId(e.target.value || undefined)}
+                className="px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 min-w-[240px]"
+                disabled={!canEdit}
+              >
+                <option value="">（默认格式，不指定模板）</option>
+                {exportTemplates.map((t) => (
+                  <option key={t.id} value={t.id}>
+                    {t.name}{t.is_builtin ? '（内置）' : ''}
+                  </option>
+                ))}
+              </select>
+              {canEdit && (
+                <button
+                  onClick={async () => {
+                    setSavingTemplate(true);
+                    try {
+                      await projectApi.update(projectId!, { default_template_id: defaultTemplateId ?? null } as any);
+                      alert('保存成功');
+                    } catch {
+                      alert('保存失败');
+                    } finally {
+                      setSavingTemplate(false);
+                    }
+                  }}
+                  disabled={savingTemplate}
+                  className="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-md hover:bg-blue-700 disabled:opacity-50"
+                >
+                  {savingTemplate ? '保存中...' : '保存'}
+                </button>
+              )}
+            </div>
           </div>
 
           {/* 提示词配置部分 */}
