@@ -80,6 +80,10 @@ class Project(Base):
         onupdate=func.now(),
     )
 
+    default_template_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("export_templates.id", ondelete="SET NULL"), nullable=True
+    )
+
     # 关系
     creator = relationship("User", foreign_keys=[creator_id], backref="created_projects")
     members = relationship("User", secondary=project_members, backref="projects")

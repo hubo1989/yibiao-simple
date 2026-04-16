@@ -121,6 +121,7 @@ class WordExportRequest(BaseModel):
     project_overview: Optional[str] = Field(None, description="项目概述")
     project_id: Optional[str] = Field(None, description="可选的项目ID，用于读取章节素材绑定")
     outline: List[OutlineItem] = Field(..., description="目录结构，包含内容")
+    template_id: Optional[str] = Field(None, description="可选的导出格式模板ID，不传则使用 GB/T 9704 内置模板")
 
 
 # ============ 项目上下文相关 Schema ============
@@ -268,3 +269,42 @@ class ContentGenerateWithKnowledgeRequest(BaseModel):
     chapter_id: str = Field(..., description="章节ID")
     knowledge_ids: List[str] = Field(default_factory=list, description="选中的知识库ID列表")
     model_name: Optional[str] = Field(None, description="可选的模型名称，覆盖默认配置")
+
+
+# ============ 导出格式模板 Schema ============
+
+class ExportTemplateCreate(BaseModel):
+    """创建导出格式模板请求"""
+    name: str = Field(..., max_length=100, description="模板名称")
+    description: Optional[str] = Field(None, max_length=500, description="模板描述")
+    format_config: Dict[str, Any] = Field(..., description="格式配置 JSON")
+
+
+class ExportTemplateUpdate(BaseModel):
+    """更新导出格式模板请求（内置模板只能改 name/description）"""
+    name: Optional[str] = Field(None, max_length=100, description="模板名称")
+    description: Optional[str] = Field(None, max_length=500, description="模板描述")
+    format_config: Optional[Dict[str, Any]] = Field(None, description="格式配置 JSON（内置模板不可修改）")
+
+
+class ExportTemplateResponse(BaseModel):
+    """导出格式模板响应"""
+    id: str
+    name: str
+    description: Optional[str] = None
+    is_builtin: bool
+    created_by: Optional[str] = None
+    format_config: Dict[str, Any]
+    source_file_path: Optional[str] = None
+    created_at: str
+    updated_at: str
+
+    model_config = {"from_attributes": True}
+
+
+class ExtractFormatRequest(BaseModel):
+    """从文档提取格式要求请求"""
+    project_id: Optional[str] = Field(None, description="项目ID（从项目文档提取）")
+    file_content: Optional[str] = Field(None, description="直接传入文档文本（优先级高于 project_id）")
+    model_name: Optional[str] = Field(None, description="可选的模型名称")
+    provider_config_id: Optional[str] = Field(None, description="可选的 Provider 配置 ID")

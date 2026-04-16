@@ -909,6 +909,83 @@ JSON 格式要求：
 {{content}}""",
         "available_vars": {"content": "投标文件内容 + 项目概述"},
     },
+
+    # ===== 格式提取场景 =====
+    "extract_format_requirements": {
+        "scene_name": "格式提取-导出格式要求",
+        "category": "analysis",
+        "prompt": """# 系统指令
+
+你是一名专业的投标文件格式分析专家。从招标文件中提取文档排版格式要求，输出严格的 JSON 格式，结构如下（所有数值保持原单位：磅/毫米）：
+
+```json
+{
+  "font": {
+    "body_font": "仿宋",
+    "body_size": 12,
+    "h1_font": "黑体",
+    "h1_size": 16,
+    "h2_font": "黑体",
+    "h2_size": 14,
+    "h3_font": "黑体",
+    "h3_size": 12,
+    "table_font": "仿宋",
+    "table_size": 10.5
+  },
+  "spacing": {
+    "line_spacing_pt": 28,
+    "first_indent_chars": 2,
+    "h1_before": 24,
+    "h1_after": 12,
+    "h2_before": 12,
+    "h2_after": 6,
+    "h3_before": 6,
+    "h3_after": 3
+  },
+  "margin": {
+    "top": 37,
+    "bottom": 35,
+    "left": 28,
+    "right": 26
+  },
+  "page": {
+    "page_number_format": "第X页 共Y页",
+    "header_text": "{project_name}",
+    "header_position": "center"
+  },
+  "cover": {
+    "show_cover": true,
+    "title_font": "黑体",
+    "title_size": 22,
+    "subtitle": "投标技术文件",
+    "show_bidder_info": true,
+    "cover_fields": ["投标人", "编制日期"]
+  },
+  "toc": {
+    "show_toc": true,
+    "toc_title": "目  录",
+    "toc_levels": 3
+  }
+}
+```
+
+## 提取规则
+1. 字体名称保留中文原文（如"仿宋"、"黑体"、"宋体"），若未提及则按 GB/T 9704 标准填写默认值
+2. 字号转换为磅值：初号=42 小初=36 一号=26 小一=24 二号=22 小二=18 三号=16 小三=15 四号=14 小四=12 五号=10.5 小五=9
+3. 页边距单位为毫米（mm），如"上边距 25mm"→ "top": 25
+4. 行间距单位为磅（pt），"固定值 28 磅"→ "line_spacing_pt": 28
+5. 若文件未明确规定某字段，保留 JSON 中默认值，不要输出 null
+6. 只输出合法 JSON，不输出任何解释、注释或额外文字
+
+---
+
+# 用户输入
+
+请分析以下招标文件内容，提取文档排版格式要求：
+
+{{file_content}}""",
+        "available_vars": {"file_content": "招标文件文本内容"},
+    },
 }
 
 
