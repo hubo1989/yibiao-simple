@@ -1,5 +1,6 @@
 /**
  * 版本历史侧边栏 (Ant Design Drawer + Timeline)
+ * 支持：版本列表、对比模式、diff 高亮、回滚确认
  */
 import React, { useState, useEffect, useCallback } from 'react';
 import {
@@ -14,6 +15,8 @@ import {
   message,
   Space,
   Typography,
+  Select,
+  Divider,
 } from 'antd';
 import {
   HistoryOutlined,
@@ -22,9 +25,11 @@ import {
   AuditOutlined,
   RollbackOutlined,
   CameraOutlined,
+  SwapOutlined,
 } from '@ant-design/icons';
 import { versionApi } from '../services/api';
-import type { VersionSummary } from '../types/version';
+import type { VersionSummary, VersionDiffResponse } from '../types/version';
+import VersionDiff from './VersionDiff';
 
 interface VersionHistoryProps {
   projectId: string;
@@ -32,8 +37,6 @@ interface VersionHistoryProps {
   onClose: () => void;
   chapterId?: string;
 }
-
-type ChangeType = VersionSummary['change_type'];
 
 const CHANGE_TYPE_LABELS: Record<string, string> = {
   content_update: '内容更新',
@@ -90,6 +93,13 @@ const VersionHistory: React.FC<VersionHistoryProps> = ({
   // 回滚
   const [rollingBackId, setRollingBackId] = useState<string | null>(null);
 
+  // 对比模式
+  const [compareMode, setCompareMode] = useState(false);
+  const [compareV1, setCompareV1] = useState<string | undefined>(undefined);
+  const [compareV2, setCompareV2] = useState<string | undefined>(undefined);
+  const [diffData, setDiffData] = useState<VersionDiffResponse | null>(null);
+  const [diffLoading, setDiffLoading] = useState(false);
+
   const loadVersions = useCallback(async () => {
     if (!projectId) return;
     setLoading(true);
@@ -114,6 +124,15 @@ const VersionHistory: React.FC<VersionHistoryProps> = ({
     }
   }, [isOpen, loadVersions]);
 
+  // 退出对比模式时清空状态
+  useEffect(() => {
+    if (!compareMode) {
+      setCompareV1(undefined);
+      setCompareV2(undefined);
+      setDiffData(null);
+    }
+  }, [compareMode]);
+
   const handleCreateSnapshot = async () => {
     setCreatingSnapshot(true);
     try {
@@ -129,22 +148,61 @@ const VersionHistory: React.FC<VersionHistoryProps> = ({
     }
   };
 
-  const handleRollback = async (version: VersionSummary) => {
-    if (!window.confirm(
-      `确认回滚到 V${version.version_number} 吗？\n\n回滚前会自动创建当前状态的快照，以便需要时恢复。`
-    )) return;
+  const handleRollback = (version: VersionSummary) => {
+    Modal.confirm({
+      title: '确认回滚',
+      content: (
+        <div>
+          <p>确认回滚到 <strong>V{version.version_number}</strong> 吗？</p>
+          <p style={{ color: '#888', fontSize: 12, marginTop: 8 }}>
+            回滚前会自动创建当前状态的快照，以便需要时恢复。
+          </p>
+        </div>
+      ),
+      okText: '确认回滚',
+      cancelText: '取消',
+      okButtonProps: { danger: true },
+      onOk: async () => {
+        setRollingBackId(version.id);
+        try {
+          await versionApi.rollback(projectId, version.id, true);
+          message.success('回滚成功，页面即将刷新');
+          setTimeout(() => window.location.reload(), 800);
+        } catch {
+          message.error('回滚失败');
+        } finally {
+          setRollingBackId(null);
+        }
+      },
+    });
+  };
 
-    setRollingBackId(version.id);
+  const handleCompare = async () => {
+    if (!compareV1 || !compareV2) {
+      message.warning('请选择两个版本进行对比');
+      return;
+    }
+    if (compareV1 === compareV2) {
+      message.warning('请选择不同的版本');
+      return;
+    }
+    setDiffLoading(true);
+    setDiffData(null);
     try {
-      await versionApi.rollback(projectId, version.id, true);
-      message.success('回滚成功，页面即将刷新');
-      setTimeout(() => window.location.reload(), 800);
+      const result = await versionApi.diff(projectId, compareV1, compareV2);
+      setDiffData(result);
     } catch {
-      message.error('回滚失败');
+      message.error('获取版本差异失败');
     } finally {
-      setRollingBackId(null);
+      setDiffLoading(false);
     }
   };
+
+  // 版本选项列表
+  const versionOptions = versions.map((v) => ({
+    value: v.id,
+    label: `V${v.version_number} - ${CHANGE_TYPE_LABELS[v.change_type] || v.change_type} (${formatDate(v.created_at)})`,
+  }));
 
   const timelineItems = versions.map((version) => ({
     key: version.id,
@@ -174,16 +232,75 @@ const VersionHistory: React.FC<VersionHistoryProps> = ({
         <Button
           size="small"
           type="text"
+          danger
           icon={<RollbackOutlined />}
           loading={rollingBackId === version.id}
           onClick={() => handleRollback(version)}
           style={{ marginLeft: 8, flexShrink: 0 }}
         >
-          恢复
+          回滚
         </Button>
       </div>
     ),
   }));
+
+  // 对比模式 UI
+  const renderComparePanel = () => (
+    <div>
+      <div style={{ marginBottom: 12 }}>
+        <Typography.Text type="secondary" style={{ fontSize: 12, display: 'block', marginBottom: 4 }}>
+          旧版本（左）
+        </Typography.Text>
+        <Select
+          style={{ width: '100%' }}
+          placeholder="选择旧版本"
+          value={compareV1}
+          onChange={setCompareV1}
+          options={versionOptions}
+          showSearch
+          optionFilterProp="label"
+        />
+      </div>
+      <div style={{ marginBottom: 12 }}>
+        <Typography.Text type="secondary" style={{ fontSize: 12, display: 'block', marginBottom: 4 }}>
+          新版本（右）
+        </Typography.Text>
+        <Select
+          style={{ width: '100%' }}
+          placeholder="选择新版本"
+          value={compareV2}
+          onChange={setCompareV2}
+          options={versionOptions}
+          showSearch
+          optionFilterProp="label"
+        />
+      </div>
+      <Button
+        type="primary"
+        block
+        onClick={handleCompare}
+        loading={diffLoading}
+        disabled={!compareV1 || !compareV2}
+        icon={<SwapOutlined />}
+      >
+        对比版本
+      </Button>
+
+      <Divider style={{ margin: '16px 0' }} />
+
+      {diffLoading && (
+        <div style={{ display: 'flex', justifyContent: 'center', padding: 40 }}>
+          <Spin tip="正在计算差异..." />
+        </div>
+      )}
+
+      {diffData && !diffLoading && <VersionDiff diffData={diffData} />}
+
+      {!diffData && !diffLoading && (
+        <Empty description="选择两个版本后点击对比" style={{ marginTop: 24 }} />
+      )}
+    </div>
+  );
 
   return (
     <>
@@ -198,17 +315,27 @@ const VersionHistory: React.FC<VersionHistoryProps> = ({
           </Space>
         }
         placement="right"
-        width={400}
+        width={compareMode ? 520 : 400}
         open={isOpen}
         onClose={onClose}
         extra={
-          <Button
-            size="small"
-            icon={<CameraOutlined />}
-            onClick={() => setSnapshotModalOpen(true)}
-          >
-            创建快照
-          </Button>
+          <Space>
+            <Button
+              size="small"
+              type={compareMode ? 'primary' : 'default'}
+              icon={<SwapOutlined />}
+              onClick={() => setCompareMode(!compareMode)}
+            >
+              {compareMode ? '退出对比' : '版本对比'}
+            </Button>
+            <Button
+              size="small"
+              icon={<CameraOutlined />}
+              onClick={() => setSnapshotModalOpen(true)}
+            >
+              创建快照
+            </Button>
+          </Space>
         }
       >
         {loading ? (
@@ -219,6 +346,8 @@ const VersionHistory: React.FC<VersionHistoryProps> = ({
           <div style={{ textAlign: 'center', color: 'red', padding: 40 }}>{error}</div>
         ) : versions.length === 0 ? (
           <Empty description="暂无版本历史" style={{ marginTop: 40 }} />
+        ) : compareMode ? (
+          renderComparePanel()
         ) : (
           <>
             <Timeline items={timelineItems} style={{ marginTop: 8 }} />
