@@ -3,6 +3,7 @@ import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { ProLayout } from '@ant-design/pro-components';
 import { 
   ProjectOutlined, 
+  DashboardOutlined,
   SettingOutlined, 
   ReadOutlined,
   PictureOutlined,
@@ -28,6 +29,11 @@ const BasicLayout: React.FC = () => {
   }, [location.pathname]);
 
   const menuData = [
+    {
+      path: '/dashboard',
+      name: '进度看板',
+      icon: <DashboardOutlined />,
+    },
     {
       path: '/',
       name: '工作台',

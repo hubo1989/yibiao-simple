@@ -1580,4 +1580,55 @@ export const chapterTemplateApi = {
   },
 };
 
+// ==================== 进度看板 API ====================
+
+export interface DashboardChapterStats {
+  total: number;
+  pending: number;
+  generated: number;
+  reviewing: number;
+  finalized: number;
+}
+
+export interface DashboardProjectItem {
+  id: string;
+  name: string;
+  status: string;
+  created_at: string;
+  updated_at: string;
+  chapter_stats: DashboardChapterStats;
+  completion_percentage: number;
+}
+
+export interface DashboardStatusCount {
+  draft: number;
+  in_progress: number;
+  reviewing: number;
+  completed: number;
+}
+
+export interface DashboardChapterStatusCount {
+  pending: number;
+  generated: number;
+  reviewing: number;
+  finalized: number;
+}
+
+export interface DashboardResponse {
+  total_projects: number;
+  by_status: DashboardStatusCount;
+  total_chapters: number;
+  chapter_by_status: DashboardChapterStatusCount;
+  projects: DashboardProjectItem[];
+}
+
+export const dashboardApi = {
+  overview: async (): Promise<DashboardResponse> => {
+    try {
+      const response = await api.get<DashboardResponse>('/api/projects/dashboard');
+      return response.data;
+    } catch (error) { handleApiError(error, '获取进度看板数据失败'); }
+  },
+};
+
 export default api;

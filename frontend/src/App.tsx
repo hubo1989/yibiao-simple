@@ -9,6 +9,7 @@ import ProtectedRoute from './components/ProtectedRoute';
 
 const Login = lazy(() => import('./pages/Login'));
 const Register = lazy(() => import('./pages/Register'));
+const Dashboard = lazy(() => import('./pages/Dashboard'));
 const ProjectList = lazy(() => import('./pages/ProjectList'));
 const ProjectWorkspace = lazy(() => import('./pages/ProjectWorkspace'));
 const ProjectSettings = lazy(() => import('./pages/ProjectSettings'));
@@ -56,6 +57,7 @@ function App() {
               }
             >
               <Route index element={<ProjectList />} />
+              <Route path="dashboard" element={<Dashboard />} />
               <Route path="project/:projectId" element={<ProjectWorkspace />} />
               <Route path="project/:projectId/settings" element={<ProjectSettings />} />
               <Route path="project/:projectId/review" element={<BidReview />} />
