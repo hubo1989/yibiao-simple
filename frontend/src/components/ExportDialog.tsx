@@ -20,6 +20,8 @@ interface ExportDialogProps {
   projectId?: string;
   /** 用于构建导出 outline（含最新内容） */
   getExportOutline: () => OutlineItem[];
+  /** 最近一次一致性校验结果（可选） */
+  consistencyResult?: ConsistencyCheckResult | null;
 }
 
 type ExportFormat = 'word' | 'pdf';
@@ -31,6 +33,7 @@ const ExportDialog: React.FC<ExportDialogProps> = ({
   projectOverview,
   projectId,
   getExportOutline,
+  consistencyResult,
 }) => {
   const navigate = useNavigate();
   const [templates, setTemplates] = useState<ExportTemplate[]>([]);
@@ -203,6 +206,16 @@ const ExportDialog: React.FC<ExportDialogProps> = ({
       }
     >
       <Space direction="vertical" size={20} style={{ width: '100%', padding: '8px 0' }}>
+        {/* 一致性校验警告 */}
+        {consistencyResult && consistencyResult.error_count > 0 && (
+          <Alert
+            type="warning"
+            showIcon
+            message={`全文一致性校验发现 ${consistencyResult.error_count} 个矛盾点`}
+            description={consistencyResult.summary || '建议在导出前检查并修正'}
+            style={{ marginBottom: 0 }}
+          />
+        )}
         {/* 格式模板 */}
         <div>
           <div style={{ marginBottom: 6 }}>
