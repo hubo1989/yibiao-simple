@@ -10,8 +10,10 @@ import {
   materialApi,
   materialSmartApi,
   scoringApi,
+  chapterTemplateApi,
   ChapterContentRequest,
 } from '../services/api';
+import type { ChapterTemplate } from '../services/api';
 import type { SmartMatchResult, SmartMatchRecommendation } from '../services/api';
 import type { ScoringCriteriaItem } from '../services/api';
 import ExportDialog from '../components/ExportDialog';
@@ -25,10 +27,12 @@ import MaterialMarkerModal from '../components/content-edit/MaterialMarkerModal'
 import MaterialSuggestPanel from '../components/content-edit/MaterialSuggestPanel';
 import ReverseEnhanceModal from '../components/content-edit/ReverseEnhanceModal';
 import ClauseResponseModal from '../components/content-edit/ClauseResponseModal';
+import ConsistencyPanel from '../components/content-edit/ConsistencyPanel';
 import type { ChapterStatus } from '../types/chapter';
 import type { ChapterMaterialBinding } from '../types/material';
 import type { ProofreadResult, ProofreadIssue } from '../types/proofread';
 import type { ChapterReverseEnhanceResponse, ClauseResponseResult } from '../types/bid';
+import type { ConsistencyCheckResult } from '../services/api';
 import { ProCard } from '@ant-design/pro-components';
 import { 
   Button, 
@@ -44,6 +48,10 @@ import {
   Alert,
   Input,
   Spin,
+  Form,
+  Select,
+  List,
+  Badge,
 } from 'antd';
 import { 
   FileTextOutlined,
@@ -64,6 +72,8 @@ import {
   ThunderboltOutlined,
   TagOutlined,
   LinkOutlined,
+  BookOutlined,
+  SaveOutlined,
 } from '@ant-design/icons';
 
 interface ContentEditProps {
@@ -123,6 +133,12 @@ const ContentEdit: React.FC<ContentEditProps> = ({
   const [clauseKnowledgeContext, setClauseKnowledgeContext] = useState('');
   const [clauseResponseResult, setClauseResponseResult] = useState<ClauseResponseResult | null>(null);
   const [isGeneratingClauseResponse, setIsGeneratingClauseResponse] = useState(false);
+  // 一致性校验状态
+  const [showConsistencyPanel, setShowConsistencyPanel] = useState(false);
+  const [isConsistencyChecking, setIsConsistencyChecking] = useState(false);
+  const [consistencyResult, setConsistencyResult] = useState<ConsistencyCheckResult | null>(null);
+  const [consistencyLastCheckedAt, setConsistencyLastCheckedAt] = useState<string | undefined>(undefined);
+
   const [showMaterialMarkerModal, setShowMaterialMarkerModal] = useState(false);
   const [materialMarkerBindings, setMaterialMarkerBindings] = useState<ChapterMaterialBinding[]>([]);
   const [materialMarkerTarget, setMaterialMarkerTarget] = useState<{ chapterNumber: string; title: string } | null>(null);
@@ -147,6 +163,16 @@ const ContentEdit: React.FC<ContentEditProps> = ({
   const [expandedMatchChapter, setExpandedMatchChapter] = useState<string | null>(null);
   const [matchChapterLoading, setMatchChapterLoading] = useState<string | null>(null);
 
+  // 知识库（章节模板）相关 state
+  const [templatePickerVisible, setTemplatePickerVisible] = useState(false);
+  const [templatePickerTarget, setTemplatePickerTarget] = useState<{ chapterNumber: string; chapterId: string; title: string } | null>(null);
+  const [templateList, setTemplateList] = useState<ChapterTemplate[]>([]);
+  const [templateListLoading, setTemplateListLoading] = useState(false);
+  const [templateKeyword, setTemplateKeyword] = useState('');
+  const [saveTemplateVisible, setSaveTemplateVisible] = useState(false);
+  const [saveTemplateTarget, setSaveTemplateTarget] = useState<{ chapterNumber: string; chapterId: string; title: string } | null>(null);
+  const [saveTemplateForm] = Form.useForm();
+  const [saveTemplateLoading, setSaveTemplateLoading] = useState(false);
 
   // 加载评分标准，建立 chapterId -> items 映射（静默加载）
   useEffect(() => {
@@ -690,6 +716,133 @@ const ContentEdit: React.FC<ContentEditProps> = ({
     }
   };
 
+  // ============ 知识库（章节模板）相关 handlers ============
+
+  const handleOpenTemplatePicker = async (item: OutlineItem) => {
+    if (!projectId) {
+      message.warning('仅项目模式支持套用模板');
+      return;
+    }
+    const chapterId = await getProjectChapterId(item.id);
+    if (!chapterId) {
+      message.warning(`未找到章节 ${item.id} 的数据库记录`);
+      return;
+    }
+    setTemplatePickerTarget({ chapterNumber: item.id, chapterId, title: item.title });
+    setTemplateKeyword('');
+    setTemplatePickerVisible(true);
+    setTemplateListLoading(true);
+    try {
+      // 用章节标题智能搜索推荐模板
+      const results = await chapterTemplateApi.search(item.title);
+      setTemplateList(results);
+    } catch {
+      setTemplateList([]);
+    } finally {
+      setTemplateListLoading(false);
+    }
+  };
+
+  const handleTemplateSearch = async (kw: string) => {
+    setTemplateKeyword(kw);
+    setTemplateListLoading(true);
+    try {
+      const results = kw.trim()
+        ? await chapterTemplateApi.search(kw.trim())
+        : await chapterTemplateApi.list();
+      setTemplateList(results);
+    } catch {
+      setTemplateList([]);
+    } finally {
+      setTemplateListLoading(false);
+    }
+  };
+
+  const handleApplyTemplate = async (tpl: ChapterTemplate) => {
+    if (!templatePickerTarget) return;
+    try {
+      const result = await chapterTemplateApi.apply(tpl.id, templatePickerTarget.chapterId);
+      // 刷新本地 leafItems 内容
+      setLeafItems(prev =>
+        prev.map(i =>
+          i.id === templatePickerTarget.chapterNumber
+            ? { ...i, content: result.content }
+            : i
+        )
+      );
+      message.success(`已套用模板「${tpl.name}」`);
+      setTemplatePickerVisible(false);
+    } catch (error: unknown) {
+      const detail = (error as any)?.message;
+      message.error(detail || '套用模板失败');
+    }
+  };
+
+  const handleOpenSaveTemplate = async (item: OutlineItem, currentContent: string) => {
+    if (!currentContent.trim()) {
+      message.warning('章节内容为空，无法保存为模板');
+      return;
+    }
+    if (!projectId) {
+      message.warning('仅项目模式支持保存模板');
+      return;
+    }
+    const chapterId = await getProjectChapterId(item.id);
+    if (!chapterId) {
+      message.warning(`未找到章节 ${item.id} 的数据库记录`);
+      return;
+    }
+    setSaveTemplateTarget({ chapterNumber: item.id, chapterId, title: item.title });
+    saveTemplateForm.setFieldsValue({
+      name: `${item.id} ${item.title}`,
+      category: undefined,
+      tags: [],
+    });
+    setSaveTemplateVisible(true);
+  };
+
+  const handleConfirmSaveTemplate = async () => {
+    if (!saveTemplateTarget) return;
+    try {
+      const values = await saveTemplateForm.validateFields();
+      setSaveTemplateLoading(true);
+      await chapterTemplateApi.fromChapter(saveTemplateTarget.chapterId, {
+        name: values.name,
+        category: values.category,
+        tags: values.tags || [],
+      });
+      message.success('已保存为章节模板');
+      setSaveTemplateVisible(false);
+      saveTemplateForm.resetFields();
+    } catch (error: unknown) {
+      if ((error as any)?.errorFields) return;
+      const detail = (error as any)?.message;
+      message.error(detail || '保存模板失败');
+    } finally {
+      setSaveTemplateLoading(false);
+    }
+  };
+
+  const TEMPLATE_CATEGORIES = ['技术方案', '项目经验', '团队配置', '质量保障', '安全方案', '服务方案', '投标报价', '其他'];
+
+  const handleRunConsistencyCheck = async () => {
+    if (!projectId) {
+      message.warning('仅项目模式支持全文一致性校验');
+      return;
+    }
+    setShowConsistencyPanel(true);
+    setIsConsistencyChecking(true);
+    try {
+      const result = await consistencyApi.check(projectId);
+      setConsistencyResult(result);
+      setConsistencyLastCheckedAt(new Date().toLocaleString('zh-CN'));
+    } catch (error) {
+      message.error(getErrorMessage(error, '一致性校验失败，请重试'));
+    } finally {
+      setIsConsistencyChecking(false);
+    }
+  };
+
   const renderOutline = (items: OutlineItem[], level: number = 1): React.ReactElement[] => {
     return items.map((item) => {
       const isLeaf = isLeafNode(item);
@@ -839,6 +992,38 @@ const ContentEdit: React.FC<ContentEditProps> = ({
                   style={{ color: '#8c8c8c' }}
                 >
                   批注
+                </Button>
+              </Tooltip>
+            )}
+
+            {isLeaf && projectId && (
+              <Tooltip title="从知识库套用章节模板">
+                <Button
+                  type="text"
+                  size="small"
+                  icon={<BookOutlined />}
+                  onClick={() => {
+                    void handleOpenTemplatePicker(item);
+                  }}
+                  style={{ color: '#1677ff' }}
+                >
+                  套用模板
+                </Button>
+              </Tooltip>
+            )}
+
+            {isLeaf && currentContent && !generationError && projectId && (
+              <Tooltip title="将本章节保存为可复用模板">
+                <Button
+                  type="text"
+                  size="small"
+                  icon={<SaveOutlined />}
+                  onClick={() => {
+                    void handleOpenSaveTemplate(item, currentContent);
+                  }}
+                  style={{ color: '#52c41a' }}
+                >
+                  存为模板
                 </Button>
               </Tooltip>
             )}
@@ -1384,6 +1569,37 @@ const ContentEdit: React.FC<ContentEditProps> = ({
                   一致性检查
                 </Button>
               )}
+              {projectId && (
+                <Badge
+                  count={
+                    consistencyResult
+                      ? consistencyResult.issues.filter(i => i.severity === 'error').length
+                      : 0
+                  }
+                  color="#cf1322"
+                  offset={[-4, 4]}
+                >
+                  <Button
+                    icon={<SafetyCertificateOutlined />}
+                    onClick={() => {
+                      if (showConsistencyPanel) {
+                        setShowConsistencyPanel(false);
+                      } else {
+                        void handleRunConsistencyCheck();
+                      }
+                    }}
+                    title="全文一致性校验（AI 交叉检查）"
+                    style={
+                      consistencyResult &&
+                      consistencyResult.issues.filter(i => i.severity === 'error').length > 0
+                        ? { borderColor: '#cf1322', color: '#cf1322' }
+                        : {}
+                    }
+                  >
+                    全文校验
+                  </Button>
+                </Badge>
+              )}
               <Button
                 type="primary"
                 icon={<PlayCircleOutlined />}
@@ -1644,7 +1860,175 @@ const ContentEdit: React.FC<ContentEditProps> = ({
         projectOverview={outlineData?.project_overview}
         projectId={projectId}
         getExportOutline={() => outlineData ? buildExportOutline(outlineData.outline) : []}
+        consistencyResult={consistencyResult}
       />
+
+      {/* 全文一致性校验面板 */}
+      <ConsistencyPanel
+        isOpen={showConsistencyPanel}
+        onClose={() => setShowConsistencyPanel(false)}
+        onRecheck={() => { void handleRunConsistencyCheck(); }}
+        isChecking={isConsistencyChecking}
+        result={consistencyResult}
+        lastCheckedAt={consistencyLastCheckedAt}
+        onJumpToChapter={(chapterId, chapterTitle) => {
+          // 通过 chapter_id 映射找到 chapter_number，并滚动到对应章节
+          const chapterNumber = Object.entries(chapterIdMap).find(
+            ([, id]) => id === chapterId
+          )?.[0];
+          if (chapterNumber) {
+            onChapterSelect(chapterNumber);
+            const el = document.getElementById(`chapter-${chapterNumber}`);
+            if (el) {
+              el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            }
+          } else {
+            message.info(`章节：${chapterTitle}`);
+          }
+        }}
+      />
+
+      {/* 套用模板弹窗 */}
+      <Modal
+        title={
+          <Space>
+            <BookOutlined style={{ color: '#1677ff' }} />
+            <span>从知识库套用章节模板</span>
+            {templatePickerTarget && (
+              <Typography.Text type="secondary" style={{ fontSize: 13 }}>
+                — {templatePickerTarget.chapterNumber} {templatePickerTarget.title}
+              </Typography.Text>
+            )}
+          </Space>
+        }
+        open={templatePickerVisible}
+        onCancel={() => setTemplatePickerVisible(false)}
+        footer={null}
+        width={680}
+        destroyOnClose
+      >
+        <div style={{ marginBottom: 12 }}>
+          <Input.Search
+            placeholder="搜索模板名称、分类或标签"
+            value={templateKeyword}
+            onChange={(e) => setTemplateKeyword(e.target.value)}
+            onSearch={(v) => void handleTemplateSearch(v)}
+            onPressEnter={(e) => void handleTemplateSearch((e.target as HTMLInputElement).value)}
+            allowClear
+            onClear={() => void handleTemplateSearch('')}
+          />
+        </div>
+        <Spin spinning={templateListLoading}>
+          {templateList.length === 0 && !templateListLoading ? (
+            <div style={{ textAlign: 'center', padding: '32px 0', color: '#8c8c8c' }}>
+              暂无匹配的模板
+            </div>
+          ) : (
+            <List
+              dataSource={templateList}
+              style={{ maxHeight: 480, overflowY: 'auto' }}
+              renderItem={(tpl) => (
+                <List.Item
+                  key={tpl.id}
+                  style={{ cursor: 'pointer', padding: '10px 8px', borderRadius: 6 }}
+                  actions={[
+                    <Button
+                      key="apply"
+                      type="primary"
+                      size="small"
+                      onClick={() => void handleApplyTemplate(tpl)}
+                    >
+                      套用
+                    </Button>,
+                  ]}
+                >
+                  <List.Item.Meta
+                    title={
+                      <Space size={[4, 4]} wrap>
+                        <Typography.Text strong>{tpl.name}</Typography.Text>
+                        {tpl.category && (
+                          <Tag color="blue" style={{ fontSize: 11 }}>
+                            {tpl.category}
+                          </Tag>
+                        )}
+                        {tpl.tags.slice(0, 2).map((t) => (
+                          <Tag key={t} style={{ fontSize: 11 }}>
+                            {t}
+                          </Tag>
+                        ))}
+                      </Space>
+                    }
+                    description={
+                      <Space direction="vertical" size={2} style={{ width: '100%' }}>
+                        {tpl.source_project_name && (
+                          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                            来源：{tpl.source_project_name}
+                          </Typography.Text>
+                        )}
+                        <Typography.Text
+                          type="secondary"
+                          style={{ fontSize: 12 }}
+                          ellipsis
+                        >
+                          {tpl.content.slice(0, 80)}…
+                        </Typography.Text>
+                        <Typography.Text type="secondary" style={{ fontSize: 11 }}>
+                          已使用 {tpl.usage_count} 次 · {new Date(tpl.created_at).toLocaleDateString()}
+                        </Typography.Text>
+                      </Space>
+                    }
+                  />
+                </List.Item>
+              )}
+            />
+          )}
+        </Spin>
+      </Modal>
+
+      {/* 存为模板弹窗 */}
+      <Modal
+        title={
+          <Space>
+            <SaveOutlined style={{ color: '#52c41a' }} />
+            <span>保存为章节模板</span>
+          </Space>
+        }
+        open={saveTemplateVisible}
+        onOk={() => void handleConfirmSaveTemplate()}
+        onCancel={() => {
+          setSaveTemplateVisible(false);
+          saveTemplateForm.resetFields();
+        }}
+        okText="保存"
+        cancelText="取消"
+        confirmLoading={saveTemplateLoading}
+        width={480}
+        destroyOnClose
+      >
+        <Form form={saveTemplateForm} layout="vertical" style={{ marginTop: 8 }}>
+          <Form.Item
+            name="name"
+            label="模板名称"
+            rules={[{ required: true, message: '请输入模板名称' }]}
+          >
+            <Input placeholder="如：安全方案-中标版" maxLength={200} showCount />
+          </Form.Item>
+          <Form.Item name="category" label="分类">
+            <Select placeholder="选择分类（可选）" allowClear>
+              {TEMPLATE_CATEGORIES.map((c) => (
+                <Select.Option key={c} value={c}>{c}</Select.Option>
+              ))}
+            </Select>
+          </Form.Item>
+          <Form.Item name="tags" label="标签">
+            <Select
+              mode="tags"
+              placeholder="输入标签后按 Enter（可选）"
+              tokenSeparators={[',']}
+            />
+          </Form.Item>
+        </Form>
+      </Modal>
     </div>
   );
 };

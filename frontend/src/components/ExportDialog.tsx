@@ -1,12 +1,13 @@
 /**
- * 导出文档弹窗 — 选择模板 + 导出格式 + 废标校验
+ * 导出文档弹窗 — 选择模板 + 导出格式 + 废标校验 + 一致性校验警告
  */
 import React, { useState, useEffect, useCallback } from 'react';
 import { Modal, Select, Radio, Button, Space, Typography, Spin, Image, message, Divider, Alert, List } from 'antd';
-import { DownloadOutlined, EyeOutlined, PlusOutlined, ThunderboltOutlined } from '@ant-design/icons';
+import { DownloadOutlined, EyeOutlined, PlusOutlined, ThunderboltOutlined, SafetyCertificateOutlined } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
 import { saveAs } from 'file-saver';
 import { documentApi, exportTemplateApi, disqualificationApi, ExportTemplate, DisqualificationItem } from '../services/api';
+import type { ConsistencyCheckResult } from '../services/api';
 import type { OutlineItem } from '../types';
 
 const { Text } = Typography;
