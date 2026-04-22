@@ -23,6 +23,10 @@ requests==2.32.3
 aiohttp==3.10.11
 Pillow==10.4.0
 asyncio-throttle==1.0.2
+# 素材解析增强
+pytesseract==0.3.13
+openpyxl==3.1.5
+python-pptx==1.0.2
 duckduckgo-search==8.1.1
 # LangChain支持（已移除）
 beautifulsoup4==4.12.3

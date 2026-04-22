@@ -3,8 +3,10 @@ import aiofiles
 import os
 import time
 import gc
+import hashlib
 import io
 import base64
+import logging
 from datetime import datetime
 from typing import Optional, List, Dict, Tuple
 import PyPDF2
@@ -12,16 +14,27 @@ import docx
 from fastapi import UploadFile
 from ..config import settings
 
+logger = logging.getLogger(__name__)
+
 # 新增的第三方库 - 延迟导入以避免启动时卡住
 HAS_ADVANCED_LIBS = False
+HAS_OCR = False
+HAS_EXCEL = False
+HAS_PPTX = False
 pdfplumber = None
 fitz = None
 docx2python = None
 Image = None
+pytesseract = None
+openpyxl = None
+pptx_module = None
 
 def _init_advanced_libs():
     """延迟初始化高级文档处理库"""
     global HAS_ADVANCED_LIBS, pdfplumber, fitz, docx2python, Image
+    global HAS_OCR, pytesseract
+    global HAS_EXCEL, openpyxl
+    global HAS_PPTX, pptx_module
     if HAS_ADVANCED_LIBS:
         return True
     try:
@@ -29,25 +42,86 @@ def _init_advanced_libs():
         pdfplumber = importlib.import_module('pdfplumber')
         fitz = importlib.import_module('fitz')
         docx2python = importlib.import_module('docx2python').docx2python
-        Image = importlib.import_module('PIL').Image
+        Image = importlib.import_module('PIL.Image')
         HAS_ADVANCED_LIBS = True
-        return True
     except ImportError as e:
         HAS_ADVANCED_LIBS = False
         print(f"高级文档处理库未安装: {e}")
-        return False
+
+    # OCR 支持
+    try:
+        import importlib
+        pytesseract = importlib.import_module('pytesseract')
+        HAS_OCR = True
+    except ImportError:
+        HAS_OCR = False
+
+    # Excel 支持
+    try:
+        import importlib
+        openpyxl = importlib.import_module('openpyxl')
+        HAS_EXCEL = True
+    except ImportError:
+        HAS_EXCEL = False
+
+    # PPT 支持
+    try:
+        import importlib
+        pptx_module = importlib.import_module('pptx')
+        HAS_PPTX = True
+    except ImportError:
+        HAS_PPTX = False
+
+    return HAS_ADVANCED_LIBS
+
+# 模块加载时初始化可选依赖
+_init_advanced_libs()
 
 
 class FileService:
     """文件处理服务"""
 
+    # 图片存储目录
+    EXTRACTED_IMAGES_DIR = os.path.join(settings.upload_dir, "extracted_images")
+
+    @staticmethod
+    def save_extracted_image(
+        image_data: bytes,
+        ext: str = "jpg",
+        doc_hash: str = "unknown",
+        page: int = 0,
+        index: int = 0,
+    ) -> Tuple[str, int, int]:
+        """保存提取的图片到磁盘，返回 (文件路径, 宽度, 高度)"""
+        os.makedirs(FileService.EXTRACTED_IMAGES_DIR, exist_ok=True)
+        filename = f"{doc_hash}_{page}_{index}.{ext}"
+        file_path = os.path.join(FileService.EXTRACTED_IMAGES_DIR, filename)
+        with open(file_path, "wb") as f:
+            f.write(image_data)
+        # 获取图片尺寸
+        width, height = 0, 0
+        try:
+            if Image:
+                with Image.open(io.BytesIO(image_data)) as img:
+                    width, height = img.size
+        except Exception:
+            pass
+        return file_path, width, height
+
+    @staticmethod
+    def _compute_doc_hash(file_path: str) -> str:
+        """计算文件的短哈希，用于图片命名"""
+        h = hashlib.md5()
+        with open(file_path, "rb") as f:
+            for chunk in iter(lambda: f.read(8192), b""):
+                h.update(chunk)
+        return h.hexdigest()[:12]
+
     @staticmethod
     def image_to_data_uri(image_data: bytes, ext: str = "jpg") -> str:
-        """将图片数据转换为 data URI（本地内联，不外传）"""
-        mime_map = {"jpg": "image/jpeg", "jpeg": "image/jpeg", "png": "image/png", "gif": "image/gif", "bmp": "image/bmp"}
-        mime = mime_map.get(ext.lower(), "image/jpeg")
-        b64 = base64.b64encode(image_data).decode("utf-8")
-        return f"data:{mime};base64,{b64}"
+        """[已弃用] 兼容旧调用，内部转为 save_extracted_image"""
+        file_path, width, height = FileService.save_extracted_image(image_data, ext)
+        return file_path
 
     @staticmethod
     def extract_images_from_pdf(file_path: str) -> List[Tuple[bytes, str, int, int]]:
@@ -187,20 +261,43 @@ class FileService:
     
     @staticmethod
     async def extract_text_from_pdf(file_path: str) -> str:
-        """从PDF文件提取文本，支持表格内容和图片"""
+        """从PDF文件提取文本，支持表格内容和图片。
+
+        降级策略:
+        1. pdfplumber (含表格 + 图片)
+        2. PyMuPDF (pdfplumber 异常时自动回退)
+        3. PyPDF2 (最基础)
+        4. OCR (前三层文本 < 100 字符时触发，疑似扫描件)
+        """
+        text = ""
         if HAS_ADVANCED_LIBS:
-            return await FileService._extract_pdf_with_pdfplumber(file_path)
+            text = await FileService._extract_pdf_with_pdfplumber(file_path)
         else:
-            # 降级到原来的PyPDF2方法
-            return FileService._extract_pdf_with_pypdf2(file_path)
+            text = FileService._extract_pdf_with_pypdf2(file_path)
+
+        # OCR 降级: 前三层提取文本过少，可能是扫描件
+        if len(text) < 100 and HAS_OCR:
+            logger.warning(
+                "PDF 文本提取结果不足 100 字符 (%d)，尝试 OCR 降级: %s",
+                len(text), file_path,
+            )
+            try:
+                ocr_text = FileService._extract_pdf_with_ocr(file_path)
+                if ocr_text and len(ocr_text) > len(text):
+                    text = ocr_text
+            except Exception as e:
+                logger.warning("OCR 降级失败，保留已有文本: %s", str(e))
+
+        return text
     
     @staticmethod
     async def _extract_pdf_with_pdfplumber(file_path: str) -> str:
         """使用pdfplumber提取PDF文本，包含表格和图片（确保及时释放文件句柄）"""
         try:
             extracted_text = []
-            image_references = []  # 存储图片引用映射
+            image_references = []  # 存储图片文件路径映射
             global_img_counter = 1
+            doc_hash = FileService._compute_doc_hash(file_path)
 
             # 获取PDF文档的所有图片信息，用于后续匹配
             all_images = FileService.extract_images_from_pdf(file_path)
@@ -233,14 +330,16 @@ class FileService:
                                 if i < len(page_images):
                                     img_data, ext, img_index = page_images[i]
 
-                                    # 本地转换为 data URI，不外传
-                                    image_url = FileService.image_to_data_uri(img_data, ext)
+                                    # 保存图片到磁盘，生成元数据占位符
+                                    saved_path, w, h = FileService.save_extracted_image(
+                                        img_data, ext, doc_hash, page_num, global_img_counter
+                                    )
 
                                     old_mark = match.group()
-                                    new_mark = f"[图片{global_img_counter}]"
+                                    new_mark = f"[图片{global_img_counter}: 位于第{page_num}页, {w}x{h}px]"
                                     processed_text = processed_text.replace(old_mark, new_mark, 1)
 
-                                    image_references.append(f"[图片{global_img_counter}]: {image_url}")
+                                    image_references.append(f"[图片{global_img_counter}]: {saved_path}")
                                     global_img_counter += 1
 
                             extracted_text.append(processed_text)
@@ -258,7 +357,7 @@ class FileService:
                                 extracted_text.append(row_text)
                         extracted_text.append("[表格结束]\n")
 
-            # 在文档末尾添加图片引用映射
+            # 在文档末尾添加图片文件路径映射（供前端按需加载）
             if image_references:
                 extracted_text.append(f"\n\n--- 图片引用 ---")
                 extracted_text.extend(image_references)
@@ -322,6 +421,32 @@ class FileService:
                 return text.strip()
         except Exception as e:
             raise Exception(f"PDF文件读取失败: {str(e)}")
+
+    @staticmethod
+    def _extract_pdf_with_ocr(file_path: str) -> str:
+        """OCR 降级: 用 PyMuPDF 渲染每页为图片，再用 tesseract OCR 提取文字"""
+        if not HAS_OCR or not fitz:
+            raise Exception("OCR 依赖不可用")
+        try:
+            doc = fitz.open(file_path)
+            extracted_text = []
+            for page_num in range(doc.page_count):
+                page = doc[page_num]
+                extracted_text.append(f"\n--- 第 {page_num + 1} 页 (OCR) ---\n")
+                # 渲染为 300 dpi 图片
+                mat = fitz.Matrix(300 / 72, 300 / 72)
+                pix = page.get_pixmap(matrix=mat)
+                img_data = pix.tobytes("png")
+                pix = None
+                # OCR
+                pil_img = Image.open(io.BytesIO(img_data))
+                ocr_text = pytesseract.image_to_string(pil_img, lang="chi_sim+eng")
+                if ocr_text and ocr_text.strip():
+                    extracted_text.append(ocr_text.strip())
+            doc.close()
+            return "\n".join(extracted_text).strip()
+        except Exception as e:
+            raise Exception(f"PDF OCR 提取失败: {str(e)}")
     
     @staticmethod
     async def extract_text_from_docx(file_path: str) -> str:
@@ -337,8 +462,9 @@ class FileService:
         """使用docx2python提取Word文档内容和图片（确保及时释放文件句柄）"""
         try:
             extracted_text = []
-            image_references = []  # 存储图片引用映射
+            image_references = []  # 存储图片文件路径映射
             global_img_counter = 1
+            doc_hash = FileService._compute_doc_hash(file_path)
 
             # 获取Word文档的所有图片信息
             all_images = FileService.extract_images_from_docx(file_path)
@@ -376,21 +502,23 @@ class FileService:
                                             if global_img_counter <= len(all_images):
                                                 img_data, ext, img_index = all_images[global_img_counter - 1]
 
-                                                # 本地转换为 data URI，不外传
-                                                image_url = FileService.image_to_data_uri(img_data, ext)
+                                                # 保存图片到磁盘
+                                                saved_path, w, h = FileService.save_extracted_image(
+                                                    img_data, ext, doc_hash, 0, global_img_counter
+                                                )
 
                                                 old_mark = match.group()
-                                                new_mark = f"[图片{global_img_counter}]"
+                                                new_mark = f"[图片{global_img_counter}: {w}x{h}px]"
                                                 processed_text = processed_text.replace(old_mark, new_mark, 1)
 
-                                                image_references.append(f"[图片{global_img_counter}]: {image_url}")
+                                                image_references.append(f"[图片{global_img_counter}]: {saved_path}")
                                                 global_img_counter += 1
 
                                         extracted_text.append(processed_text)
                                     else:
                                         extracted_text.append(text)
 
-            # 在文档末尾添加图片引用映射
+            # 在文档末尾添加图片文件路径映射
             if image_references:
                 extracted_text.append(f"\n\n--- 图片引用 ---")
                 extracted_text.extend(image_references)
@@ -413,8 +541,9 @@ class FileService:
         try:
             doc = docx.Document(file_path)
             extracted_text = []
-            image_references = []  # 存储图片引用映射
+            image_references = []  # 存储图片文件路径映射
             global_img_counter = 1
+            doc_hash = FileService._compute_doc_hash(file_path)
 
             # 获取Word文档的所有图片信息
             all_images = FileService.extract_images_from_docx(file_path)
@@ -435,14 +564,16 @@ class FileService:
                             if global_img_counter <= len(all_images):
                                 img_data, ext, img_index = all_images[global_img_counter - 1]
 
-                                # 本地转换为 data URI，不外传
-                                image_url = FileService.image_to_data_uri(img_data, ext)
+                                # 保存图片到磁盘
+                                saved_path, w, h = FileService.save_extracted_image(
+                                    img_data, ext, doc_hash, 0, global_img_counter
+                                )
 
                                 old_mark = match.group()
-                                new_mark = f"[图片{global_img_counter}]"
+                                new_mark = f"[图片{global_img_counter}: {w}x{h}px]"
                                 processed_text = processed_text.replace(old_mark, new_mark, 1)
 
-                                image_references.append(f"[图片{global_img_counter}]: {image_url}")
+                                image_references.append(f"[图片{global_img_counter}]: {saved_path}")
                                 global_img_counter += 1
 
                         extracted_text.append(processed_text)
@@ -462,7 +593,7 @@ class FileService:
                         extracted_text.append(row_text)
                 extracted_text.append("[表格结束]\n")
 
-            # 在文档末尾添加图片引用映射
+            # 在文档末尾添加图片文件路径映射
             if image_references:
                 extracted_text.append(f"\n\n--- 图片引用 ---")
                 extracted_text.extend(image_references)
@@ -483,6 +614,101 @@ class FileService:
             raise Exception(f"Word文档读取失败: {str(e)}")
     
     @staticmethod
+    async def extract_text_from_excel(file_path: str) -> str:
+        """从 Excel (.xlsx) 文件提取文本"""
+        if not HAS_EXCEL:
+            raise Exception("Excel 解析依赖 openpyxl 未安装")
+        try:
+            wb = openpyxl.load_workbook(file_path, data_only=True)
+            extracted_text = []
+            for sheet_name in wb.sheetnames:
+                ws = wb[sheet_name]
+                extracted_text.append(f"\n--- Sheet: {sheet_name} ---\n")
+                # 获取合并单元格信息
+                merged_cells_map: Dict[Tuple[int, int], str] = {}
+                if hasattr(ws, 'merged_cells') and ws.merged_cells:
+                    for merged_range in ws.merged_cells.ranges:
+                        top_left_value = None
+                        for row_idx in range(merged_range.min_row, merged_range.max_row + 1):
+                            for col_idx in range(merged_range.min_col, merged_range.max_col + 1):
+                                if row_idx == merged_range.min_row and col_idx == merged_range.min_col:
+                                    cell = ws.cell(row=row_idx, column=col_idx)
+                                    top_left_value = str(cell.value) if cell.value is not None else "-"
+                                else:
+                                    merged_cells_map[(row_idx, col_idx)] = top_left_value or "-"
+
+                for row in ws.iter_rows():
+                    cells = []
+                    for cell in row:
+                        # 检查是否是合并单元格的非主单元格
+                        key = (cell.row, cell.column)
+                        if key in merged_cells_map:
+                            cells.append(merged_cells_map[key])
+                        elif cell.value is not None:
+                            cells.append(str(cell.value))
+                        else:
+                            cells.append("-")
+                    row_text = "\t".join(cells)
+                    extracted_text.append(row_text)
+            wb.close()
+            return "\n".join(extracted_text).strip()
+        except Exception as e:
+            raise Exception(f"Excel 文件读取失败: {str(e)}")
+
+    @staticmethod
+    async def extract_text_from_pptx(file_path: str) -> str:
+        """从 PowerPoint (.pptx) 文件提取文本"""
+        if not HAS_PPTX:
+            raise Exception("PPT 解析依赖 python-pptx 未安装")
+        try:
+            from pptx.util import Inches  # noqa: F401
+            prs = pptx_module.Presentation(file_path)
+            extracted_text = []
+            img_counter = 1
+
+            for slide_num, slide in enumerate(prs.slides, 1):
+                # 提取幻灯片标题
+                title = ""
+                if slide.shapes.title:
+                    title = slide.shapes.title.text.strip()
+                extracted_text.append(f"\n--- Slide {slide_num}: {title or '(无标题)'} ---\n")
+
+                for shape in slide.shapes:
+                    # 文本框
+                    if shape.has_text_frame:
+                        for paragraph in shape.text_frame.paragraphs:
+                            para_text = paragraph.text.strip()
+                            if para_text:
+                                extracted_text.append(para_text)
+
+                    # 表格
+                    if shape.has_table:
+                        table = shape.table
+                        extracted_text.append("\n[表格]")
+                        for row in table.rows:
+                            cells = []
+                            for cell in row.cells:
+                                cell_text = cell.text.strip() if cell.text else "-"
+                                cells.append(cell_text)
+                            extracted_text.append("\t".join(cells))
+                        extracted_text.append("[表格结束]\n")
+
+                    # 图片占位符
+                    if shape.shape_type == 13:  # MSO_SHAPE_TYPE.PICTURE
+                        extracted_text.append(f"[图片{img_counter}: 幻灯片{slide_num}]")
+                        img_counter += 1
+
+                # 备注
+                if slide.has_notes_slide and slide.notes_slide.notes_text_frame:
+                    notes_text = slide.notes_slide.notes_text_frame.text.strip()
+                    if notes_text:
+                        extracted_text.append(f"\n[备注] {notes_text}")
+
+            return "\n".join(extracted_text).strip()
+        except Exception as e:
+            raise Exception(f"PPT 文件读取失败: {str(e)}")
+
+    @staticmethod
     async def process_uploaded_file(file: UploadFile) -> str:
         """处理上传的文件并提取文本内容"""
         # 检查文件大小
@@ -498,12 +724,20 @@ class FileService:
         
         try:
             # 根据文件类型提取文本和图片
-            if file.content_type == "application/pdf":
+            content_type = file.content_type or ""
+            if content_type == "application/pdf":
                 text = await FileService.extract_text_from_pdf(file_path)
-            elif file.content_type == "application/vnd.openxmlformats-officedocument.wordprocessingml.document":
+            elif content_type == "application/vnd.openxmlformats-officedocument.wordprocessingml.document":
                 text = await FileService.extract_text_from_docx(file_path)
+            elif content_type in (
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                "application/vnd.ms-excel",
+            ):
+                text = await FileService.extract_text_from_excel(file_path)
+            elif content_type == "application/vnd.openxmlformats-officedocument.presentationml.presentation":
+                text = await FileService.extract_text_from_pptx(file_path)
             else:
-                raise Exception("不支持的文件类型，请上传PDF或Word文档")
+                raise Exception("不支持的文件类型，请上传PDF、Word、Excel或PPT文档")
 
             # 成功提取后，使用安全的文件清理方法
             FileService._safe_file_cleanup(file_path)
