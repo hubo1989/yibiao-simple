@@ -269,11 +269,14 @@ class FileService:
         3. PyPDF2 (最基础)
         4. OCR (前三层文本 < 100 字符时触发，疑似扫描件)
         """
+        import asyncio
         text = ""
         if HAS_ADVANCED_LIBS:
             text = await FileService._extract_pdf_with_pdfplumber(file_path)
         else:
-            text = FileService._extract_pdf_with_pypdf2(file_path)
+            text = await asyncio.get_event_loop().run_in_executor(
+                None, FileService._extract_pdf_with_pypdf2, file_path
+            )
 
         # OCR 降级: 前三层提取文本过少，可能是扫描件
         if len(text) < 100 and HAS_OCR:
@@ -282,7 +285,9 @@ class FileService:
                 len(text), file_path,
             )
             try:
-                ocr_text = FileService._extract_pdf_with_ocr(file_path)
+                ocr_text = await asyncio.get_event_loop().run_in_executor(
+                    None, FileService._extract_pdf_with_ocr, file_path
+                )
                 if ocr_text and len(ocr_text) > len(text):
                     text = ocr_text
             except Exception as e:
@@ -376,6 +381,14 @@ class FileService:
     @staticmethod
     async def _extract_pdf_with_pymupdf(file_path: str) -> str:
         """使用PyMuPDF提取PDF文本和图片"""
+        import asyncio
+        return await asyncio.get_event_loop().run_in_executor(
+            None, FileService._extract_pdf_with_pymupdf_sync, file_path
+        )
+
+    @staticmethod
+    def _extract_pdf_with_pymupdf_sync(file_path: str) -> str:
+        """同步使用PyMuPDF提取PDF文本和图片"""
         try:
             doc = fitz.open(file_path)
             extracted_text = []

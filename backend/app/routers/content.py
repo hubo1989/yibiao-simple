@@ -55,17 +55,18 @@ async def generate_chapter_content(
                 try:
                     retrieval_service = KnowledgeRetrievalService(db)
                     chapter_title = str(request.chapter.get("title") or request.chapter.get("id") or "")
-                    query = f"{chapter_title} {(request.project_overview or '')[:200]}"
-                    results = await retrieval_service.search(
-                        query=query,
-                        top_k=5,
+                    results = await retrieval_service.retrieve_for_chapter(
+                        chapter_title=chapter_title,
+                        chapter_description=str(request.chapter.get("description", "")),
+                        project_overview=(request.project_overview or "")[:500],
                         user_id=current_user.id if current_user else None,
+                        top_k=5,
                     )
                     if results:
                         knowledge_context = "\n\n".join(
-                            f"【{r.get('title', '参考文档')}】\n{r.get('content', '')}"
+                            f"【{r.get('title', '参考文档')}】\n{r.get('content') or r.get('content_preview', '')}"
                             for r in results
-                            if r.get("content")
+                            if r.get("content") or r.get("content_preview")
                         )
                 except Exception:
                     pass  # 知识库检索失败不影响正常生成
@@ -135,17 +136,18 @@ async def generate_chapter_content_stream(
                         try:
                             retrieval_service = KnowledgeRetrievalService(db)
                             chapter_title = str(request.chapter.get("title") or request.chapter.get("id") or "")
-                            query = f"{chapter_title} {(request.project_overview or '')[:200]}"
-                            results = await retrieval_service.search(
-                                query=query,
-                                top_k=5,
+                            results = await retrieval_service.retrieve_for_chapter(
+                                chapter_title=chapter_title,
+                                chapter_description=str(request.chapter.get("description", "")),
+                                project_overview=(request.project_overview or "")[:500],
                                 user_id=current_user.id if current_user else None,
+                                top_k=5,
                             )
                             if results:
                                 knowledge_context = "\n\n".join(
-                                    f"【{r.get('title', '参考文档')}】\n{r.get('content', '')}"
+                                    f"【{r.get('title', '参考文档')}】\n{r.get('content') or r.get('content_preview', '')}"
                                     for r in results
-                                    if r.get("content")
+                                    if r.get("content") or r.get("content_preview")
                                 )
                                 yield f"data: {json.dumps({'status': 'knowledge_retrieved', 'count': len(results)}, ensure_ascii=False)}\n\n"
                         except Exception:

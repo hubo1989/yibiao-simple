@@ -402,8 +402,8 @@ async def generate_project_outline_l1_stream(
                     try:
                         outline_data = json.loads(cleaned)
                     except json.JSONDecodeError as parse_err:
-                        print(f"L1 目录 JSON 解析失败: {parse_err}\n原文: {full_content[:500]}")
-                        yield f"data: {json.dumps({'error': True, 'message': '目录数据格式异常，请重试'}, ensure_ascii=False)}\n\n"
+                        logger.error(f"L1 目录 JSON 解析失败: {parse_err}\n原文: {full_content[:500]}")
+                        yield f"data: {json.dumps({'type': 'error', 'error': True, 'message': f'目录数据格式异常，请重试（{parse_err}）'}, ensure_ascii=False)}\n\n"
                         return
 
                 # AI 可能返回 {"outline": [...]} 或直接返回 [...]
@@ -412,8 +412,8 @@ async def generate_project_outline_l1_stream(
                 elif isinstance(outline_data, dict):
                     outline_items = outline_data.get("outline", outline_data.get("chapters", []))
                 else:
-                    print(f"L1 目录返回了非预期类型: {type(outline_data)}")
-                    yield f"data: {json.dumps({'error': True, 'message': '目录数据格式异常，请重试'}, ensure_ascii=False)}\n\n"
+                    logger.error(f"L1 目录返回了非预期类型: {type(outline_data)}")
+                    yield f"data: {json.dumps({'type': 'error', 'error': True, 'message': '目录数据格式异常（非预期类型），请重试'}, ensure_ascii=False)}\n\n"
                     return
 
                 # 过滤掉非 dict 元素，只保留有效的章节项
@@ -460,8 +460,9 @@ async def generate_project_outline_l1_stream(
                     await db.commit()
 
             except Exception as e:
-                print(f"保存一级目录到数据库失败: {e}")
+                logger.error(f"保存一级目录到数据库失败: {e}")
                 await db.rollback()
+                yield f"data: {json.dumps({'type': 'error', 'error': True, 'message': f'保存一级目录到数据库失败: {e}'}, ensure_ascii=False)}\n\n"
 
         return sse_response(generate())
 
@@ -628,8 +629,8 @@ async def generate_project_outline_l2l3_stream(
             except Exception as e:
                 await db.rollback()
                 error_msg = f"生成二三级目录失败: {str(e)}"
-                print(error_msg)
-                yield f"data: {json.dumps({'error': True, 'message': error_msg}, ensure_ascii=False)}\n\n"
+                logger.error(error_msg)
+                yield f"data: {json.dumps({'type': 'error', 'error': True, 'message': error_msg}, ensure_ascii=False)}\n\n"
                 yield "data: [DONE]\n\n"
 
         return sse_response(generate())
@@ -746,7 +747,8 @@ async def generate_project_outline_stream(
 
             except Exception as e:
                 await db.rollback()
-                print(f"保存目录到数据库失败: {e}")
+                logger.error(f"保存目录到数据库失败: {e}")
+                yield f"data: {json.dumps({'type': 'error', 'error': True, 'message': f'保存目录到数据库失败: {e}'}, ensure_ascii=False)}\n\n"
 
         return sse_response(generate())
 
@@ -902,7 +904,7 @@ async def generate_project_content_stream(
         knowledge_context = ""
         try:
             retrieval_service = KnowledgeRetrievalService(db, openai_service)
-            knowledge_results = await retrieval_service.search_relevant_knowledge(
+            knowledge_results = await retrieval_service.retrieve_for_chapter(
                 chapter_title=chapter.title,
                 chapter_description=chapter.content or "",
                 parent_chapters=[

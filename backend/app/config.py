@@ -68,7 +68,7 @@ class Settings(BaseSettings):
     ]
 
     # 文件上传设置
-    max_file_size: int = 10 * 1024 * 1024  # 10MB
+    max_file_size: int = 50 * 1024 * 1024  # 50MB（招标文件常超 10MB）
     upload_dir: str = "uploads"
 
     # 数据库设置 - 支持环境变量注入
