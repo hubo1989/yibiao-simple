@@ -86,10 +86,23 @@ def check_json(json_str: str, schema: str | dict) -> tuple[bool, str]:
         try:
             if isinstance(schema, str):
                 schema = json.loads(schema)
-            elif not isinstance(schema, dict):
-                return False, "schema 必须是 JSON 字符串或字典对象"
+            elif not isinstance(schema, (dict, list)):
+                return False, "schema 必须是 JSON 字符串、字典或列表对象"
         except json.JSONDecodeError as e:
             return False, f"schema 解析错误: {str(e)}"
+
+        # 如果 schema 是 list，校验目标也应为 list，取第一个元素作为结构模板
+        if isinstance(schema, list):
+            if not isinstance(data, list):
+                return False, f"期望 JSON 数组，但得到 {type(data).__name__}"
+            if len(schema) == 0:
+                return True, ""
+            template_item = schema[0]
+            for i, item in enumerate(data):
+                ok, err = check_json(json.dumps(item, ensure_ascii=False), template_item)
+                if not ok:
+                    return False, f"数组第 {i} 项: {err}"
+            return True, ""
         
         def check_structure(target, template, path=""):
             # 处理数字类型（int 和 float 可以互换）

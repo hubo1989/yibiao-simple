@@ -21,6 +21,42 @@ class KnowledgeRetrievalService:
         self.db = db
         self.openai_service = openai_service
 
+    async def retrieve_for_chapter(
+        self,
+        chapter_title: str,
+        chapter_description: str = "",
+        parent_chapters: Optional[List[Dict[str, Any]]] = None,
+        project_overview: str = "",
+        user_id: Optional[uuid.UUID] = None,
+        enterprise_id: Optional[uuid.UUID] = None,
+        top_k: int = 5,
+    ) -> List[Dict[str, Any]]:
+        """统一的章节知识库检索入口
+
+        供 content.py 和 outline.py 共同调用，确保检索逻辑一致。
+
+        Args:
+            chapter_title: 章节标题
+            chapter_description: 章节描述
+            parent_chapters: 上级章节列表
+            project_overview: 项目概述（可选，用于增强查询）
+            user_id: 用户 ID（权限过滤）
+            enterprise_id: 企业 ID（权限过滤）
+            top_k: 返回数量
+
+        Returns:
+            搜索结果列表
+        """
+        return await self.search_relevant_knowledge(
+            chapter_title=chapter_title,
+            chapter_description=chapter_description,
+            parent_chapters=parent_chapters or [],
+            project_overview=project_overview,
+            user_id=user_id,
+            enterprise_id=enterprise_id,
+            top_k=top_k,
+        )
+
     async def search_relevant_knowledge(
         self,
         chapter_title: str,

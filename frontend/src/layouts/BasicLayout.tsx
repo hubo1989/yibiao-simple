@@ -3,12 +3,15 @@ import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { ProLayout } from '@ant-design/pro-components';
 import { 
   ProjectOutlined, 
+  DashboardOutlined,
   SettingOutlined, 
   ReadOutlined,
   PictureOutlined,
   LogoutOutlined,
   UserOutlined,
-  FolderOpenOutlined
+  FolderOpenOutlined,
+  FileTextOutlined,
+  DatabaseOutlined,
 } from '@ant-design/icons';
 import { Dropdown } from 'antd';
 import { useAuth } from '../contexts/AuthContext';
@@ -26,6 +29,11 @@ const BasicLayout: React.FC = () => {
   }, [location.pathname]);
 
   const menuData = [
+    {
+      path: '/dashboard',
+      name: '进度看板',
+      icon: <DashboardOutlined />,
+    },
     {
       path: '/',
       name: '工作台',
@@ -45,6 +53,16 @@ const BasicLayout: React.FC = () => {
       path: '/materials',
       name: '素材库',
       icon: <PictureOutlined />,
+    },
+    {
+      path: '/templates',
+      name: '导出模板',
+      icon: <FileTextOutlined />,
+    },
+    {
+      path: '/knowledge-library',
+      name: '章节模板库',
+      icon: <DatabaseOutlined />,
     },
     ...(user?.role === 'admin' ? [{
       path: '/admin',

@@ -32,8 +32,10 @@ from ..schemas.material import (
     ChapterMaterialBindingCreate,
     ChapterMaterialBindingResponse,
     ChapterMaterialBindingUpdate,
+    ChapterSuggestRequest,
     MaterialAssetResponse,
     MaterialAssetUpdate,
+    MaterialAssetWithScore,
     MaterialMatchConfirmRequest,
     MaterialRequirementResponse,
     MaterialRequirementUpdate,
@@ -230,6 +232,54 @@ def _extract_project_material_requirements(project: Project) -> list[dict]:
     return requirement_lines
 
 
+@router.post("/api/materials/suggest-for-chapter")
+async def suggest_materials_for_chapter(
+    request: ChapterSuggestRequest,
+    current_user: Annotated[User, Depends(require_editor)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """根据章节标题和内容推荐匹配素材"""
+    # 拉取当前用户可见且 confirmed 状态、未停用的所有素材
+    asset_result = await db.execute(
+        select(MaterialAsset).where(
+            (
+                (MaterialAsset.scope == Scope.GLOBAL.value)
+                | (MaterialAsset.owner_id == current_user.id)
+                | (MaterialAsset.uploaded_by == current_user.id)
+            )
+            & (MaterialAsset.review_status == MaterialReviewStatus.CONFIRMED)
+            & (MaterialAsset.is_disabled == False)  # noqa: E712
+        )
+    )
+    assets = list(asset_result.scalars().all())
+
+    today = date.today()
+    # 动态过滤过期素材
+    valid_assets = [a for a in assets if not (a.valid_until and a.valid_until < today)]
+
+    # 使用 build_material_requirement_candidates 打分
+    candidates = build_material_requirement_candidates(
+        requirement_name=request.chapter_title,
+        requirement_text=f"{request.chapter_title} {request.chapter_content}",
+        requirement_category=None,
+        requirement_tags=[],
+        assets=valid_assets,
+        today=today,
+    )
+
+    # 过滤 score > 30，返回 top_k
+    top_candidates = [c for c in candidates if c.score > 30][: request.top_k]
+
+    suggestions = []
+    for candidate in top_candidates:
+        if candidate.asset:
+            asset_dict = candidate.asset.model_dump()
+            asset_dict["score"] = candidate.score
+            suggestions.append(asset_dict)
+
+    return {"suggestions": suggestions}
+
+
 @router.post("/api/materials/upload", response_model=MaterialAssetResponse, status_code=status.HTTP_201_CREATED)
 async def upload_material(
     file: UploadFile = File(...),
@@ -320,6 +370,7 @@ async def list_materials(
     db: Annotated[AsyncSession, Depends(get_db)],
     category: MaterialCategory | None = Query(None),
     expired: bool | None = Query(None),
+    disabled: bool | None = Query(None),
     keyword: str | None = Query(None),
 ):
     query = select(MaterialAsset).where(
@@ -329,10 +380,18 @@ async def list_materials(
     )
     if category:
         query = query.where(MaterialAsset.category == category)
-    if expired is not None:
-        query = query.where(MaterialAsset.is_expired == expired)
+    if disabled is not None:
+        query = query.where(MaterialAsset.is_disabled == disabled)
     result = await db.execute(query.order_by(MaterialAsset.updated_at.desc()))
     materials = result.scalars().all()
+
+    today = date.today()
+    # Dynamically compute is_expired based on valid_until
+    for item in materials:
+        item.is_expired = bool(item.valid_until and item.valid_until < today)
+
+    if expired is not None:
+        materials = [item for item in materials if item.is_expired == expired]
     if keyword:
         keyword_lower = keyword.lower()
         materials = [item for item in materials if keyword_lower in item.name.lower() or keyword_lower in (item.description or "").lower()]
@@ -396,6 +455,42 @@ async def delete_material(
         if path and os.path.exists(path):
             os.remove(path)
     await db.delete(material)
+
+
+@router.post("/api/materials/{material_id}/disable")
+async def disable_material(
+    material_id: uuid.UUID,
+    current_user: Annotated[User, Depends(require_editor)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """手动停用素材"""
+    result = await db.execute(select(MaterialAsset).where(MaterialAsset.id == material_id))
+    material = result.scalar_one_or_none()
+    if not material:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="素材不存在")
+    if material.owner_id not in (None, current_user.id) and material.uploaded_by != current_user.id and current_user.role != UserRole.ADMIN:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="无权操作该素材")
+    material.is_disabled = True
+    await db.flush()
+    return {"success": True}
+
+
+@router.post("/api/materials/{material_id}/enable")
+async def enable_material(
+    material_id: uuid.UUID,
+    current_user: Annotated[User, Depends(require_editor)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """启用已停用的素材"""
+    result = await db.execute(select(MaterialAsset).where(MaterialAsset.id == material_id))
+    material = result.scalar_one_or_none()
+    if not material:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="素材不存在")
+    if material.owner_id not in (None, current_user.id) and material.uploaded_by != current_user.id and current_user.role != UserRole.ADMIN:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="无权操作该素材")
+    material.is_disabled = False
+    await db.flush()
+    return {"success": True}
 
 
 @router.post("/api/projects/{project_id}/material-requirements/analyze", response_model=list[MaterialRequirementResponse])
@@ -621,6 +716,294 @@ async def update_chapter_material_binding(
     await db.refresh(binding)
     await db.refresh(binding, attribute_names=["material_asset"])
     return _serialize_binding(binding)
+
+
+@router.post("/api/materials/smart-match")
+async def smart_match_materials(
+    request: dict,
+    current_user: Annotated[User, Depends(get_current_active_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """
+    智能匹配素材到章节。
+    入参：project_id, chapter_id（可选，不传则匹配所有章节）
+    返回：[{ chapter_id, chapter_title, recommended_materials: [...] }]
+    """
+    project_id_str: str = request.get("project_id", "")
+    chapter_id_str: str | None = request.get("chapter_id")
+
+    try:
+        project_uuid = uuid.UUID(project_id_str)
+    except (ValueError, AttributeError):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="无效的 project_id")
+
+    await _verify_project_member(project_uuid, current_user.id, db)
+
+    # ---- 查询目标章节 ----
+    chapter_query = select(Chapter).where(Chapter.project_id == project_uuid)
+    if chapter_id_str:
+        try:
+            chapter_uuid = uuid.UUID(chapter_id_str)
+            chapter_query = chapter_query.where(Chapter.id == chapter_uuid)
+        except (ValueError, AttributeError):
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="无效的 chapter_id")
+
+    chapters_result = await db.execute(chapter_query)
+    chapters = chapters_result.scalars().all()
+    if not chapters:
+        return []
+
+    # ---- 查询可用素材（confirmed / 未停用 / 未过期） ----
+    asset_result = await db.execute(
+        select(MaterialAsset).where(
+            (
+                (MaterialAsset.scope == "global")
+                | (MaterialAsset.owner_id == current_user.id)
+                | (MaterialAsset.uploaded_by == current_user.id)
+            )
+            & (MaterialAsset.is_disabled == False)  # noqa: E712
+        )
+    )
+    all_assets = list(asset_result.scalars().all())
+    today = date.today()
+    valid_assets = [a for a in all_assets if not (a.valid_until and a.valid_until < today)]
+
+    # ---- 规则匹配：chapter title / role → 素材 category ----
+    RULE_MAP: list[tuple[list[str], list[str]]] = [
+        (
+            ["项目经验", "业绩", "合同", "案例", "工程案例", "项目案例"],
+            ["project_case", "contract_sample"],
+        ),
+        (
+            ["团队", "人员", "人力", "技术人员", "项目团队"],
+            ["team_photo"],
+        ),
+        (
+            ["质量", "ISO", "认证", "体系", "管理体系"],
+            ["iso_cert", "qualification_cert"],
+        ),
+        (
+            ["营业执照", "企业", "公司", "主体"],
+            ["business_license"],
+        ),
+        (
+            ["法人", "身份", "代表人"],
+            ["legal_person_id"],
+        ),
+        (
+            ["资质", "许可", "证书"],
+            ["qualification_cert", "award_cert"],
+        ),
+        (
+            ["财务", "银行", "信用"],
+            ["financial_report", "bank_credit"],
+        ),
+        (
+            ["社保", "劳动"],
+            ["social_security"],
+        ),
+        (
+            ["设备", "仪器", "工程机械"],
+            ["equipment_photo"],
+        ),
+    ]
+
+    def _match_chapter(chapter: Chapter) -> list[dict]:
+        chapter_text = " ".join(filter(None, [chapter.title, chapter.chapter_role, chapter.rating_item]))
+        chapter_lower = chapter_text.lower()
+
+        # 确定候选 category
+        preferred_categories: set[str] = set()
+        for keywords, categories in RULE_MAP:
+            if any(kw.lower() in chapter_lower for kw in keywords):
+                preferred_categories.update(categories)
+
+        results: list[dict] = []
+
+        for asset in valid_assets:
+            score = 0.0
+            reasons: list[str] = []
+
+            asset_cat = asset.category.value if hasattr(asset.category, "value") else str(asset.category)
+            if asset_cat in preferred_categories:
+                score += 60
+                reasons.append(f"分类匹配：{asset_cat}")
+
+            # 名称关键词命中
+            asset_name_lower = asset.name.lower()
+            for kw in [chapter.title] + (chapter.rating_item or "").split("；"):
+                if kw and len(kw) > 1 and kw.lower() in asset_name_lower:
+                    score += 15
+                    reasons.append(f"名称命中：{kw}")
+                    break
+
+            # 标签匹配
+            asset_tags = set(t.lower() for t in (asset.tags or []))
+            chapter_tokens = set(chapter_lower.split())
+            if asset_tags & chapter_tokens:
+                score += 10
+                reasons.append("标签命中")
+
+            if score >= 30:
+                results.append({
+                    "material_id": str(asset.id),
+                    "material_name": asset.name,
+                    "category": asset_cat,
+                    "relevance_score": score,
+                    "reason": "；".join(reasons),
+                })
+
+        # 按分数降序，取 top 5
+        results.sort(key=lambda x: x["relevance_score"], reverse=True)
+        return results[:5]
+
+    output = []
+    for chapter in chapters:
+        recommendations = _match_chapter(chapter)
+        output.append({
+            "chapter_id": str(chapter.id),
+            "chapter_title": chapter.title,
+            "chapter_number": chapter.chapter_number,
+            "recommended_materials": recommendations,
+        })
+
+    return output
+
+
+@router.post("/api/materials/auto-bind")
+async def auto_bind_materials(
+    request: dict,
+    current_user: Annotated[User, Depends(require_editor)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """
+    一键自动绑定：调用 smart-match 后为每个章节的 top-1 推荐素材创建 ChapterMaterialBinding。
+    返回绑定结果汇总。
+    """
+    project_id_str: str = request.get("project_id", "")
+    try:
+        project_uuid = uuid.UUID(project_id_str)
+    except (ValueError, AttributeError):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="无效的 project_id")
+
+    await _verify_project_member(project_uuid, current_user.id, db)
+
+    # 复用 smart-match 逻辑（内联调用，避免 HTTP 循环）
+    asset_result = await db.execute(
+        select(MaterialAsset).where(
+            (
+                (MaterialAsset.scope == "global")
+                | (MaterialAsset.owner_id == current_user.id)
+                | (MaterialAsset.uploaded_by == current_user.id)
+            )
+            & (MaterialAsset.is_disabled == False)  # noqa: E712
+        )
+    )
+    all_assets = list(asset_result.scalars().all())
+    today = date.today()
+    valid_assets = [a for a in all_assets if not (a.valid_until and a.valid_until < today)]
+    asset_map = {str(a.id): a for a in valid_assets}
+
+    chapters_result = await db.execute(
+        select(Chapter).where(Chapter.project_id == project_uuid)
+    )
+    chapters = chapters_result.scalars().all()
+
+    RULE_MAP: list[tuple[list[str], list[str]]] = [
+        (["项目经验", "业绩", "合同", "案例", "工程案例", "项目案例"], ["project_case", "contract_sample"]),
+        (["团队", "人员", "人力", "技术人员", "项目团队"], ["team_photo"]),
+        (["质量", "ISO", "认证", "体系", "管理体系"], ["iso_cert", "qualification_cert"]),
+        (["营业执照", "企业", "公司", "主体"], ["business_license"]),
+        (["法人", "身份", "代表人"], ["legal_person_id"]),
+        (["资质", "许可", "证书"], ["qualification_cert", "award_cert"]),
+        (["财务", "银行", "信用"], ["financial_report", "bank_credit"]),
+        (["社保", "劳动"], ["social_security"]),
+        (["设备", "仪器", "工程机械"], ["equipment_photo"]),
+    ]
+
+    def _score_asset(chapter: Chapter, asset: MaterialAsset) -> float:
+        chapter_text = " ".join(filter(None, [chapter.title, chapter.chapter_role, chapter.rating_item]))
+        chapter_lower = chapter_text.lower()
+        preferred_categories: set[str] = set()
+        for keywords, categories in RULE_MAP:
+            if any(kw.lower() in chapter_lower for kw in keywords):
+                preferred_categories.update(categories)
+        asset_cat = asset.category.value if hasattr(asset.category, "value") else str(asset.category)
+        score = 0.0
+        if asset_cat in preferred_categories:
+            score += 60
+        asset_name_lower = asset.name.lower()
+        for kw in [chapter.title] + (chapter.rating_item or "").split("；"):
+            if kw and len(kw) > 1 and kw.lower() in asset_name_lower:
+                score += 15
+                break
+        asset_tags = set(t.lower() for t in (asset.tags or []))
+        if asset_tags & set(chapter_lower.split()):
+            score += 10
+        return score
+
+    bound_count = 0
+    skipped_count = 0
+    binding_details: list[dict] = []
+
+    for chapter in chapters:
+        if not valid_assets:
+            break
+
+        # 找 top-1 素材（score >= 30）
+        scored = [(a, _score_asset(chapter, a)) for a in valid_assets]
+        scored.sort(key=lambda x: x[1], reverse=True)
+        if not scored or scored[0][1] < 30:
+            skipped_count += 1
+            continue
+
+        top_asset = scored[0][0]
+
+        # 检查是否已绑定
+        existing = await db.execute(
+            select(ChapterMaterialBinding).where(
+                and_(
+                    ChapterMaterialBinding.chapter_id == chapter.id,
+                    ChapterMaterialBinding.material_asset_id == top_asset.id,
+                )
+            )
+        )
+        if existing.scalar_one_or_none():
+            skipped_count += 1
+            binding_details.append({
+                "chapter_id": str(chapter.id),
+                "chapter_title": chapter.title,
+                "material_id": str(top_asset.id),
+                "material_name": top_asset.name,
+                "status": "already_bound",
+            })
+            continue
+
+        binding = ChapterMaterialBinding(
+            project_id=project_uuid,
+            chapter_id=chapter.id,
+            material_asset_id=top_asset.id,
+            created_by=current_user.id,
+        )
+        db.add(binding)
+        bound_count += 1
+        binding_details.append({
+            "chapter_id": str(chapter.id),
+            "chapter_title": chapter.title,
+            "material_id": str(top_asset.id),
+            "material_name": top_asset.name,
+            "status": "bound",
+        })
+
+    await db.flush()
+    await db.commit()
+
+    return {
+        "bound_count": bound_count,
+        "skipped_count": skipped_count,
+        "total_chapters": len(chapters),
+        "details": binding_details,
+    }
 
 
 @router.delete("/api/projects/{project_id}/chapters/{chapter_id}/material-bindings/{binding_id}", status_code=status.HTTP_204_NO_CONTENT)

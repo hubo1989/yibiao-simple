@@ -24,7 +24,7 @@ class MaterialAssetBase(BaseModel):
     tags: list[str] = Field(default_factory=list)
     keywords: list[str] = Field(default_factory=list)
     ai_description: str | None = None
-    ai_extracted_fields: dict = Field(default_factory=dict)
+    ai_extracted_fields: dict | None = Field(default_factory=dict)
     valid_from: date | None = None
     valid_until: date | None = None
     review_status: MaterialReviewStatus = Field(default=MaterialReviewStatus.PENDING)
@@ -55,10 +55,11 @@ class MaterialAssetResponse(MaterialAssetBase):
     file_size: int
     page_count: int | None = None
     is_expired: bool
+    is_disabled: bool = False
     usage_count: int
     last_used_at: datetime | None = None
     # 溯源字段
-    source_document_id: str | None = None
+    source_document_id: uuid.UUID | None = None
     source_page_from: int | None = None
     source_page_to: int | None = None
     source_excerpt: str | None = None
@@ -167,9 +168,9 @@ class IngestionTaskCreate(BaseModel):
 
 
 class IngestionTaskResponse(BaseModel):
-    id: str
-    document_id: str
-    created_by: str | None = None
+    id: uuid.UUID
+    document_id: uuid.UUID
+    created_by: uuid.UUID | None = None
     status: str
     total_candidates: int
     confirmed_count: int
@@ -185,8 +186,8 @@ class IngestionTaskResponse(BaseModel):
 
 
 class MaterialCandidateResponse(BaseModel):
-    id: str
-    task_id: str
+    id: uuid.UUID
+    task_id: uuid.UUID
     category: str
     name: str
     source_page_from: int | None = None
@@ -212,3 +213,14 @@ class MaterialCandidateResponse(BaseModel):
 class IngestionConfirmRequest(BaseModel):
     confirm_ids: list[uuid.UUID] = Field(default_factory=list)
     reject_ids: list[uuid.UUID] = Field(default_factory=list)
+
+
+class ChapterSuggestRequest(BaseModel):
+    project_id: str
+    chapter_title: str
+    chapter_content: str = ""
+    top_k: int = 5
+
+
+class MaterialAssetWithScore(MaterialAssetResponse):
+    score: float = 0.0

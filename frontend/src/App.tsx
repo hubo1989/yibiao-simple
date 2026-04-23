@@ -9,6 +9,7 @@ import ProtectedRoute from './components/ProtectedRoute';
 
 const Login = lazy(() => import('./pages/Login'));
 const Register = lazy(() => import('./pages/Register'));
+const Dashboard = lazy(() => import('./pages/Dashboard'));
 const ProjectList = lazy(() => import('./pages/ProjectList'));
 const ProjectWorkspace = lazy(() => import('./pages/ProjectWorkspace'));
 const ProjectSettings = lazy(() => import('./pages/ProjectSettings'));
@@ -19,6 +20,8 @@ const MaterialLibrary = lazy(() => import('./pages/MaterialLibrary'));
 const ProjectManager = lazy(() => import('./pages/ProjectManager'));
 const RequestLogs = lazy(() => import('./pages/RequestLogs'));
 const BasicLayout = lazy(() => import('./layouts/BasicLayout'));
+const TemplateManage = lazy(() => import('./pages/TemplateManage'));
+const KnowledgeLibrary = lazy(() => import('./pages/KnowledgeLibrary'));
 
 const routeFallback = (
   <div
@@ -54,6 +57,7 @@ function App() {
               }
             >
               <Route index element={<ProjectList />} />
+              <Route path="dashboard" element={<Dashboard />} />
               <Route path="project/:projectId" element={<ProjectWorkspace />} />
               <Route path="project/:projectId/settings" element={<ProjectSettings />} />
               <Route path="project/:projectId/review" element={<BidReview />} />
@@ -82,6 +86,12 @@ function App() {
               {/* 知识库管理 */}
               <Route path="knowledge" element={<KnowledgeBase />} />
               <Route path="materials" element={<MaterialLibrary />} />
+
+              {/* 导出模板管理 */}
+              <Route path="templates" element={<TemplateManage />} />
+
+              {/* 标书知识库 */}
+              <Route path="knowledge-library" element={<KnowledgeLibrary />} />
             </Route>
 
             {/* 默认重定向 */}

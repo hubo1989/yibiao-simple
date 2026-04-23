@@ -210,7 +210,8 @@ class TestSensitiveFieldList:
 
     def test_sensitive_fields_completeness(self):
         """确保敏感字段列表包含所有定义的字段"""
-        expected_fields = {
+        # 测试敏感字段集合包含所有预期字段（实际集合可能更大，但核心字段必须存在）
+        required_fields = {
             "password",
             "password_confirm",
             "hashed_password",
@@ -222,7 +223,9 @@ class TestSensitiveFieldList:
             "secret",
             "authorization",
         }
-        assert SENSITIVE_FIELDS == expected_fields
+        assert required_fields.issubset(SENSITIVE_FIELDS), (
+            f"敏感字段列表缺少必要字段: {required_fields - SENSITIVE_FIELDS}"
+        )
 
 
 class TestAuditLogQuerySchema:

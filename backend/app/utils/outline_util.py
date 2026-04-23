@@ -12,8 +12,10 @@ def get_random_indexes(max_index: int) -> Tuple[int, int]:
     Returns:
         Tuple[int, int]: 两个不同的随机索引
     """
-    if max_index < 2:
-        raise ValueError("max_index must be at least 2 to select two different indexes")
+    if max_index <= 0:
+        return (0, 0)
+    if max_index == 1:
+        return (0, 0)
     
     # 生成所有可能的索引对
     all_pairs = [(i, j) for i in range(max_index) for j in range(max_index) if i != j]
@@ -41,6 +43,21 @@ def calculate_nodes_distribution(level1_count: int, important_indexes: tuple[int
             'leaf_per_level2': [[3,3,3,3], [2,3,3], [3,3,2]]  # 每个二级节点下的叶子节点数量
         }
     """
+    # 边界防御：level1_count 不足 2 时退化为均匀分配
+    if level1_count <= 0:
+        return {'level2_nodes': [], 'leaf_nodes': [], 'leaf_per_level2': []}
+    if level1_count == 1:
+        per_l2 = max(round(total_leaf_nodes / 3), 1)
+        leaf_per = [total_leaf_nodes // per_l2] * per_l2
+        remainder = total_leaf_nodes - sum(leaf_per)
+        if remainder > 0 and leaf_per:
+            leaf_per[0] += remainder
+        return {
+            'level2_nodes': [per_l2],
+            'leaf_nodes': [total_leaf_nodes],
+            'leaf_per_level2': [leaf_per],
+        }
+
     # 计算重要节点和普通节点的权重
     primary_weight = 1.4    # 第一重要节点的权重
     secondary_weight = 1.2  # 第二重要节点的权重

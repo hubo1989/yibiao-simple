@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..models.schemas import ContentGenerationRequest, ChapterContentRequest
 from ..models.user import User
 from ..services.openai_service import OpenAIService
+from ..services.knowledge_retrieval_service import KnowledgeRetrievalService
 from ..db.database import get_db
 from ..utils.sse import sse_response
 from ..auth.dependencies import require_editor
@@ -48,6 +49,28 @@ async def generate_chapter_content(
                 suggestions=request.rewrite_suggestions,
             )
         else:
+            # 检索知识库
+            knowledge_context = ""
+            if request.use_knowledge and db:
+                try:
+                    retrieval_service = KnowledgeRetrievalService(db)
+                    chapter_title = str(request.chapter.get("title") or request.chapter.get("id") or "")
+                    results = await retrieval_service.retrieve_for_chapter(
+                        chapter_title=chapter_title,
+                        chapter_description=str(request.chapter.get("description", "")),
+                        project_overview=(request.project_overview or "")[:500],
+                        user_id=current_user.id if current_user else None,
+                        top_k=5,
+                    )
+                    if results:
+                        knowledge_context = "\n\n".join(
+                            f"【{r.get('title', '参考文档')}】\n{r.get('content') or r.get('content_preview', '')}"
+                            for r in results
+                            if r.get("content") or r.get("content_preview")
+                        )
+                except Exception:
+                    pass  # 知识库检索失败不影响正常生成
+
             async for chunk in openai_service._generate_chapter_content(
                 chapter=request.chapter,
                 parent_chapters=request.parent_chapters,
@@ -56,6 +79,7 @@ async def generate_chapter_content(
                 project_response_matrix=openai_service._build_project_response_matrix(
                     request.rating_response_checklist
                 ),
+                knowledge_context=knowledge_context,
             ):
                 content += chunk
 
@@ -106,6 +130,29 @@ async def generate_chapter_content_stream(
                         full_content += chunk
                         yield f"data: {json.dumps({'status': 'streaming', 'content': chunk, 'full_content': full_content}, ensure_ascii=False)}\n\n"
                 else:
+                    # 检索知识库
+                    knowledge_context = ""
+                    if request.use_knowledge and db:
+                        try:
+                            retrieval_service = KnowledgeRetrievalService(db)
+                            chapter_title = str(request.chapter.get("title") or request.chapter.get("id") or "")
+                            results = await retrieval_service.retrieve_for_chapter(
+                                chapter_title=chapter_title,
+                                chapter_description=str(request.chapter.get("description", "")),
+                                project_overview=(request.project_overview or "")[:500],
+                                user_id=current_user.id if current_user else None,
+                                top_k=5,
+                            )
+                            if results:
+                                knowledge_context = "\n\n".join(
+                                    f"【{r.get('title', '参考文档')}】\n{r.get('content') or r.get('content_preview', '')}"
+                                    for r in results
+                                    if r.get("content") or r.get("content_preview")
+                                )
+                                yield f"data: {json.dumps({'status': 'knowledge_retrieved', 'count': len(results)}, ensure_ascii=False)}\n\n"
+                        except Exception:
+                            pass  # 知识库检索失败不影响正常生成
+
                     async for chunk in openai_service._generate_chapter_content(
                         chapter=request.chapter,
                         parent_chapters=request.parent_chapters,
@@ -114,6 +161,7 @@ async def generate_chapter_content_stream(
                         project_response_matrix=openai_service._build_project_response_matrix(
                             request.rating_response_checklist
                         ),
+                        knowledge_context=knowledge_context,
                     ):
                         full_content += chunk
                         # 实时发送内容片段

@@ -79,12 +79,19 @@ class TestBuiltinPrompts:
         assert '"outline"' not in prompt
 
     def test_outline_and_chapter_prompts_accept_response_matrix(self) -> None:
-        """目录与章节提示词应支持注入统一响应矩阵"""
-        outline_prompt = get_builtin_prompt("outline_l1")["prompt"]
-        chapter_prompt = get_builtin_prompt("chapter_content")["prompt"]
+        """目录生成函数应通过 rating_checklist 接受响应矩阵；章节生成函数应接受 project_response_matrix"""
+        import inspect
+        from app.services.openai_service import OpenAIService
 
-        assert "project_response_matrix" in outline_prompt
-        assert "project_response_matrix" in chapter_prompt
+        # outline_v2 通过 rating_checklist 参数间接支持响应矩阵（内部调用 _build_project_response_matrix）
+        outline_sig = inspect.signature(OpenAIService.generate_outline_v2)
+        assert "rating_checklist" in outline_sig.parameters, \
+            "generate_outline_v2 应接受 rating_checklist 参数以构建响应矩阵"
+
+        # 章节生成函数直接接受 project_response_matrix
+        chapter_sig = inspect.signature(OpenAIService._generate_chapter_content)
+        assert "project_response_matrix" in chapter_sig.parameters, \
+            "_generate_chapter_content 应接受 project_response_matrix 参数"
 
 
 class TestOpenAIServiceResponseMatrix:

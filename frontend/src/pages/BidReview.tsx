@@ -3,6 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { reviewApi, projectApi } from '../services/api';
 import { getCurrentModel, getCurrentProviderConfigId } from '../utils/modelCache';
+import { consumeSseEvents } from '../utils/sse';
 import ContentPageHeader from '../components/ContentPageHeader';
 import ReviewConfig from '../components/review/ReviewConfig';
 import BidFileUpload from '../components/review/BidFileUpload';
@@ -28,6 +29,7 @@ import {
   Alert,
   Statistic,
   Spin,
+  Drawer,
 } from 'antd';
 import {
   PlayCircleOutlined,
@@ -37,33 +39,6 @@ import {
 } from '@ant-design/icons';
 
 type PageStep = 'config' | 'upload' | 'reviewing' | 'report';
-
-const consumeSseEvents = (
-  buffer: string,
-  onEvent: (event: any) => void,
-): { remainder: string; done: boolean } => {
-  const normalized = buffer.replace(/\r\n/g, '\n');
-  const events = normalized.split('\n\n');
-  const remainder = events.pop() ?? '';
-
-  for (const event of events) {
-    if (!event.trim()) continue;
-    const data = event
-      .split('\n')
-      .filter((l) => l.startsWith('data: '))
-      .map((l) => l.slice(6))
-      .join('\n')
-      .trim();
-    if (!data) continue;
-    if (data === '[DONE]') return { remainder: '', done: true };
-    try {
-      onEvent(JSON.parse(data));
-    } catch {
-      // ignore malformed events
-    }
-  }
-  return { remainder, done: false };
-};
 
 const BidReview: React.FC = () => {
   const { projectId } = useParams<{ projectId: string }>();
@@ -102,6 +77,12 @@ const BidReview: React.FC = () => {
   // 结果筛选
   const [dimensionTab, setDimensionTab] = useState<string>('all');
   const [severityFilter, setSeverityFilter] = useState<string>('all');
+
+  // AI 修复
+  const [selectedIssueIds, setSelectedIssueIds] = useState<string[]>([]);
+  const [applyFixDrawerOpen, setApplyFixDrawerOpen] = useState(false);
+  const [applyFixContent, setApplyFixContent] = useState('');
+  const [applyFixStreaming, setApplyFixStreaming] = useState(false);
 
   const fetchProject = useCallback(async () => {
     if (!projectId) return;
@@ -156,7 +137,7 @@ const BidReview: React.FC = () => {
 
     setUploading(true);
     try {
-      const data = await reviewApi.uploadBidFile(projectId, file, token || undefined);
+      const data = await reviewApi.uploadBidFile(projectId, file);
       if (data.success && data.task_id) {
         setTaskId(data.task_id);
         setFileInfo(data.file_info);
@@ -213,10 +194,11 @@ const BidReview: React.FC = () => {
 
         pending += decoder.decode(value, { stream: true });
         const sseResult = consumeSseEvents(pending, (event) => {
-          if (event.type === 'progress') {
-            setProgress((prev) => ({ ...prev, [event.dimension]: event.status }));
-          } else if (event.type === 'error') {
-            message.error(event.message);
+          const e = event as Record<string, any>;
+          if (e.type === 'progress') {
+            setProgress((prev) => ({ ...prev, [e.dimension]: e.status }));
+          } else if (e.type === 'error') {
+            message.error(e.message);
           }
         });
         pending = sseResult.remainder;
@@ -230,6 +212,55 @@ const BidReview: React.FC = () => {
       setStep('upload');
     } finally {
       setReviewing(false);
+    }
+  };
+
+  // AI 修复流式调用
+  const handleApplyFix = async () => {
+    if (!taskId) return;
+    setApplyFixContent('');
+    setApplyFixStreaming(true);
+    setApplyFixDrawerOpen(true);
+    try {
+      const apiBase = (window as any).__API_BASE_URL__ || '';
+      const authToken = token || localStorage.getItem('access_token') || '';
+      const response = await fetch(`${apiBase}/api/review/apply-fix-stream/${taskId}`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}),
+        },
+        body: JSON.stringify({
+          chapter_id: '审查修复',
+          current_content: '',
+          issue_ids: selectedIssueIds,
+        }),
+      });
+      if (!response.ok) throw new Error(`请求失败: ${response.status}`);
+      const reader = response.body?.getReader();
+      if (!reader) throw new Error('无法读取响应流');
+      let full = '';
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        const chunk = new TextDecoder().decode(value);
+        for (const line of chunk.split('\n')) {
+          if (!line.startsWith('data: ')) continue;
+          const data = line.slice(6);
+          if (data === '[DONE]') continue;
+          try {
+            const parsed = JSON.parse(data);
+            if (parsed.status === 'streaming' && parsed.full_content) {
+              full = parsed.full_content;
+              setApplyFixContent(full);
+            }
+          } catch { /* ignore */ }
+        }
+      }
+    } catch (e: any) {
+      message.error(e.message || 'AI 修复失败');
+    } finally {
+      setApplyFixStreaming(false);
     }
   };
 
@@ -434,6 +465,63 @@ const BidReview: React.FC = () => {
               onSeverityFilterChange={setSeverityFilter}
               onCopy={copyText}
             />
+
+            {/* AI 修复操作栏 */}
+            {result.status === 'completed' && (
+              <Card style={{ marginTop: 16 }}>
+                <Space wrap>
+                  <Button
+                    type="primary"
+                    onClick={handleApplyFix}
+                    loading={applyFixStreaming}
+                  >
+                    AI 修改（流式）
+                  </Button>
+                  <Button
+                    icon={<DownloadOutlined />}
+                    onClick={handleExport}
+                  >
+                    导出带批注 Word
+                  </Button>
+                </Space>
+                {selectedIssueIds.length > 0 && (
+                  <div style={{ marginTop: 8, fontSize: 12, color: '#8c8c8c' }}>
+                    已选 {selectedIssueIds.length} 个问题进行修复
+                    <Button size="small" type="link" onClick={() => setSelectedIssueIds([])}>
+                      清空选择
+                    </Button>
+                  </div>
+                )}
+              </Card>
+            )}
+
+            {/* AI 修复结果 Drawer */}
+            <Drawer
+              title="AI 修改结果"
+              open={applyFixDrawerOpen}
+              onClose={() => setApplyFixDrawerOpen(false)}
+              width={600}
+              extra={
+                <Button
+                  size="small"
+                  onClick={() => { navigator.clipboard.writeText(applyFixContent); message.success('已复制'); }}
+                  disabled={!applyFixContent}
+                >
+                  复制内容
+                </Button>
+              }
+            >
+              {applyFixStreaming && !applyFixContent && (
+                <div style={{ textAlign: 'center', padding: 32 }}>
+                  <Spin tip="AI 正在生成修改内容..." />
+                </div>
+              )}
+              {applyFixContent && (
+                <div style={{ whiteSpace: 'pre-wrap', lineHeight: 1.8, fontSize: 14 }}>
+                  {applyFixContent}
+                </div>
+              )}
+            </Drawer>
 
             {result.status === 'failed' && (
               <Alert

@@ -17,6 +17,7 @@ export interface OutlineItem {
   content?: string;
   generationError?: string;
   status?: 'pending' | 'generating' | 'generated'; // 章节状态：待生成、生成中、已生成
+  _confirmedMaterialIds?: string[]; // 用户确认的素材 ID（临时字段，不持久化）
 }
 
 export interface OutlineData {

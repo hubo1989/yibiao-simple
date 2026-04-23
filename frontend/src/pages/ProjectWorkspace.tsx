@@ -5,7 +5,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
-import { projectApi, consistencyApi, documentApi } from '../services/api';
+import { projectApi, consistencyApi, documentApi, outlineApi } from '../services/api';
 import { useAppState } from '../hooks/useAppState';
 import type { Project, ProjectProgress } from '../types/project';
 import type { ConsistencyCheckResponse } from '../types/consistency';
@@ -16,18 +16,22 @@ import MemberSidebar from '../components/MemberSidebar';
 import ConsistencyPanel from '../components/ConsistencyPanel';
 import CommentPanel from '../components/CommentPanel';
 import MaterialRequirementDrawer from '../components/MaterialRequirementDrawer';
+import DisqualificationPanel from '../components/DisqualificationPanel';
+import ScoringPanel from '../components/ScoringPanel';
 import { useLayoutHeader } from '../layouts/layoutHeader';
 import DocumentAnalysis from './DocumentAnalysis';
 import OutlineEdit from './OutlineEdit';
 import ContentEdit from './ContentEdit';
 
-import { Layout, Button, Typography, Spin, message } from 'antd';
+import { Layout, Button, Typography, Spin, message, Badge, Tooltip } from 'antd';
 import {
   TeamOutlined,
   SettingOutlined,
   HistoryOutlined,
   ArrowLeftOutlined,
   PaperClipOutlined,
+  SafetyOutlined,
+  TrophyOutlined,
 } from '@ant-design/icons';
 
 const { Content } = Layout;
@@ -35,7 +39,7 @@ const { Content } = Layout;
 const ProjectWorkspace: React.FC = () => {
   const { projectId } = useParams<{ projectId: string }>();
   const navigate = useNavigate();
-  const { user, token } = useAuth();
+  const { user } = useAuth();
   const { setLayoutHeader } = useLayoutHeader();
   const [project, setProject] = useState<Project | null>(null);
   const [progress, setProgress] = useState<ProjectProgress | null>(null);
@@ -48,6 +52,8 @@ const ProjectWorkspace: React.FC = () => {
   const [isCheckingConsistency, setIsCheckingConsistency] = useState(false);
   const [activeCommentChapter, setActiveCommentChapter] = useState<string | null>(null);
   const [showMaterialDrawer, setShowMaterialDrawer] = useState(false);
+  const [showDisqualificationPanel, setShowDisqualificationPanel] = useState(false);
+  const [showScoringPanel, setShowScoringPanel] = useState(false);
   const [lastChapterSummaries, setLastChapterSummaries] = useState<{ chapter_number: string; title: string; summary: string }[]>([]);
   const [highlightedChapters, setHighlightedChapters] = useState<Set<string>>(new Set());
 
@@ -107,13 +113,51 @@ const ProjectWorkspace: React.FC = () => {
       } catch {
         // Ignore progress fail
       }
+
+      // 从后端加载已保存的章节目录（确保即使 draftStorage 丢失也能恢复）
+      try {
+        const chaptersResp = await outlineApi.getProjectChapters(projectId);
+        if (chaptersResp.chapters?.length) {
+          // 将扁平章节列表构建为 OutlineData 树形结构
+          const chapterMap = new Map<string | null, typeof chaptersResp.chapters>();
+          for (const ch of chaptersResp.chapters) {
+            const parentKey = ch.parent_id ?? null;
+            if (!chapterMap.has(parentKey)) chapterMap.set(parentKey, []);
+            chapterMap.get(parentKey)!.push(ch);
+          }
+          const buildTree = (parentId: string | null): import('../types').OutlineItem[] => {
+            const children = chapterMap.get(parentId) ?? [];
+            return children.map(ch => ({
+              id: ch.chapter_number,
+              title: ch.title,
+              description: '',
+              rating_item: undefined,
+              chapter_role: undefined,
+              avoid_overlap: undefined,
+              children: buildTree(ch.id),
+              status: ch.status === 'generated' ? 'generated' as const
+                    : ch.status === 'pending' ? 'pending' as const
+                    : undefined,
+            })).map(item => item.children?.length ? item : { ...item, children: undefined });
+          };
+          const outlineTree = buildTree(null);
+          if (outlineTree.length) {
+            updateOutline({
+              outline: outlineTree,
+              project_overview: projectData.project_overview || '',
+            });
+          }
+        }
+      } catch {
+        // 目录加载失败不阻塞
+      }
     } catch (err) {
       setError('加载项目失败，请稍后重试');
       console.error('加载项目失败:', err);
     } finally {
       setLoading(false);
     }
-  }, [projectId, user, updateFileContent, updateAnalysisResults]);
+  }, [projectId, user, updateFileContent, updateAnalysisResults, updateOutline]);
 
   useEffect(() => {
     loadProject();
@@ -161,6 +205,22 @@ const ProjectWorkspace: React.FC = () => {
           <div className="flex shrink-0 flex-wrap items-center gap-3">
             <Button icon={<TeamOutlined />} onClick={() => setShowMemberSidebar(true)}>成员</Button>
             <Button icon={<PaperClipOutlined />} onClick={() => setShowMaterialDrawer(true)}>材料需求</Button>
+            <Tooltip title="废标项检查 — 自动提取否决性条款并逐项核实">
+              <Button
+                icon={<SafetyOutlined />}
+                onClick={() => setShowDisqualificationPanel(true)}
+              >
+                废标检查
+              </Button>
+            </Tooltip>
+            <Tooltip title="评分标准 — 提取评分项并绑定章节，驱动目录和内容生成">
+              <Button
+                icon={<TrophyOutlined />}
+                onClick={() => setShowScoringPanel(true)}
+              >
+                评分标准
+              </Button>
+            </Tooltip>
             <Button icon={<SettingOutlined />} onClick={() => navigate(`/project/${projectId}/settings`)}>设置</Button>
             <Button icon={<HistoryOutlined />} onClick={() => setShowVersionHistory(true)}>版本历史</Button>
           </div>
@@ -192,7 +252,7 @@ const ProjectWorkspace: React.FC = () => {
         console.error('保存分析结果失败:', error);
       }
     }
-  }, [projectId, state.projectOverview, state.techRequirements, token]);
+  }, [projectId, state.projectOverview, state.techRequirements]);
 
   const handleStepChange = useCallback(async (targetStep: number) => {
     if (targetStep === state.currentStep) {
@@ -472,6 +532,21 @@ const ProjectWorkspace: React.FC = () => {
           onClose={() => setShowMaterialDrawer(false)}
         />
       ) : null}
+
+      {projectId && (
+        <DisqualificationPanel
+          projectId={projectId}
+          isOpen={showDisqualificationPanel}
+          onClose={() => setShowDisqualificationPanel(false)}
+        />
+      )}
+      {projectId && (
+        <ScoringPanel
+          projectId={projectId}
+          isOpen={showScoringPanel}
+          onClose={() => setShowScoringPanel(false)}
+        />
+      )}
     </Layout>
   );
 };

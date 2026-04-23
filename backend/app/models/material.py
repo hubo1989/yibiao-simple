@@ -103,6 +103,7 @@ class MaterialAsset(Base):
     valid_from: Mapped[date | None] = mapped_column(Date, nullable=True)
     valid_until: Mapped[date | None] = mapped_column(Date, nullable=True)
     is_expired: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, index=True)
+    is_disabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, index=True, comment="手动停用")
     review_status: Mapped[MaterialReviewStatus] = mapped_column(
         SQLEnum(MaterialReviewStatus, values_callable=lambda obj: [e.value for e in obj]),
         nullable=False,

@@ -173,6 +173,7 @@ class TestProjectModel:
             "project_overview",
             "tech_requirements",
             "custom_prompts",
+            "default_template_id",
             "created_at",
             "updated_at",
         }

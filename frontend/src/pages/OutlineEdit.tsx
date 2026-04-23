@@ -1,9 +1,9 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState, useCallback } from 'react';
 import { OutlineData, OutlineItem } from '../types';
-import { outlineApi, expandApi, consistencyApi } from '../services/api';
+import { outlineApi, expandApi, consistencyApi, scoringApi } from '../services/api';
+import type { ScoringCoverageResponse } from '../services/api';
 import { getErrorMessage } from '../utils/error';
 import { consumeSseEvents } from '../utils/sse';
-import { useAuth } from '../contexts/AuthContext';
 import ChapterStatusBadge from '../components/ChapterStatusBadge';
 import RatingChecklistModal from '../components/outline-edit/RatingChecklistModal';
 import OutlineEditModal from '../components/outline-edit/OutlineEditModal';
@@ -46,7 +46,6 @@ const OutlineEdit: React.FC<OutlineEditProps> = ({
   projectId,
   onContinue,
 }) => {
-  const { token } = useAuth();
   const [generatingL1, setGeneratingL1] = useState(false);
   const [generatingL2L3, setGeneratingL2L3] = useState(false);
   const [expandedItems, setExpandedItems] = useState<Set<string>>(new Set());
@@ -61,6 +60,7 @@ const OutlineEdit: React.FC<OutlineEditProps> = ({
   const [showRatingChecklist, setShowRatingChecklist] = useState(false);
   const [isLoadingRatingChecklist, setIsLoadingRatingChecklist] = useState(false);
   const [ratingChecklist, setRatingChecklist] = useState<RatingChecklistResponse | null>(null);
+  const [scoringCoverage, setScoringCoverage] = useState<ScoringCoverageResponse | null>(null);
 
   const outlineStats = useMemo(() => {
     const stats = {
@@ -144,6 +144,16 @@ const OutlineEdit: React.FC<OutlineEditProps> = ({
     }
   }, [expandedItems.size, outlineData]);
 
+  // 加载评分标准覆盖率（静默）
+  useEffect(() => {
+    if (!projectId) return;
+    scoringApi.list(projectId).then(items => {
+      if (items.length > 0) {
+        return scoringApi.coverage(projectId).then(setScoringCoverage);
+      }
+    }).catch(() => {/* 静默忽略 */});
+  }, [projectId]);
+
   const handleExpandUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (!file) return;
@@ -195,7 +205,12 @@ const OutlineEdit: React.FC<OutlineEditProps> = ({
         provider_config_id: currentProviderConfigId || undefined,
       });
 
-      const reader = response.data?.getReader();
+      if (!response.ok) {
+        const error = await response.json().catch(() => ({}));
+        throw new Error((error as { detail?: string }).detail || `请求失败: ${response.status}`);
+      }
+
+      const reader = response.body?.getReader();
       if (!reader) {
         throw new Error('无法读取响应流');
       }
@@ -243,7 +258,23 @@ const OutlineEdit: React.FC<OutlineEditProps> = ({
         }
         
         const outlineJson = JSON.parse(cleanResult);
-        onOutlineGenerated(outlineJson);
+        // AI 可能返回 [{...}, ...] 数组或 {outline: [...]} 对象
+        const rawItems: unknown[] = Array.isArray(outlineJson)
+          ? outlineJson
+          : (outlineJson.outline ?? []);
+        // AI prompt 返回 {rating_item, new_title, chapter_role, avoid_overlap}
+        // 前端 OutlineItem 需要 {id, title, description, rating_item, chapter_role, avoid_overlap}
+        const normalizedItems: OutlineItem[] = rawItems.map((raw: any, idx: number) => ({
+          id: raw.id ?? String(idx + 1),
+          title: raw.title ?? raw.new_title ?? raw.rating_item ?? '',
+          description: raw.description ?? raw.chapter_role ?? '',
+          rating_item: raw.rating_item,
+          chapter_role: raw.chapter_role,
+          avoid_overlap: raw.avoid_overlap,
+          children: raw.children,
+        }));
+        const outlineData: OutlineData = { outline: normalizedItems };
+        onOutlineGenerated(outlineData);
         message.success('一级目录生成完成');
         setStreamingContent('');
 
@@ -256,7 +287,7 @@ const OutlineEdit: React.FC<OutlineEditProps> = ({
             }
           });
         };
-        collectIds(outlineJson.outline || []);
+        collectIds(outlineData.outline || []);
         setExpandedItems(allIds);
 
       } catch (parseError) {
@@ -302,7 +333,12 @@ const OutlineEdit: React.FC<OutlineEditProps> = ({
         outline_data: outlineData,
       });
 
-      const reader = response.data?.getReader();
+      if (!response.ok) {
+        const error = await response.json().catch(() => ({}));
+        throw new Error((error as { detail?: string }).detail || `请求失败: ${response.status}`);
+      }
+
+      const reader = response.body?.getReader();
       if (!reader) {
         throw new Error('无法读取响应流');
       }
@@ -440,32 +476,28 @@ const OutlineEdit: React.FC<OutlineEditProps> = ({
   const deleteItem = (itemId: string) => {
     if (!outlineData) return;
 
-    Modal.confirm({
-      title: '删除确认',
-      content: '确定要删除这个目录项吗？',
-      onOk: () => {
-        const deleteFromItems = (items: OutlineItem[]): OutlineItem[] => {
-          return items.filter(item => {
-            if (item.id === itemId) return false;
-            if (item.children) {
-              item.children = deleteFromItems(item.children);
-            }
-            return true;
-          });
-        };
+    if (!window.confirm('确定要删除这个目录项吗？')) return;
 
-        const filteredItems = deleteFromItems(outlineData.outline);
-        const reorderedItems = reorderItems(filteredItems);
+    const deleteFromItems = (items: OutlineItem[]): OutlineItem[] => {
+      return items.filter(item => {
+        if (item.id === itemId) return false;
+        if (item.children) {
+          item.children = deleteFromItems(item.children);
+        }
+        return true;
+      });
+    };
 
-        const updatedData = {
-          ...outlineData,
-          outline: reorderedItems
-        };
+    const filteredItems = deleteFromItems(outlineData.outline);
+    const reorderedItems = reorderItems(filteredItems);
 
-        onOutlineGenerated(updatedData);
-        message.success('目录项删除成功');
-      }
-    });
+    const updatedData = {
+      ...outlineData,
+      outline: reorderedItems
+    };
+
+    onOutlineGenerated(updatedData);
+    message.success('目录项删除成功');
   };
 
   const addChildItem = (parentId: string) => {
@@ -631,6 +663,26 @@ const OutlineEdit: React.FC<OutlineEditProps> = ({
           width: 18px;
         }
       `}</style>
+
+      {/* 评分标准提示条 */}
+      {scoringCoverage && scoringCoverage.total > 0 && (
+        <Alert
+          style={{ marginBottom: 16, borderRadius: 10 }}
+          type="info"
+          showIcon
+          message={
+            <span>
+              已加载 <strong>{scoringCoverage.total}</strong> 个评分项（总分{' '}
+              <strong>{scoringCoverage.total_score}</strong> 分），生成目录时将自动参考评分权重。
+              {scoringCoverage.unbound > 0 && (
+                <span style={{ marginLeft: 8, color: '#faad14' }}>
+                  ⚠ 还有 {scoringCoverage.unbound} 项未绑定章节
+                </span>
+              )}
+            </span>
+          }
+        />
+      )}
 
       <div className="grid gap-6 xl:grid-cols-[380px_minmax(0,1fr)]">
         <ProCard

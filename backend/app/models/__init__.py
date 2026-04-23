@@ -12,3 +12,4 @@ from .operation_log import OperationLog
 from .request_log import RequestLog
 from .template import Template
 from .bid_review_task import BidReviewTask, ReviewTaskStatus
+from .export_template import ExportTemplate

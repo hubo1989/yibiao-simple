@@ -102,6 +102,7 @@ export interface BidFileUploadResponse {
 export interface ReviewHistoryItem {
   task_id: string;
   status: ReviewTaskStatus;
+  bid_filename: string | null;
   summary: ReviewSummary | null;
   model_name: string | null;
   created_at: string;

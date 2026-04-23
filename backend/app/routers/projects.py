@@ -179,6 +179,133 @@ async def list_projects(
     return projects
 
 
+class DashboardChapterStats(BaseModel):
+    """章节状态统计"""
+    total: int = 0
+    pending: int = 0
+    generated: int = 0
+    reviewing: int = 0
+    finalized: int = 0
+
+
+class DashboardProjectItem(BaseModel):
+    """看板中单个项目的概览"""
+    id: str
+    name: str
+    status: str
+    created_at: datetime
+    updated_at: datetime
+    chapter_stats: DashboardChapterStats
+    completion_percentage: float
+
+
+class DashboardStatusCount(BaseModel):
+    """按状态分组的项目数"""
+    draft: int = 0
+    in_progress: int = 0
+    reviewing: int = 0
+    completed: int = 0
+
+
+class DashboardChapterStatusCount(BaseModel):
+    """全局章节状态统计"""
+    pending: int = 0
+    generated: int = 0
+    reviewing: int = 0
+    finalized: int = 0
+
+
+class DashboardResponse(BaseModel):
+    """进度看板响应"""
+    total_projects: int
+    by_status: DashboardStatusCount
+    total_chapters: int
+    chapter_by_status: DashboardChapterStatusCount
+    projects: list[DashboardProjectItem]
+
+
+@router.get("/dashboard", response_model=DashboardResponse)
+async def get_dashboard(
+    current_user: Annotated[User, Depends(get_current_active_user)],
+    db: Annotated[AsyncSession, Depends(get_db)],
+):
+    """
+    进度看板 — 返回当前用户参与的所有项目的进度概览
+
+    包含全局汇总统计和逐项目的章节状态明细。
+    """
+    # 获取用户参与的所有项目
+    query = (
+        select(Project)
+        .join(project_members, Project.id == project_members.c.project_id)
+        .where(project_members.c.user_id == current_user.id)
+        .order_by(Project.updated_at.desc())
+    )
+    result = await db.execute(query)
+    projects = result.scalars().all()
+
+    # 全局状态统计
+    by_status = DashboardStatusCount()
+    total_chapters = 0
+    chapter_by_status = DashboardChapterStatusCount()
+
+    project_items: list[DashboardProjectItem] = []
+
+    for proj in projects:
+        # 更新项目状态计数
+        status_val = proj.status.value if isinstance(proj.status, ProjectStatus) else proj.status
+        if hasattr(by_status, status_val):
+            setattr(by_status, status_val, getattr(by_status, status_val) + 1)
+
+        # 统计该项目的章节状态
+        chapter_counts_result = await db.execute(
+            select(Chapter.status, func.count(Chapter.id))
+            .where(Chapter.project_id == proj.id)
+            .group_by(Chapter.status)
+        )
+        chapter_counts = dict(chapter_counts_result.all())
+
+        stats = DashboardChapterStats(
+            total=sum(chapter_counts.values()),
+            pending=chapter_counts.get(ChapterStatus.PENDING, 0),
+            generated=chapter_counts.get(ChapterStatus.GENERATED, 0),
+            reviewing=chapter_counts.get(ChapterStatus.REVIEWING, 0),
+            finalized=chapter_counts.get(ChapterStatus.FINALIZED, 0),
+        )
+
+        # 计算完成百分比
+        completion = 0.0
+        if stats.total > 0:
+            completion = round(stats.finalized / stats.total * 100, 1)
+
+        # 累计全局章节统计
+        total_chapters += stats.total
+        chapter_by_status.pending += stats.pending
+        chapter_by_status.generated += stats.generated
+        chapter_by_status.reviewing += stats.reviewing
+        chapter_by_status.finalized += stats.finalized
+
+        project_items.append(
+            DashboardProjectItem(
+                id=str(proj.id),
+                name=proj.name,
+                status=status_val,
+                created_at=proj.created_at,
+                updated_at=proj.updated_at,
+                chapter_stats=stats,
+                completion_percentage=completion,
+            )
+        )
+
+    return DashboardResponse(
+        total_projects=len(projects),
+        by_status=by_status,
+        total_chapters=total_chapters,
+        chapter_by_status=chapter_by_status,
+        projects=project_items,
+    )
+
+
 @router.get("/{project_id}", response_model=ProjectResponse)
 async def get_project(
     project_id: uuid.UUID,

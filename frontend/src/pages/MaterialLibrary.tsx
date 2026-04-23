@@ -1,11 +1,36 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Button, Card, Empty, Form, Image, Input, Modal, Popconfirm, Select, Space, Tag, Upload, message } from 'antd';
-import { InboxOutlined, PlusOutlined, ImportOutlined, EditOutlined, DeleteOutlined } from '@ant-design/icons';
+import { InboxOutlined, PlusOutlined, ImportOutlined, EditOutlined, DeleteOutlined, SearchOutlined, ReloadOutlined, StopOutlined, CheckCircleOutlined } from '@ant-design/icons';
 import { materialApi } from '../services/api';
 import type { MaterialAsset, MaterialCategory } from '../types/material';
 import { useLayoutHeader } from '../layouts/layoutHeader';
 import IngestionWizard from '../components/IngestionWizard';
 import { getFileUrl, getErrorMessage, ApiError } from '../utils/error';
+
+// 计算距今天数（正数=未来，负数=已过期）
+function daysUntil(dateStr: string | null | undefined): number | null {
+  if (!dateStr) return null;
+  const diff = new Date(dateStr).getTime() - Date.now();
+  return Math.ceil(diff / (1000 * 60 * 60 * 24));
+}
+
+function ExpiryTag({ item }: { item: MaterialAsset }) {
+  if (item.is_disabled) {
+    return <Tag color="default">已停用</Tag>;
+  }
+  // 动态计算是否过期（不依赖后端 is_expired 字段）
+  const days = daysUntil(item.valid_until);
+  if (days !== null && days < 0) {
+    return <Tag color="error">已过期</Tag>;
+  }
+  if (days !== null && days <= 30) {
+    return <Tag color="warning">即将过期 {days} 天</Tag>;
+  }
+  if (item.valid_until) {
+    return <Tag color="success">有效</Tag>;
+  }
+  return null;
+}
 
 const categoryOptions: { label: string; value: MaterialCategory }[] = [
   { label: '营业执照', value: 'business_license' },
@@ -33,6 +58,7 @@ const MaterialLibrary: React.FC = () => {
   const [editSubmitting, setEditSubmitting] = useState(false);
   const [editForm] = Form.useForm();
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [togglingId, setTogglingId] = useState<string | null>(null);
   const [uploadSubmitting, setUploadSubmitting] = useState(false);
   const [previewPdf, setPreviewPdf] = useState<string | null>(null);
 
@@ -133,6 +159,24 @@ const MaterialLibrary: React.FC = () => {
     }
   };
 
+  const handleToggleDisable = async (item: MaterialAsset) => {
+    setTogglingId(item.id);
+    try {
+      if (item.is_disabled) {
+        await materialApi.enable(item.id);
+        message.success('已启用');
+      } else {
+        await materialApi.disable(item.id);
+        message.success('已停用');
+      }
+      await loadData();
+    } catch (error: unknown) {
+      message.error(getErrorMessage(error, '操作失败'));
+    } finally {
+      setTogglingId(null);
+    }
+  };
+
   return (
     <div style={{ maxWidth: 1240, margin: '0 auto', padding: 24 }}>
       <Space direction="vertical" size="large" style={{ width: '100%' }}>
@@ -153,6 +197,12 @@ const MaterialLibrary: React.FC = () => {
                 value={category}
                 onChange={(value) => setCategory(value)}
               />
+              <Button icon={<SearchOutlined />} onClick={() => loadData()}>
+                查询
+              </Button>
+              <Button icon={<ReloadOutlined />} onClick={() => { setKeyword(''); setCategory(undefined); }}>
+                重置
+              </Button>
             </Space>
             <Space>
               <Button icon={<ImportOutlined />} onClick={() => setShowIngestion(true)}>
@@ -190,6 +240,16 @@ const MaterialLibrary: React.FC = () => {
                     }}
                   >
                     编辑
+                  </Button>,
+                  <Button
+                    key="toggle-disable"
+                    type="text"
+                    size="small"
+                    icon={item.is_disabled ? <CheckCircleOutlined /> : <StopOutlined />}
+                    loading={togglingId === item.id}
+                    onClick={() => handleToggleDisable(item)}
+                  >
+                    {item.is_disabled ? '启用' : '停用'}
                   </Button>,
                   <Popconfirm
                     key="delete"
@@ -248,7 +308,7 @@ const MaterialLibrary: React.FC = () => {
                 <Space direction="vertical" size={8} style={{ width: '100%' }}>
                   <Space wrap>
                     <Tag color="blue">{categoryOptions.find(o => o.value === item.category)?.label || item.category}</Tag>
-                    <Tag color={item.is_expired ? 'error' : 'success'}>{item.is_expired ? '已过期' : '有效'}</Tag>
+                    <ExpiryTag item={item} />
                     {item.review_status !== 'confirmed' ? <Tag color="gold">待确认</Tag> : null}
                   </Space>
                   <div style={{ fontWeight: 600 }}>{item.name}</div>
@@ -364,10 +424,12 @@ const MaterialLibrary: React.FC = () => {
       {/* 从历史标书导入 */}
       <IngestionWizard
         visible={showIngestion}
-        onClose={() => setShowIngestion(false)}
+        onClose={() => {
+          setShowIngestion(false);
+          loadData();
+        }}
         onSuccess={() => {
           loadData();
-          setShowIngestion(false);
         }}
       />
     </div>

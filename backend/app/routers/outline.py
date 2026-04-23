@@ -24,6 +24,8 @@ from ..models.user import User
 from ..models.project import Project, project_members, ProjectMemberRole
 from ..models.chapter import Chapter, ChapterStatus
 from ..models.version import ProjectVersion, ChangeType
+from ..models.scoring import ScoringCriteria
+from ..models.material import ChapterMaterialBinding, MaterialAsset
 from ..db.database import get_db
 from ..services.openai_service import OpenAIService
 from ..services.prompt_service import PromptService
@@ -249,6 +251,9 @@ async def _create_chapters_from_outline(
     created_chapters = []
 
     for idx, item in enumerate(outline_items):
+        # 防御：AI 返回的 children 中可能混入非 dict 元素（如嵌套 list）
+        if not isinstance(item, dict):
+            continue
         chapter = Chapter(
             project_id=project_id,
             parent_id=parent_id,
@@ -327,10 +332,33 @@ async def generate_project_outline_l1_stream(
             openai_service.set_model(request.model_name)
 
         async def generate():
+            # 查询项目的评分标准，注入到目录生成 prompt 中
+            sc_result = await db.execute(
+                select(ScoringCriteria)
+                .where(ScoringCriteria.project_id == project_uuid)
+                .order_by(ScoringCriteria.created_at)
+            )
+            scoring_items = sc_result.scalars().all()
+
+            effective_requirements = project.tech_requirements
+            if scoring_items:
+                scoring_lines = [
+                    f"- {sc.item_id or ''} {sc.item}"
+                    f"（满分{sc.max_score}分）"
+                    f"：{sc.scoring_rule or '见原文'}"
+                    for sc in scoring_items
+                ]
+                scoring_hint = (
+                    "\n\n【评分标准提示】以下是从招标文件中提取的评分项，"
+                    "请确保一级目录结构能覆盖所有高分评分项，高分项应有独立章节：\n"
+                    + "\n".join(scoring_lines)
+                )
+                effective_requirements = project.tech_requirements + scoring_hint
+
             # 使用 prompt_manager 生成一级目录
             system_prompt, user_prompt = prompt_manager.generate_outline_prompt(
                 project.project_overview,
-                project.tech_requirements,
+                effective_requirements,
             )
 
             messages = [
@@ -354,22 +382,52 @@ async def generate_project_outline_l1_stream(
             try:
                 full_content = "".join(collected_result)
                 
-                # 清理Markdown代码块格式
-                if "```json" in full_content:
-                    # 提取 ```json 和 ``` 之间的内容
-                    import re
-                    json_match = re.search(r'```json\s*(.*?)\s*```', full_content, re.DOTALL)
-                    if json_match:
-                        full_content = json_match.group(1)
-                elif "```" in full_content:
-                    # 提取 ``` 和 ``` 之间的内容
-                    import re
-                    json_match = re.search(r'```\s*(.*?)\s*```', full_content, re.DOTALL)
-                    if json_match:
-                        full_content = json_match.group(1)
+                # 清理 Markdown 代码块格式（贪婪匹配最外层）
+                import re
+                json_match = re.search(r'```(?:json)?\s*(.*?)\s*```', full_content, re.DOTALL)
+                if json_match:
+                    full_content = json_match.group(1)
                 
-                outline_data = json.loads(full_content.strip())
-                outline_items = outline_data.get("outline", [])
+                # JSON 解析 + 容错：尝试修复常见的 AI 输出问题
+                full_content = full_content.strip()
+                try:
+                    outline_data = json.loads(full_content)
+                except json.JSONDecodeError:
+                    # 尝试修复：去除尾部多余逗号、截断到最后一个 ] 或 }
+                    cleaned = re.sub(r',\s*([}\]])', r'\1', full_content)
+                    # 找到最后一个完整的 JSON 结构
+                    last_bracket = max(cleaned.rfind(']'), cleaned.rfind('}'))
+                    if last_bracket > 0:
+                        cleaned = cleaned[:last_bracket + 1]
+                    try:
+                        outline_data = json.loads(cleaned)
+                    except json.JSONDecodeError as parse_err:
+                        logger.error(f"L1 目录 JSON 解析失败: {parse_err}\n原文: {full_content[:500]}")
+                        yield f"data: {json.dumps({'type': 'error', 'error': True, 'message': f'目录数据格式异常，请重试（{parse_err}）'}, ensure_ascii=False)}\n\n"
+                        return
+
+                # AI 可能返回 {"outline": [...]} 或直接返回 [...]
+                if isinstance(outline_data, list):
+                    outline_items = outline_data
+                elif isinstance(outline_data, dict):
+                    outline_items = outline_data.get("outline", outline_data.get("chapters", []))
+                else:
+                    logger.error(f"L1 目录返回了非预期类型: {type(outline_data)}")
+                    yield f"data: {json.dumps({'type': 'error', 'error': True, 'message': '目录数据格式异常（非预期类型），请重试'}, ensure_ascii=False)}\n\n"
+                    return
+
+                # 过滤掉非 dict 元素，只保留有效的章节项
+                outline_items = [item for item in outline_items if isinstance(item, dict)]
+
+                # AI prompt 返回字段名可能是 new_title/chapter_role,
+                # 标准化为 _create_chapters_from_outline 期望的 id/title/description
+                for idx, item in enumerate(outline_items):
+                    if "id" not in item:
+                        item["id"] = str(idx + 1)
+                    if "title" not in item and "new_title" in item:
+                        item["title"] = item["new_title"]
+                    if "description" not in item and "chapter_role" in item:
+                        item["description"] = item["chapter_role"]
 
                 if outline_items:
                     # 先删除项目现有的所有章节
@@ -402,8 +460,9 @@ async def generate_project_outline_l1_stream(
                     await db.commit()
 
             except Exception as e:
-                print(f"保存一级目录到数据库失败: {e}")
+                logger.error(f"保存一级目录到数据库失败: {e}")
                 await db.rollback()
+                yield f"data: {json.dumps({'type': 'error', 'error': True, 'message': f'保存一级目录到数据库失败: {e}'}, ensure_ascii=False)}\n\n"
 
         return sse_response(generate())
 
@@ -565,11 +624,13 @@ async def generate_project_outline_l2l3_stream(
                     )
                     db.add(version)
                     await db.flush()
+                    await db.commit()
 
             except Exception as e:
+                await db.rollback()
                 error_msg = f"生成二三级目录失败: {str(e)}"
-                print(error_msg)
-                yield f"data: {json.dumps({'error': True, 'message': error_msg}, ensure_ascii=False)}\n\n"
+                logger.error(error_msg)
+                yield f"data: {json.dumps({'type': 'error', 'error': True, 'message': error_msg}, ensure_ascii=False)}\n\n"
                 yield "data: [DONE]\n\n"
 
         return sse_response(generate())
@@ -682,10 +743,12 @@ async def generate_project_outline_stream(
                     db.add(version)
 
                     await db.flush()
+                    await db.commit()
 
             except Exception as e:
-                # 保存失败但不影响已返回的流式结果
-                print(f"保存目录到数据库失败: {e}")
+                await db.rollback()
+                logger.error(f"保存目录到数据库失败: {e}")
+                yield f"data: {json.dumps({'type': 'error', 'error': True, 'message': f'保存目录到数据库失败: {e}'}, ensure_ascii=False)}\n\n"
 
         return sse_response(generate())
 
@@ -841,7 +904,7 @@ async def generate_project_content_stream(
         knowledge_context = ""
         try:
             retrieval_service = KnowledgeRetrievalService(db, openai_service)
-            knowledge_results = await retrieval_service.search_relevant_knowledge(
+            knowledge_results = await retrieval_service.retrieve_for_chapter(
                 chapter_title=chapter.title,
                 chapter_description=chapter.content or "",
                 parent_chapters=[
@@ -890,6 +953,29 @@ async def generate_project_content_stream(
         chapter_rating_focus = getattr(chapter, "rating_item", "") or ""
         adjacent_boundary = getattr(chapter, "avoid_overlap", "") or ""
 
+        # 如果该章节绑定了评分标准，把评分信息追加到 chapter_rating_focus
+        sc_for_chapter_result = await db.execute(
+            select(ScoringCriteria).where(
+                and_(
+                    ScoringCriteria.project_id == project_uuid,
+                    ScoringCriteria.bound_chapter_id == chapter_uuid,
+                )
+            )
+        )
+        bound_scoring = sc_for_chapter_result.scalars().all()
+        if bound_scoring:
+            sc_lines = []
+            for sc in bound_scoring:
+                line = f"【{sc.item}】满分 {sc.max_score} 分"
+                if sc.scoring_rule:
+                    line += f"，评分规则：{sc.scoring_rule}"
+                sc_lines.append(line)
+            scoring_injection = (
+                "\n\n【本章绑定评分项】请确保内容充分覆盖以下评分要点，"
+                "篇幅和深度应与分值相匹配：\n" + "\n".join(sc_lines)
+            )
+            chapter_rating_focus = chapter_rating_focus + scoring_injection if chapter_rating_focus else scoring_injection
+
         if sibling_chapters_formatted and not adjacent_boundary:
             sibling_titles = "；".join([
                 f"{item['id']} {item['title']}" for item in sibling_chapters_formatted if item.get("title") != chapter.title
@@ -914,7 +1000,54 @@ async def generate_project_content_stream(
         # 如果有知识库上下文，添加到模板变量
         if knowledge_context:
             template_vars["knowledge_context"] = knowledge_context
-        
+
+        # ---- 素材注入：查询本章绑定的素材，追加到 system_prompt ----
+        material_injection = ""
+        try:
+            mat_binding_result = await db.execute(
+                select(ChapterMaterialBinding)
+                .where(
+                    and_(
+                        ChapterMaterialBinding.chapter_id == chapter_uuid,
+                        ChapterMaterialBinding.project_id == project_uuid,
+                    )
+                )
+            )
+            mat_bindings = mat_binding_result.scalars().all()
+            if mat_bindings:
+                # 加载关联素材
+                mat_ids = [b.material_asset_id for b in mat_bindings]
+                mat_asset_result = await db.execute(
+                    select(MaterialAsset).where(MaterialAsset.id.in_(mat_ids))
+                )
+                mat_assets = {str(a.id): a for a in mat_asset_result.scalars().all()}
+                mat_lines: list[str] = []
+                for b in mat_bindings:
+                    asset = mat_assets.get(str(b.material_asset_id))
+                    if not asset:
+                        continue
+                    line = f"- {asset.name}（分类：{asset.category.value}）"
+                    # 附加 AI 提取字段中的关键信息
+                    extracted = asset.ai_extracted_fields or {}
+                    if extracted.get("valid_until"):
+                        line += f"（有效期至：{extracted['valid_until']}）"
+                    if extracted.get("cert_number"):
+                        line += f"（证书编号：{extracted['cert_number']}）"
+                    if asset.description:
+                        line += f"（{asset.description[:60]}）"
+                    mat_lines.append(line)
+                if mat_lines:
+                    material_injection = (
+                        "\n\n【本章节已绑定以下素材，请在内容中自然地引用这些素材，"
+                        "体现企业真实能力和资质，但不要生硬地罗列：】\n"
+                        + "\n".join(mat_lines)
+                    )
+        except Exception as mat_err:
+            logger.warning(f"素材注入失败，跳过: {mat_err}")
+
+        if material_injection:
+            system_prompt = system_prompt + material_injection
+
         user_prompt = prompt_service.render_prompt(
             user_template,
             template_vars,
@@ -963,6 +1096,7 @@ async def generate_project_content_stream(
             db.add(version)
 
             await db.flush()
+            await db.commit()
 
         return sse_response(generate())
 

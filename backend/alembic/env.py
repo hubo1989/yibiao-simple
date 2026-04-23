@@ -14,6 +14,7 @@ from app.models.chapter import Chapter  # noqa: F401
 from app.models.material import MaterialAsset, MaterialRequirement, ChapterMaterialBinding  # noqa: F401
 from app.models.version import ProjectVersion  # noqa: F401
 from app.models.operation_log import OperationLog  # noqa: F401
+from app.models.export_template import ExportTemplate  # noqa: F401
 
 # Alembic Config 对象
 config = context.config

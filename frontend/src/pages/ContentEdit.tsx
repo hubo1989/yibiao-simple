@@ -1,30 +1,38 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import ReactMarkdown from 'react-markdown';
 import { OutlineData, OutlineItem } from '../types';
 import {
   contentApi,
-  documentApi,
   proofreadApi,
   chapterApi,
   outlineApi,
   consistencyApi,
   materialApi,
+  materialSmartApi,
+  scoringApi,
+  chapterTemplateApi,
   ChapterContentRequest,
 } from '../services/api';
+import type { ChapterTemplate } from '../services/api';
+import type { SmartMatchResult, SmartMatchRecommendation } from '../services/api';
+import type { ScoringCriteriaItem } from '../services/api';
+import ExportDialog from '../components/ExportDialog';
 import { getErrorMessage, ApiError } from '../utils/error';
-import { useAuth } from '../contexts/AuthContext';
-import { saveAs } from 'file-saver';
+
 import { draftStorage } from '../utils/draftStorage';
 import { getCurrentModel, getCurrentProviderConfigId } from '../utils/modelCache';
 import ChapterStatusBadge from '../components/ChapterStatusBadge';
 import ProofreadPanel from '../components/ProofreadPanel';
 import MaterialMarkerModal from '../components/content-edit/MaterialMarkerModal';
+import MaterialSuggestPanel from '../components/content-edit/MaterialSuggestPanel';
 import ReverseEnhanceModal from '../components/content-edit/ReverseEnhanceModal';
 import ClauseResponseModal from '../components/content-edit/ClauseResponseModal';
+import ConsistencyPanel from '../components/content-edit/ConsistencyPanel';
 import type { ChapterStatus } from '../types/chapter';
 import type { ChapterMaterialBinding } from '../types/material';
 import type { ProofreadResult, ProofreadIssue } from '../types/proofread';
 import type { ChapterReverseEnhanceResponse, ClauseResponseResult } from '../types/bid';
+import type { ConsistencyCheckResult } from '../services/api';
 import { ProCard } from '@ant-design/pro-components';
 import { 
   Button, 
@@ -40,6 +48,10 @@ import {
   Alert,
   Input,
   Spin,
+  Form,
+  Select,
+  List,
+  Badge,
 } from 'antd';
 import { 
   FileTextOutlined,
@@ -56,6 +68,12 @@ import {
   BulbOutlined,
   ProfileOutlined,
   PaperClipOutlined,
+  StopOutlined,
+  ThunderboltOutlined,
+  TagOutlined,
+  LinkOutlined,
+  BookOutlined,
+  SaveOutlined,
 } from '@ant-design/icons';
 
 interface ContentEditProps {
@@ -85,7 +103,7 @@ const ContentEdit: React.FC<ContentEditProps> = ({
   onToggleConsistency,
   highlightedChapters,
 }) => {
-  const { token } = useAuth();
+
   const [isGenerating, setIsGenerating] = useState(false);
   const [progress, setProgress] = useState<GenerationProgress>({
     total: 0,
@@ -115,11 +133,61 @@ const ContentEdit: React.FC<ContentEditProps> = ({
   const [clauseKnowledgeContext, setClauseKnowledgeContext] = useState('');
   const [clauseResponseResult, setClauseResponseResult] = useState<ClauseResponseResult | null>(null);
   const [isGeneratingClauseResponse, setIsGeneratingClauseResponse] = useState(false);
+  // 一致性校验状态
+  const [showConsistencyPanel, setShowConsistencyPanel] = useState(false);
+  const [isConsistencyChecking, setIsConsistencyChecking] = useState(false);
+  const [consistencyResult, setConsistencyResult] = useState<ConsistencyCheckResult | null>(null);
+  const [consistencyLastCheckedAt, setConsistencyLastCheckedAt] = useState<string | undefined>(undefined);
+
   const [showMaterialMarkerModal, setShowMaterialMarkerModal] = useState(false);
   const [materialMarkerBindings, setMaterialMarkerBindings] = useState<ChapterMaterialBinding[]>([]);
   const [materialMarkerTarget, setMaterialMarkerTarget] = useState<{ chapterNumber: string; title: string } | null>(null);
   const [selectedBindingId, setSelectedBindingId] = useState<string>('');
+  const [showSuggestPanel, setShowSuggestPanel] = useState(false);
+  const [suggestLoading, setSuggestLoading] = useState(false);
+  const [suggestItems, setSuggestItems] = useState<Array<import('../types/material').MaterialAsset & { score: number }>>([]);
+  const [pendingGenerateItem, setPendingGenerateItem] = useState<{ item: OutlineItem; projectOverview: string } | null>(null);
+  const [showGenerateModal, setShowGenerateModal] = useState(false);
+  const [itemsToGenerateCount, setItemsToGenerateCount] = useState(0);
+  const abortControllerRef = useRef<AbortController | null>(null);
+  // 章节ID -> 绑定的评分项列表（用于章节卡片上显示评分标签）
+  const [chapterScoringMap, setChapterScoringMap] = useState<Record<string, ScoringCriteriaItem[]>>({});
 
+  // 素材智能匹配面板
+  const [smartMatchResults, setSmartMatchResults] = useState<SmartMatchResult[]>([]);
+  const [smartMatchLoading, setSmartMatchLoading] = useState(false);
+  const [autoBindLoading, setAutoBindLoading] = useState(false);
+  // 章节ID -> 推荐素材列表（展开时懒查询）
+  const [chapterMatchMap, setChapterMatchMap] = useState<Record<string, SmartMatchRecommendation[]>>({});
+  // 当前展开推荐面板的章节ID
+  const [expandedMatchChapter, setExpandedMatchChapter] = useState<string | null>(null);
+  const [matchChapterLoading, setMatchChapterLoading] = useState<string | null>(null);
+
+  // 知识库（章节模板）相关 state
+  const [templatePickerVisible, setTemplatePickerVisible] = useState(false);
+  const [templatePickerTarget, setTemplatePickerTarget] = useState<{ chapterNumber: string; chapterId: string; title: string } | null>(null);
+  const [templateList, setTemplateList] = useState<ChapterTemplate[]>([]);
+  const [templateListLoading, setTemplateListLoading] = useState(false);
+  const [templateKeyword, setTemplateKeyword] = useState('');
+  const [saveTemplateVisible, setSaveTemplateVisible] = useState(false);
+  const [saveTemplateTarget, setSaveTemplateTarget] = useState<{ chapterNumber: string; chapterId: string; title: string } | null>(null);
+  const [saveTemplateForm] = Form.useForm();
+  const [saveTemplateLoading, setSaveTemplateLoading] = useState(false);
+
+  // 加载评分标准，建立 chapterId -> items 映射（静默加载）
+  useEffect(() => {
+    if (!projectId) return;
+    scoringApi.list(projectId).then(items => {
+      const map: Record<string, ScoringCriteriaItem[]> = {};
+      for (const sc of items) {
+        if (sc.bound_chapter_id) {
+          if (!map[sc.bound_chapter_id]) map[sc.bound_chapter_id] = [];
+          map[sc.bound_chapter_id].push(sc);
+        }
+      }
+      setChapterScoringMap(map);
+    }).catch(() => {/* 静默忽略 */});
+  }, [projectId]);
 
   const loadProjectChapterMap = useCallback(async (): Promise<Record<string, string>> => {
     if (!projectId) {
@@ -197,6 +265,71 @@ const ContentEdit: React.FC<ContentEditProps> = ({
     },
     [getProjectChapterId, projectId]
   );
+
+  /** 为单个章节拉取推荐素材（切换展开） */
+  const handleToggleSmartMatch = useCallback(async (chapterDbId: string) => {
+    if (!projectId) return;
+    if (expandedMatchChapter === chapterDbId) {
+      setExpandedMatchChapter(null);
+      return;
+    }
+    setExpandedMatchChapter(chapterDbId);
+    if (chapterMatchMap[chapterDbId]) return; // 已加载过
+    setMatchChapterLoading(chapterDbId);
+    try {
+      const results = await materialSmartApi.match(projectId, chapterDbId);
+      const recommendations = results[0]?.recommended_materials ?? [];
+      setChapterMatchMap(prev => ({ ...prev, [chapterDbId]: recommendations }));
+    } catch {
+      setChapterMatchMap(prev => ({ ...prev, [chapterDbId]: [] }));
+    } finally {
+      setMatchChapterLoading(null);
+    }
+  }, [projectId, expandedMatchChapter, chapterMatchMap]);
+
+  /** 一键绑定单条推荐素材 */
+  const handleBindRecommendedMaterial = useCallback(async (chapterDbId: string, materialId: string, materialName: string) => {
+    if (!projectId) return;
+    try {
+      await materialApi.createBinding(projectId, chapterDbId, {
+        material_asset_id: materialId,
+      });
+      message.success(`已绑定素材：${materialName}`);
+      // 刷新该章节的推荐列表（清除缓存，重新加载）
+      setChapterMatchMap(prev => {
+        const next = { ...prev };
+        delete next[chapterDbId];
+        return next;
+      });
+      setExpandedMatchChapter(null);
+    } catch (error: unknown) {
+      const detail = (error as any)?.response?.data?.detail;
+      message.error(detail || '绑定素材失败');
+    }
+  }, [projectId]);
+
+  /** 批量一键自动绑定 */
+  const handleAutoBind = useCallback(async () => {
+    if (!projectId) {
+      message.warning('缺少项目 ID，无法自动绑定');
+      return;
+    }
+    setAutoBindLoading(true);
+    try {
+      const result = await materialSmartApi.autoBind(projectId);
+      message.success(
+        `智能绑定完成：新绑定 ${result.bound_count} 个章节，跳过 ${result.skipped_count} 个`,
+      );
+      // 清空本地推荐缓存，强制刷新
+      setChapterMatchMap({});
+      setExpandedMatchChapter(null);
+    } catch (error: unknown) {
+      const detail = (error as any)?.response?.data?.detail;
+      message.error(detail || '自动绑定失败');
+    } finally {
+      setAutoBindLoading(false);
+    }
+  }, [projectId]);
 
   const handleInsertMaterialMarker = useCallback(async () => {
     if (!materialMarkerTarget || !selectedBindingId) {
@@ -325,8 +458,14 @@ const ContentEdit: React.FC<ContentEditProps> = ({
   }, []);
 
   useEffect(() => {
+    console.log('[ContentEdit] outlineData changed:', {
+      hasData: !!outlineData,
+      outlineLength: outlineData?.outline?.length,
+      firstItem: outlineData?.outline?.[0] ? { id: outlineData.outline[0].id, title: outlineData.outline[0].title } : null,
+    });
     if (outlineData) {
       const leaves = collectLeafItems(outlineData.outline);
+      console.log('[ContentEdit] leafItems collected:', leaves.length, 'first:', leaves[0]?.id, leaves[0]?.title);
       const filtered = draftStorage.filterContentByOutlineLeaves(outlineData.outline);
       const mergedLeaves = leaves.map((leaf) => {
         const cached = filtered[leaf.id];
@@ -377,7 +516,7 @@ const ContentEdit: React.FC<ContentEditProps> = ({
   };
 
   const getChapterStatus = (item: OutlineItem, isGenerating: boolean): ChapterStatus => {
-    if (isGenerating) return 'generated';
+    if (isGenerating) return 'generating';
     if (!isLeafNode(item)) {
       return 'pending';
     }
@@ -406,6 +545,11 @@ const ContentEdit: React.FC<ContentEditProps> = ({
       setProofreadChapterId(chapterId);
 
       const response = await proofreadApi.proofreadChapter(chapterId);
+
+      if (!response.ok) {
+        const error = await response.json().catch(() => ({}));
+        throw new Error((error as { detail?: string }).detail || `请求失败: ${response.status}`);
+      }
 
       const reader = response.data?.getReader();
       if (!reader) throw new Error('无法读取响应');
@@ -480,10 +624,7 @@ const ContentEdit: React.FC<ContentEditProps> = ({
   };
 
   const handleEditContent = (issue: ProofreadIssue) => {
-    Modal.info({
-      title: '手动编辑内容',
-      content: `请根据以下建议手动编辑内容：\n\n${issue.suggestion}`,
-    });
+    window.alert(`请根据以下建议手动编辑内容：\n\n${issue.suggestion}`);
   };
 
   const handleCloseProofreadPanel = () => {
@@ -572,6 +713,133 @@ const ContentEdit: React.FC<ContentEditProps> = ({
       message.error(getErrorMessage(error, '条款逐条响应生成失败，请重试'));
     } finally {
       setIsGeneratingClauseResponse(false);
+    }
+  };
+
+  // ============ 知识库（章节模板）相关 handlers ============
+
+  const handleOpenTemplatePicker = async (item: OutlineItem) => {
+    if (!projectId) {
+      message.warning('仅项目模式支持套用模板');
+      return;
+    }
+    const chapterId = await getProjectChapterId(item.id);
+    if (!chapterId) {
+      message.warning(`未找到章节 ${item.id} 的数据库记录`);
+      return;
+    }
+    setTemplatePickerTarget({ chapterNumber: item.id, chapterId, title: item.title });
+    setTemplateKeyword('');
+    setTemplatePickerVisible(true);
+    setTemplateListLoading(true);
+    try {
+      // 用章节标题智能搜索推荐模板
+      const results = await chapterTemplateApi.search(item.title);
+      setTemplateList(results);
+    } catch {
+      setTemplateList([]);
+    } finally {
+      setTemplateListLoading(false);
+    }
+  };
+
+  const handleTemplateSearch = async (kw: string) => {
+    setTemplateKeyword(kw);
+    setTemplateListLoading(true);
+    try {
+      const results = kw.trim()
+        ? await chapterTemplateApi.search(kw.trim())
+        : await chapterTemplateApi.list();
+      setTemplateList(results);
+    } catch {
+      setTemplateList([]);
+    } finally {
+      setTemplateListLoading(false);
+    }
+  };
+
+  const handleApplyTemplate = async (tpl: ChapterTemplate) => {
+    if (!templatePickerTarget) return;
+    try {
+      const result = await chapterTemplateApi.apply(tpl.id, templatePickerTarget.chapterId);
+      // 刷新本地 leafItems 内容
+      setLeafItems(prev =>
+        prev.map(i =>
+          i.id === templatePickerTarget.chapterNumber
+            ? { ...i, content: result.content }
+            : i
+        )
+      );
+      message.success(`已套用模板「${tpl.name}」`);
+      setTemplatePickerVisible(false);
+    } catch (error: unknown) {
+      const detail = (error as any)?.message;
+      message.error(detail || '套用模板失败');
+    }
+  };
+
+  const handleOpenSaveTemplate = async (item: OutlineItem, currentContent: string) => {
+    if (!currentContent.trim()) {
+      message.warning('章节内容为空，无法保存为模板');
+      return;
+    }
+    if (!projectId) {
+      message.warning('仅项目模式支持保存模板');
+      return;
+    }
+    const chapterId = await getProjectChapterId(item.id);
+    if (!chapterId) {
+      message.warning(`未找到章节 ${item.id} 的数据库记录`);
+      return;
+    }
+    setSaveTemplateTarget({ chapterNumber: item.id, chapterId, title: item.title });
+    saveTemplateForm.setFieldsValue({
+      name: `${item.id} ${item.title}`,
+      category: undefined,
+      tags: [],
+    });
+    setSaveTemplateVisible(true);
+  };
+
+  const handleConfirmSaveTemplate = async () => {
+    if (!saveTemplateTarget) return;
+    try {
+      const values = await saveTemplateForm.validateFields();
+      setSaveTemplateLoading(true);
+      await chapterTemplateApi.fromChapter(saveTemplateTarget.chapterId, {
+        name: values.name,
+        category: values.category,
+        tags: values.tags || [],
+      });
+      message.success('已保存为章节模板');
+      setSaveTemplateVisible(false);
+      saveTemplateForm.resetFields();
+    } catch (error: unknown) {
+      if ((error as any)?.errorFields) return;
+      const detail = (error as any)?.message;
+      message.error(detail || '保存模板失败');
+    } finally {
+      setSaveTemplateLoading(false);
+    }
+  };
+
+  const TEMPLATE_CATEGORIES = ['技术方案', '项目经验', '团队配置', '质量保障', '安全方案', '服务方案', '投标报价', '其他'];
+
+  const handleRunConsistencyCheck = async () => {
+    if (!projectId) {
+      message.warning('仅项目模式支持全文一致性校验');
+      return;
+    }
+    setShowConsistencyPanel(true);
+    setIsConsistencyChecking(true);
+    try {
+      const result = await consistencyApi.check(projectId);
+      setConsistencyResult(result);
+      setConsistencyLastCheckedAt(new Date().toLocaleString('zh-CN'));
+    } catch (error) {
+      message.error(getErrorMessage(error, '一致性校验失败，请重试'));
+    } finally {
+      setIsConsistencyChecking(false);
     }
   };
 
@@ -668,6 +936,26 @@ const ContentEdit: React.FC<ContentEditProps> = ({
               </Tooltip>
             )}
 
+            {isLeaf && projectId && (() => {
+              const chapterDbId = chapterIdMap[item.id];
+              if (!chapterDbId) return null;
+              const isExpanded = expandedMatchChapter === chapterDbId;
+              const isLoadingThis = matchChapterLoading === chapterDbId;
+              return (
+                <Tooltip title="根据章节主题推荐相关素材">
+                  <Button
+                    type="text"
+                    size="small"
+                    icon={isLoadingThis ? <LoadingOutlined /> : <TagOutlined />}
+                    onClick={() => { void handleToggleSmartMatch(chapterDbId); }}
+                    style={{ color: isExpanded ? '#1677ff' : '#6b7280' }}
+                  >
+                    推荐素材
+                  </Button>
+                </Tooltip>
+              );
+            })()}
+
             {isLeaf && currentContent && !generationError && projectId && (
               <Tooltip title="根据评分点分析本章覆盖情况并给出补强建议">
                 <Button
@@ -707,6 +995,38 @@ const ContentEdit: React.FC<ContentEditProps> = ({
                 </Button>
               </Tooltip>
             )}
+
+            {isLeaf && projectId && (
+              <Tooltip title="从知识库套用章节模板">
+                <Button
+                  type="text"
+                  size="small"
+                  icon={<BookOutlined />}
+                  onClick={() => {
+                    void handleOpenTemplatePicker(item);
+                  }}
+                  style={{ color: '#1677ff' }}
+                >
+                  套用模板
+                </Button>
+              </Tooltip>
+            )}
+
+            {isLeaf && currentContent && !generationError && projectId && (
+              <Tooltip title="将本章节保存为可复用模板">
+                <Button
+                  type="text"
+                  size="small"
+                  icon={<SaveOutlined />}
+                  onClick={() => {
+                    void handleOpenSaveTemplate(item, currentContent);
+                  }}
+                  style={{ color: '#52c41a' }}
+                >
+                  存为模板
+                </Button>
+              </Tooltip>
+            )}
           </div>
 
           <Typography.Text type="secondary" style={{ display: 'block', marginLeft: !isLeaf && hasChildren ? 32 : 0, marginTop: 4, marginBottom: 8, fontSize: 13 }}>
@@ -722,6 +1042,27 @@ const ContentEdit: React.FC<ContentEditProps> = ({
               </Space>
             </div>
           )}
+          {/* 评分标准绑定标签 */}
+          {(() => {
+            const chapterDbId = chapterIdMap[item.id];
+            const boundScoring = chapterDbId ? (chapterScoringMap[chapterDbId] || []) : [];
+            if (boundScoring.length === 0) return null;
+            return (
+              <div style={{ marginLeft: !isLeaf && hasChildren ? 32 : 0, marginBottom: 8 }}>
+                <Space wrap size={[6, 6]}>
+                  {boundScoring.map(sc => (
+                    <Tag
+                      key={sc.id}
+                      color={(sc.max_score ?? 0) >= 8 ? 'volcano' : 'geekblue'}
+                      style={{ fontSize: 11 }}
+                    >
+                      📊 {sc.item}{sc.max_score != null ? ` ${sc.max_score}分` : ''}
+                    </Tag>
+                  ))}
+                </Space>
+              </div>
+            );
+          })()}
 
           {isLeaf && (
             <div 
@@ -785,6 +1126,75 @@ const ContentEdit: React.FC<ContentEditProps> = ({
             </div>
           )}
 
+          {/* 推荐素材内联面板 */}
+          {isLeaf && projectId && (() => {
+            const chapterDbId = chapterIdMap[item.id];
+            if (!chapterDbId || expandedMatchChapter !== chapterDbId) return null;
+            const recommendations = chapterMatchMap[chapterDbId] ?? [];
+            const isLoadingThis = matchChapterLoading === chapterDbId;
+            return (
+              <div style={{
+                marginLeft: 0,
+                marginBottom: 16,
+                border: '1px solid #bae6fd',
+                borderRadius: 8,
+                backgroundColor: '#f0f9ff',
+                padding: '12px 16px',
+              }}>
+                <div style={{ display: 'flex', alignItems: 'center', marginBottom: 8 }}>
+                  <TagOutlined style={{ color: '#0284c7', marginRight: 6 }} />
+                  <Typography.Text strong style={{ color: '#0284c7', fontSize: 13 }}>
+                    推荐素材
+                  </Typography.Text>
+                  {isLoadingThis && <Spin size="small" style={{ marginLeft: 8 }} />}
+                </div>
+                {!isLoadingThis && recommendations.length === 0 && (
+                  <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                    暂无匹配的素材推荐，可先上传相关素材后重试
+                  </Typography.Text>
+                )}
+                {recommendations.map(rec => (
+                  <div key={rec.material_id} style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    padding: '6px 10px',
+                    marginBottom: 6,
+                    backgroundColor: '#fff',
+                    borderRadius: 6,
+                    border: '1px solid #e0f2fe',
+                  }}>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <Typography.Text style={{ fontSize: 13, fontWeight: 500 }} ellipsis>
+                        {rec.material_name}
+                      </Typography.Text>
+                      <div style={{ display: 'flex', gap: 8, marginTop: 2, flexWrap: 'wrap' }}>
+                        <Tag color="blue" style={{ fontSize: 11, margin: 0 }}>{rec.category}</Tag>
+                        <Tag color="green" style={{ fontSize: 11, margin: 0 }}>
+                          相关度 {Math.round(rec.relevance_score)}
+                        </Tag>
+                        {rec.reason && (
+                          <Typography.Text type="secondary" style={{ fontSize: 11 }}>
+                            {rec.reason}
+                          </Typography.Text>
+                        )}
+                      </div>
+                    </div>
+                    <Button
+                      type="primary"
+                      size="small"
+                      icon={<LinkOutlined />}
+                      onClick={() => { void handleBindRecommendedMaterial(chapterDbId, rec.material_id, rec.material_name); }}
+                      style={{ marginLeft: 12, flexShrink: 0 }}
+                    >
+                      绑定
+                    </Button>
+                  </div>
+                ))}
+              </div>
+            );
+          })()}
+
           {hasChildren && !isCollapsed && (
             <div style={{ marginLeft: 24, marginTop: 8 }}>
               {renderOutline(item.children!, level + 1)}
@@ -815,59 +1225,80 @@ const ContentEdit: React.FC<ContentEditProps> = ({
         project_overview: projectOverview,
         model_name: getCurrentModel() || undefined,
         provider_config_id: getCurrentProviderConfigId() || undefined,
+        use_knowledge: true,
+        confirmed_material_ids: item._confirmedMaterialIds || [],
       };
 
-      const response = await contentApi.generateChapterContentStream(request);
+      const response = await contentApi.generateChapterContentStream(request, abortControllerRef.current?.signal);
 
-      const reader = response.data?.getReader();
+      if (!response.ok) {
+        const error = await response.json().catch(() => ({}));
+        throw new Error((error as { detail?: string }).detail || `请求失败: ${response.status}`);
+      }
+
+      const reader = response.body?.getReader();
       if (!reader) throw new Error('无法读取响应');
 
       let content = '';
       const updatedItem = { ...item };
+      let sseBuffer = '';
       
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
 
-        const chunk = new TextDecoder().decode(value);
-        const lines = chunk.split('\n');
-        
-        for (const line of lines) {
-          if (line.startsWith('data: ')) {
-            const data = line.slice(6);
-            if (data === '[DONE]') continue;
-            
-            try {
-              const parsed = JSON.parse(data);
+        sseBuffer += new TextDecoder().decode(value);
+        const parts = sseBuffer.split('\n\n');
+        sseBuffer = parts.pop() || '';
+
+        for (const part of parts) {
+          const lines = part.split('\n');
+          for (const line of lines) {
+            if (line.startsWith('data: ')) {
+              const data = line.slice(6);
+              if (data === '[DONE]') continue;
               
-              if (parsed.status === 'error') {
-                throw new Error(parsed.message || '生成失败');
-              }
-              
-              if (parsed.status === 'streaming' && parsed.full_content) {
-                content = parsed.full_content;
-                updatedItem.content = content;
-                draftStorage.upsertChapterContent(item.id, content);
+              try {
+                const parsed = JSON.parse(data);
                 
-                setLeafItems(prevItems => {
-                  const newItems = [...prevItems];
-                  const index = newItems.findIndex(i => i.id === item.id);
-                  if (index !== -1) {
-                    newItems[index] = { ...updatedItem };
-                  }
-                  return newItems;
-                });
-              } else if (parsed.status === 'completed' && parsed.content) {
-                content = parsed.content;
-                updatedItem.content = content;
-                draftStorage.upsertChapterContent(item.id, content);
-                if (projectId) {
-                  chapterApi.updateContent(`${projectId}_${item.id}`, content).catch(() => {});
+                if (parsed.status === 'error') {
+                  throw new Error(parsed.message || '生成失败');
                 }
-              }
-            } catch (e) {
-              if (e instanceof Error) {
-                throw e;
+
+                if (parsed.status === 'knowledge_retrieved' && parsed.count > 0) {
+                  message.info(`已检索知识库 ${parsed.count} 条参考`, 2);
+                }
+
+                if (parsed.status === 'streaming' && parsed.full_content) {
+                  content = parsed.full_content;
+                  updatedItem.content = content;
+                  draftStorage.upsertChapterContent(item.id, content);
+                  
+                  setLeafItems(prevItems => {
+                    const newItems = [...prevItems];
+                    const index = newItems.findIndex(i => i.id === item.id);
+                    if (index !== -1) {
+                      newItems[index] = { ...updatedItem };
+                    }
+                    return newItems;
+                  });
+                } else if (parsed.status === 'completed' && parsed.content) {
+                  content = parsed.content;
+                  updatedItem.content = content;
+                  draftStorage.upsertChapterContent(item.id, content);
+                  if (projectId) {
+                    chapterApi.updateContent(`${projectId}_${item.id}`, content).catch(() => {});
+                  }
+                }
+              } catch (e) {
+                if (e instanceof Error && e.message !== data.slice(0, 100)) {
+                  // Re-throw application errors (e.g. parsed.status === 'error')
+                  // but not JSON syntax errors
+                  if (!(e instanceof SyntaxError)) {
+                    throw e;
+                  }
+                }
+                console.warn('[ContentEdit] SSE JSON parse failed, skipping:', data.slice(0, 100));
               }
             }
           }
@@ -907,6 +1338,36 @@ const ContentEdit: React.FC<ContentEditProps> = ({
   const regenerateItemContent = async (item: OutlineItem) => {
     if (!item || !outlineData) return;
 
+    // 先拉素材推荐
+    if (projectId) {
+      setSuggestLoading(true);
+      setShowSuggestPanel(true);
+      setPendingGenerateItem({ item, projectOverview: outlineData.project_overview || '' });
+      try {
+        const result = await materialApi.suggestForChapter({
+          project_id: projectId,
+          chapter_title: item.title || '',
+          chapter_content: item.content || '',
+          top_k: 5,
+        });
+        setSuggestItems(result?.suggestions || []);
+      } catch {
+        setSuggestItems([]);
+      } finally {
+        setSuggestLoading(false);
+      }
+      // 实际生成在用户确认/跳过后触发（_doRegenerate）
+      return;
+    }
+
+    // 无项目ID时直接生成
+    const cleanItem = { ...item, generationError: undefined, content: undefined };
+    await generateItemContent(cleanItem, outlineData.project_overview || '');
+  };
+
+  const _doRegenerate = async (confirmedMaterialIds: string[]) => {
+    if (!pendingGenerateItem || !outlineData) return;
+    const { item } = pendingGenerateItem;
     setLeafItems(prevItems => {
       const newItems = [...prevItems];
       const index = newItems.findIndex(i => i.id === item.id);
@@ -915,13 +1376,21 @@ const ContentEdit: React.FC<ContentEditProps> = ({
       }
       return newItems;
     });
-
-    const cleanItem = { ...item, generationError: undefined, content: undefined };
+    const cleanItem = { ...item, generationError: undefined, content: undefined, _confirmedMaterialIds: confirmedMaterialIds };
+    setPendingGenerateItem(null);
     await generateItemContent(cleanItem, outlineData.project_overview || '');
   };
 
-  const handleGenerateContent = async () => {
-    if (!outlineData || leafItems.length === 0) return;
+  const handleGenerateContent = () => {
+    console.log('[ContentEdit] handleGenerateContent called', {
+      hasOutlineData: !!outlineData,
+      outlineLength: outlineData?.outline?.length,
+      leafItemsLength: leafItems.length,
+    });
+    if (!outlineData || leafItems.length === 0) {
+      console.warn('[ContentEdit] Early return: outlineData or leafItems empty');
+      return;
+    }
 
     const itemsToGenerate = leafItems.filter(item => 
       !item.content || item.generationError
@@ -932,61 +1401,84 @@ const ContentEdit: React.FC<ContentEditProps> = ({
       return;
     }
 
-    Modal.confirm({
-      title: '生成确认',
-      content: `确定要生成章节内容吗？\n\n将生成 ${itemsToGenerate.length} 个章节的内容（空内容或失败的章节），此操作可能需要较长时间。`,
-      onOk: async () => {
-        setIsGenerating(true);
-        setProgress({
-          total: itemsToGenerate.length,
-          completed: 0,
-          current: '',
-          failed: [],
-          generating: new Set<string>()
-        });
+    setItemsToGenerateCount(itemsToGenerate.length);
+    setShowGenerateModal(true);
+  };
 
-        try {
-          const concurrency = 1;
-          const updatedItems = [...leafItems];
-          const delayBetweenRequests = 5000; 
-          
-          for (let i = 0; i < itemsToGenerate.length; i += concurrency) {
-            const batch = itemsToGenerate.slice(i, i + concurrency);
-            const promises = batch.map(item => 
-              generateItemContent(item, outlineData.project_overview || '')
-                .then(updatedItem => {
-                  const index = updatedItems.findIndex(ui => ui.id === updatedItem.id);
-                  if (index !== -1) {
-                    updatedItems[index] = updatedItem;
-                  }
-                  setProgress(prev => ({ ...prev, completed: prev.completed + 1 }));
-                  return updatedItem;
-                })
-                .catch(error => {
-                  console.error(`生成内容失败 ${item.title}:`, error);
-                  setProgress(prev => ({ ...prev, completed: prev.completed + 1 }));
-                  return item; 
-                })
-            );
+  const handleConfirmGenerate = async () => {
+    setShowGenerateModal(false);
+    if (!outlineData) return;
 
-            await Promise.all(promises);
-            
-            if (i + concurrency < itemsToGenerate.length) {
-              await new Promise(resolve => setTimeout(resolve, delayBetweenRequests));
-            }
-          }
+    const itemsToGenerate = leafItems.filter(item =>
+      !item.content || item.generationError
+    );
+    if (itemsToGenerate.length === 0) return;
 
-          setLeafItems(updatedItems);
-          message.success('标书生成完成');
-        } catch (error) {
-          console.error('生成内容时出错:', error);
-          message.error('部分内容生成出错，请查看日志或重试');
-        } finally {
-          setIsGenerating(false);
-          setProgress(prev => ({ ...prev, current: '', generating: new Set<string>() }));
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
+
+    setIsGenerating(true);
+    setProgress({
+      total: itemsToGenerate.length,
+      completed: 0,
+      current: '',
+      failed: [],
+      generating: new Set<string>()
+    });
+
+    try {
+      const concurrency = 1;
+      const updatedItems = [...leafItems];
+      const delayBetweenRequests = 5000; 
+      
+      for (let i = 0; i < itemsToGenerate.length; i += concurrency) {
+        if (abortControllerRef.current?.signal.aborted) break;
+
+        const batch = itemsToGenerate.slice(i, i + concurrency);
+        const promises = batch.map(item => 
+          generateItemContent(item, outlineData.project_overview || '')
+            .then(updatedItem => {
+              const index = updatedItems.findIndex(ui => ui.id === updatedItem.id);
+              if (index !== -1) {
+                updatedItems[index] = updatedItem;
+              }
+              setProgress(prev => ({ ...prev, completed: prev.completed + 1 }));
+              return updatedItem;
+            })
+            .catch(error => {
+              console.error(`生成内容失败 ${item.title}:`, error);
+              setProgress(prev => ({ ...prev, completed: prev.completed + 1 }));
+              return item; 
+            })
+        );
+
+        await Promise.all(promises);
+        
+        if (i + concurrency < itemsToGenerate.length) {
+          await new Promise(resolve => setTimeout(resolve, delayBetweenRequests));
         }
       }
-    });
+
+      setLeafItems(updatedItems);
+      if (!abortControllerRef.current?.signal.aborted) {
+        message.success('标书生成完成');
+      }
+    } catch (error) {
+      console.error('生成内容时出错:', error);
+      message.error('部分内容生成出错，请查看日志或重试');
+    } finally {
+      setIsGenerating(false);
+      abortControllerRef.current = null;
+      setProgress(prev => ({ ...prev, current: '', generating: new Set<string>() }));
+    }
+  };
+
+  const handleStopGeneration = () => {
+    abortControllerRef.current?.abort();
+    abortControllerRef.current = null;
+    setIsGenerating(false);
+    setProgress(prev => ({ ...prev, current: '', generating: new Set<string>() }));
+    message.info('已停止生成');
   };
 
   const getLatestContent = (item: OutlineItem): string => {
@@ -997,40 +1489,19 @@ const ContentEdit: React.FC<ContentEditProps> = ({
     return item.content || '';
   };
 
-  const handleExportWord = async () => {
-    if (!outlineData) return;
+  const [showExportDialog, setShowExportDialog] = useState(false);
 
-    try {
-      const buildExportOutline = (items: OutlineItem[]): OutlineItem[] => {
-        return items.map(item => {
-          const latestContent = getLatestContent(item);
-          const exportedItem: OutlineItem = {
-            ...item,
-            content: latestContent,
-          };
-          if (item.children && item.children.length > 0) {
-            exportedItem.children = buildExportOutline(item.children);
-          }
-          return exportedItem;
-        });
-      };
-
-      const exportPayload = {
-        project_name: outlineData.project_name || '标书文档',
-        project_overview: outlineData.project_overview,
-        project_id: projectId,
-        outline: buildExportOutline(outlineData.outline),
-      };
-
-      const response = await documentApi.exportWord(exportPayload);
-      const blob = response.data;
-      saveAs(blob, `${outlineData.project_name || '标书文档'}.docx`);
-      message.success('导出成功');
-    } catch (error) {
-      console.error('导出失败:', error);
-      message.error('导出失败，请重试');
-    }
-  };
+  const buildExportOutline = useCallback((items: OutlineItem[]): OutlineItem[] => {
+    return items.map(item => {
+      const latestContent = getLatestContent(item);
+      const exportedItem: OutlineItem = { ...item, content: latestContent };
+      if (item.children && item.children.length > 0) {
+        exportedItem.children = buildExportOutline(item.children);
+      }
+      return exportedItem;
+    });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [leafItems]);
 
   if (!outlineData) {
     return (
@@ -1062,6 +1533,16 @@ const ContentEdit: React.FC<ContentEditProps> = ({
             <Space>
               {projectId && (
                 <Button
+                  icon={<ThunderboltOutlined />}
+                  loading={autoBindLoading}
+                  onClick={() => { void handleAutoBind(); }}
+                  title="根据章节关键词自动匹配并绑定最佳素材"
+                >
+                  智能绑定素材
+                </Button>
+              )}
+              {projectId && (
+                <Button
                   icon={<ProfileOutlined />}
                   onClick={() => setShowClauseResponseModal(true)}
                   title="生成技术参数/条款逐条响应"
@@ -1088,6 +1569,37 @@ const ContentEdit: React.FC<ContentEditProps> = ({
                   一致性检查
                 </Button>
               )}
+              {projectId && (
+                <Badge
+                  count={
+                    consistencyResult
+                      ? consistencyResult.issues.filter(i => i.severity === 'error').length
+                      : 0
+                  }
+                  color="#cf1322"
+                  offset={[-4, 4]}
+                >
+                  <Button
+                    icon={<SafetyCertificateOutlined />}
+                    onClick={() => {
+                      if (showConsistencyPanel) {
+                        setShowConsistencyPanel(false);
+                      } else {
+                        void handleRunConsistencyCheck();
+                      }
+                    }}
+                    title="全文一致性校验（AI 交叉检查）"
+                    style={
+                      consistencyResult &&
+                      consistencyResult.issues.filter(i => i.severity === 'error').length > 0
+                        ? { borderColor: '#cf1322', color: '#cf1322' }
+                        : {}
+                    }
+                  >
+                    全文校验
+                  </Button>
+                </Badge>
+              )}
               <Button
                 type="primary"
                 icon={<PlayCircleOutlined />}
@@ -1101,10 +1613,10 @@ const ContentEdit: React.FC<ContentEditProps> = ({
 
               <Button
                 icon={<DownloadOutlined />}
-                onClick={handleExportWord}
+                onClick={() => setShowExportDialog(true)}
                 disabled={isGenerating}
               >
-                导出Word
+                导出文档
               </Button>
             </Space>
           }
@@ -1120,15 +1632,62 @@ const ContentEdit: React.FC<ContentEditProps> = ({
           
           {/* 进度条 */}
           {isGenerating && (
-            <div style={{ marginTop: 8 }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
-                <Typography.Text type="secondary" style={{ fontSize: 13 }}>正在生成: {progress.current}</Typography.Text>
-                <Typography.Text type="secondary" style={{ fontSize: 13 }}>{progress.completed} / {progress.total}</Typography.Text>
+            <div style={{
+              marginTop: 8,
+              backgroundColor: '#f8fafc',
+              border: '1px solid #e2e8f0',
+              borderRadius: 8,
+              padding: '12px 16px',
+            }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, flex: 1, minWidth: 0 }}>
+                  <LoadingOutlined style={{ color: '#1677ff', fontSize: 14, flexShrink: 0 }} />
+                  <Typography.Text
+                    style={{ fontSize: 13, color: '#374151', flex: 1, minWidth: 0 }}
+                    ellipsis={{ tooltip: progress.current }}
+                  >
+                    {progress.current || '准备中...'}
+                  </Typography.Text>
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexShrink: 0, marginLeft: 12 }}>
+                  <span style={{
+                    fontSize: 13,
+                    fontWeight: 500,
+                    color: '#6b7280',
+                    backgroundColor: '#e5e7eb',
+                    borderRadius: 20,
+                    padding: '2px 10px',
+                    letterSpacing: '0.02em',
+                  }}>
+                    {progress.completed} / {progress.total}
+                  </span>
+                  <Tooltip title="停止生成">
+                    <Button
+                      type="text"
+                      size="small"
+                      icon={<StopOutlined />}
+                      onClick={handleStopGeneration}
+                      style={{
+                        color: '#9ca3af',
+                        padding: '0 6px',
+                        height: 26,
+                        borderRadius: 6,
+                        transition: 'color 0.15s',
+                      }}
+                      onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.color = '#ef4444'; }}
+                      onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.color = '#9ca3af'; }}
+                    />
+                  </Tooltip>
+                </div>
               </div>
-              <Progress 
-                percent={Math.round((progress.completed / progress.total) * 100)} 
-                status="active" 
-                strokeColor={{ '0%': '#108ee9', '100%': '#87d068' }}
+              <Progress
+                percent={Math.round((progress.completed / progress.total) * 100)}
+                status="active"
+                strokeColor={{ '0%': '#3b82f6', '100%': '#1677ff' }}
+                trailColor="#dbeafe"
+                strokeWidth={6}
+                showInfo={false}
+                style={{ margin: 0 }}
               />
             </div>
           )}
@@ -1186,6 +1745,15 @@ const ContentEdit: React.FC<ContentEditProps> = ({
         />
       )}
 
+      <MaterialSuggestPanel
+        visible={showSuggestPanel}
+        loading={suggestLoading}
+        suggestions={suggestItems}
+        onConfirm={(ids) => { setShowSuggestPanel(false); void _doRegenerate(ids); }}
+        onSkip={() => { setShowSuggestPanel(false); void _doRegenerate([]); }}
+        onCancel={() => { setShowSuggestPanel(false); setPendingGenerateItem(null); }}
+      />
+
       <MaterialMarkerModal
         visible={showMaterialMarkerModal}
         target={materialMarkerTarget}
@@ -1229,6 +1797,238 @@ const ContentEdit: React.FC<ContentEditProps> = ({
         onEditContent={handleEditContent}
         chapterTitle={proofreadChapterTitle}
       />
+
+      {/* 生成确认弹窗 */}
+      <Modal
+        title={null}
+        open={showGenerateModal}
+        onOk={() => { void handleConfirmGenerate(); }}
+        onCancel={() => setShowGenerateModal(false)}
+        okText="开始生成"
+        cancelText="取消"
+        okButtonProps={{ type: 'primary', size: 'middle' }}
+        width={400}
+        centered
+      >
+        <div style={{ padding: '8px 0 4px' }}>
+          <div style={{ textAlign: 'center', marginBottom: 20 }}>
+            <div style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              width: 48,
+              height: 48,
+              borderRadius: '50%',
+              backgroundColor: '#eff6ff',
+              marginBottom: 12,
+            }}>
+              <PlayCircleOutlined style={{ fontSize: 22, color: '#1677ff' }} />
+            </div>
+            <Typography.Title level={5} style={{ margin: 0, color: '#111827' }}>
+              生成标书内容
+            </Typography.Title>
+          </div>
+
+          <div style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            gap: 6,
+            backgroundColor: '#f8fafc',
+            border: '1px solid #e2e8f0',
+            borderRadius: 8,
+            padding: '14px 20px',
+            marginBottom: 16,
+          }}>
+            <span style={{ fontSize: 28, fontWeight: 700, color: '#1677ff', lineHeight: 1 }}>
+              {itemsToGenerateCount}
+            </span>
+            <span style={{ fontSize: 14, color: '#6b7280' }}>个章节待生成</span>
+          </div>
+
+          <Typography.Text type="secondary" style={{ fontSize: 13, display: 'block', textAlign: 'center' }}>
+            将生成所有空内容及失败章节，过程中可随时停止
+          </Typography.Text>
+        </div>
+      </Modal>
+
+      {/* 导出文档弹窗 */}
+      <ExportDialog
+        visible={showExportDialog}
+        onClose={() => setShowExportDialog(false)}
+        projectName={outlineData?.project_name || '标书文档'}
+        projectOverview={outlineData?.project_overview}
+        projectId={projectId}
+        getExportOutline={() => outlineData ? buildExportOutline(outlineData.outline) : []}
+        consistencyResult={consistencyResult}
+      />
+
+      {/* 全文一致性校验面板 */}
+      <ConsistencyPanel
+        isOpen={showConsistencyPanel}
+        onClose={() => setShowConsistencyPanel(false)}
+        onRecheck={() => { void handleRunConsistencyCheck(); }}
+        isChecking={isConsistencyChecking}
+        result={consistencyResult}
+        lastCheckedAt={consistencyLastCheckedAt}
+        onJumpToChapter={(chapterId, chapterTitle) => {
+          // 通过 chapter_id 映射找到 chapter_number，并滚动到对应章节
+          const chapterNumber = Object.entries(chapterIdMap).find(
+            ([, id]) => id === chapterId
+          )?.[0];
+          if (chapterNumber) {
+            onChapterSelect(chapterNumber);
+            const el = document.getElementById(`chapter-${chapterNumber}`);
+            if (el) {
+              el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            }
+          } else {
+            message.info(`章节：${chapterTitle}`);
+          }
+        }}
+      />
+
+      {/* 套用模板弹窗 */}
+      <Modal
+        title={
+          <Space>
+            <BookOutlined style={{ color: '#1677ff' }} />
+            <span>从知识库套用章节模板</span>
+            {templatePickerTarget && (
+              <Typography.Text type="secondary" style={{ fontSize: 13 }}>
+                — {templatePickerTarget.chapterNumber} {templatePickerTarget.title}
+              </Typography.Text>
+            )}
+          </Space>
+        }
+        open={templatePickerVisible}
+        onCancel={() => setTemplatePickerVisible(false)}
+        footer={null}
+        width={680}
+        destroyOnClose
+      >
+        <div style={{ marginBottom: 12 }}>
+          <Input.Search
+            placeholder="搜索模板名称、分类或标签"
+            value={templateKeyword}
+            onChange={(e) => setTemplateKeyword(e.target.value)}
+            onSearch={(v) => void handleTemplateSearch(v)}
+            onPressEnter={(e) => void handleTemplateSearch((e.target as HTMLInputElement).value)}
+            allowClear
+            onClear={() => void handleTemplateSearch('')}
+          />
+        </div>
+        <Spin spinning={templateListLoading}>
+          {templateList.length === 0 && !templateListLoading ? (
+            <div style={{ textAlign: 'center', padding: '32px 0', color: '#8c8c8c' }}>
+              暂无匹配的模板
+            </div>
+          ) : (
+            <List
+              dataSource={templateList}
+              style={{ maxHeight: 480, overflowY: 'auto' }}
+              renderItem={(tpl) => (
+                <List.Item
+                  key={tpl.id}
+                  style={{ cursor: 'pointer', padding: '10px 8px', borderRadius: 6 }}
+                  actions={[
+                    <Button
+                      key="apply"
+                      type="primary"
+                      size="small"
+                      onClick={() => void handleApplyTemplate(tpl)}
+                    >
+                      套用
+                    </Button>,
+                  ]}
+                >
+                  <List.Item.Meta
+                    title={
+                      <Space size={[4, 4]} wrap>
+                        <Typography.Text strong>{tpl.name}</Typography.Text>
+                        {tpl.category && (
+                          <Tag color="blue" style={{ fontSize: 11 }}>
+                            {tpl.category}
+                          </Tag>
+                        )}
+                        {tpl.tags.slice(0, 2).map((t) => (
+                          <Tag key={t} style={{ fontSize: 11 }}>
+                            {t}
+                          </Tag>
+                        ))}
+                      </Space>
+                    }
+                    description={
+                      <Space direction="vertical" size={2} style={{ width: '100%' }}>
+                        {tpl.source_project_name && (
+                          <Typography.Text type="secondary" style={{ fontSize: 12 }}>
+                            来源：{tpl.source_project_name}
+                          </Typography.Text>
+                        )}
+                        <Typography.Text
+                          type="secondary"
+                          style={{ fontSize: 12 }}
+                          ellipsis
+                        >
+                          {tpl.content.slice(0, 80)}…
+                        </Typography.Text>
+                        <Typography.Text type="secondary" style={{ fontSize: 11 }}>
+                          已使用 {tpl.usage_count} 次 · {new Date(tpl.created_at).toLocaleDateString()}
+                        </Typography.Text>
+                      </Space>
+                    }
+                  />
+                </List.Item>
+              )}
+            />
+          )}
+        </Spin>
+      </Modal>
+
+      {/* 存为模板弹窗 */}
+      <Modal
+        title={
+          <Space>
+            <SaveOutlined style={{ color: '#52c41a' }} />
+            <span>保存为章节模板</span>
+          </Space>
+        }
+        open={saveTemplateVisible}
+        onOk={() => void handleConfirmSaveTemplate()}
+        onCancel={() => {
+          setSaveTemplateVisible(false);
+          saveTemplateForm.resetFields();
+        }}
+        okText="保存"
+        cancelText="取消"
+        confirmLoading={saveTemplateLoading}
+        width={480}
+        destroyOnClose
+      >
+        <Form form={saveTemplateForm} layout="vertical" style={{ marginTop: 8 }}>
+          <Form.Item
+            name="name"
+            label="模板名称"
+            rules={[{ required: true, message: '请输入模板名称' }]}
+          >
+            <Input placeholder="如：安全方案-中标版" maxLength={200} showCount />
+          </Form.Item>
+          <Form.Item name="category" label="分类">
+            <Select placeholder="选择分类（可选）" allowClear>
+              {TEMPLATE_CATEGORIES.map((c) => (
+                <Select.Option key={c} value={c}>{c}</Select.Option>
+              ))}
+            </Select>
+          </Form.Item>
+          <Form.Item name="tags" label="标签">
+            <Select
+              mode="tags"
+              placeholder="输入标签后按 Enter（可选）"
+              tokenSeparators={[',']}
+            />
+          </Form.Item>
+        </Form>
+      </Modal>
     </div>
   );
 };

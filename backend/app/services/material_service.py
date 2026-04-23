@@ -81,6 +81,7 @@ def _asset_to_response(asset: MaterialAsset) -> MaterialAssetResponse:
         valid_from=asset.valid_from,
         valid_until=asset.valid_until,
         is_expired=asset.is_expired,
+        is_disabled=asset.is_disabled or False,
         review_status=asset.review_status,
         usage_count=asset.usage_count,
         last_used_at=asset.last_used_at,
@@ -155,9 +156,39 @@ def render_material_block(document: DocxDocument, binding: dict) -> None:
         return
 
     if image_path and os.path.exists(image_path):
+        # 按宽高比自适应缩放
+        max_width = Inches(5.5)
+        max_height = Inches(8.0)
+        min_width = Inches(2.0)
+        img_width = max_width  # 默认值
+
+        try:
+            from PIL import Image as PILImage
+            with PILImage.open(image_path) as img:
+                orig_w, orig_h = img.size  # 像素
+                if orig_w > 0 and orig_h > 0:
+                    aspect = orig_h / orig_w
+                    # 先按最大宽度计算
+                    target_width = max_width
+                    target_height = Inches(max_width.inches * aspect)
+                    # 如果高度超限，按最大高度反推宽度
+                    if target_height > max_height:
+                        target_width = Inches(max_height.inches / aspect)
+                        target_height = max_height
+                    # 如果原图比最大值小，用原图尺寸（DPI 按 96 估算）
+                    orig_w_inches = orig_w / 96.0
+                    if orig_w_inches < max_width.inches:
+                        target_width = Inches(max(orig_w_inches, min_width.inches))
+                        target_height = Inches(target_width.inches * aspect)
+                        if target_height > max_height:
+                            target_width = Inches(max_height.inches / aspect)
+                    img_width = target_width
+        except Exception:
+            pass  # PIL 不可用时使用默认宽度
+
         paragraph = document.add_paragraph()
         run = paragraph.add_run()
-        run.add_picture(image_path, width=Inches(5.5))
+        run.add_picture(image_path, width=img_width)
         if "pdf" in file_type:
             document.add_paragraph(f"{caption}（PDF 附件预览）")
         else:

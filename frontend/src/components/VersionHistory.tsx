@@ -1,24 +1,77 @@
 /**
- * 版本历史组件
- * 侧边栏抽屉，显示版本列表、版本预览和 Diff 对比
+ * 版本历史侧边栏 (Ant Design Drawer + Timeline)
+ * 支持：版本列表、对比模式、diff 高亮、回滚确认
  */
 import React, { useState, useEffect, useCallback } from 'react';
-import { XMarkIcon, ClockIcon, ArrowPathIcon, DocumentTextIcon } from '@heroicons/react/24/outline';
+import {
+  Drawer,
+  Timeline,
+  Button,
+  Modal,
+  Input,
+  Empty,
+  Spin,
+  Tag,
+  message,
+  Space,
+  Typography,
+  Select,
+  Divider,
+} from 'antd';
+import {
+  HistoryOutlined,
+  RobotOutlined,
+  EditOutlined,
+  AuditOutlined,
+  RollbackOutlined,
+  CameraOutlined,
+  SwapOutlined,
+} from '@ant-design/icons';
 import { versionApi } from '../services/api';
-import type {
-  VersionSummary,
-  VersionResponse,
-  VersionDiffResponse,
-  ChapterChange,
-  ChangeType,
-} from '../types/version';
-import { CHANGE_TYPE_LABELS, CHANGE_TYPE_COLORS } from '../types/version';
+import type { VersionSummary, VersionDiffResponse } from '../types/version';
+import VersionDiff from './VersionDiff';
 
 interface VersionHistoryProps {
   projectId: string;
   isOpen: boolean;
   onClose: () => void;
   chapterId?: string;
+}
+
+const CHANGE_TYPE_LABELS: Record<string, string> = {
+  content_update: '内容更新',
+  status_change: '状态变更',
+  manual_edit: '手动编辑',
+  rollback: '版本回滚',
+  ai_generate: 'AI 生成',
+};
+
+const CHANGE_TYPE_COLORS: Record<string, string> = {
+  content_update: 'blue',
+  status_change: 'gold',
+  manual_edit: 'purple',
+  rollback: 'orange',
+  ai_generate: 'green',
+};
+
+const CHANGE_TYPE_ICONS: Record<string, React.ReactNode> = {
+  ai_generate: <RobotOutlined />,
+  manual_edit: <EditOutlined />,
+  proofread: <AuditOutlined />,
+  rollback: <RollbackOutlined />,
+  content_update: <EditOutlined />,
+  status_change: <AuditOutlined />,
+};
+
+function formatDate(dateString: string): string {
+  const date = new Date(dateString);
+  return date.toLocaleString('zh-CN', {
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
 }
 
 const VersionHistory: React.FC<VersionHistoryProps> = ({
@@ -32,34 +85,34 @@ const VersionHistory: React.FC<VersionHistoryProps> = ({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // 预览状态
-  const [previewVersion, setPreviewVersion] = useState<VersionResponse | null>(null);
-  const [previewLoading, setPreviewLoading] = useState(false);
+  // 创建快照
+  const [snapshotModalOpen, setSnapshotModalOpen] = useState(false);
+  const [snapshotSummary, setSnapshotSummary] = useState('');
+  const [creatingSnapshot, setCreatingSnapshot] = useState(false);
 
-  // Diff 对比状态
-  const [selectedVersions, setSelectedVersions] = useState<string[]>([]);
-  const [diffResult, setDiffResult] = useState<VersionDiffResponse | null>(null);
+  // 回滚
+  const [rollingBackId, setRollingBackId] = useState<string | null>(null);
+
+  // 对比模式
+  const [compareMode, setCompareMode] = useState(false);
+  const [compareV1, setCompareV1] = useState<string | undefined>(undefined);
+  const [compareV2, setCompareV2] = useState<string | undefined>(undefined);
+  const [diffData, setDiffData] = useState<VersionDiffResponse | null>(null);
   const [diffLoading, setDiffLoading] = useState(false);
-
-  // 回滚确认状态
-  const [rollbackConfirm, setRollbackConfirm] = useState<VersionSummary | null>(null);
-  const [rollbackLoading, setRollbackLoading] = useState(false);
 
   const loadVersions = useCallback(async () => {
     if (!projectId) return;
-
+    setLoading(true);
+    setError(null);
     try {
-      setLoading(true);
-      setError(null);
       const result = await versionApi.list(projectId, {
         chapter_id: chapterId,
         limit: 50,
       });
       setVersions(result.items);
       setTotal(result.total);
-    } catch (err) {
+    } catch {
       setError('加载版本历史失败');
-      console.error('加载版本历史失败:', err);
     } finally {
       setLoading(false);
     }
@@ -68,397 +121,264 @@ const VersionHistory: React.FC<VersionHistoryProps> = ({
   useEffect(() => {
     if (isOpen) {
       loadVersions();
-      // 重置状态
-      setPreviewVersion(null);
-      setSelectedVersions([]);
-      setDiffResult(null);
     }
   }, [isOpen, loadVersions]);
 
-  const handleVersionSelect = (versionId: string) => {
-    if (selectedVersions.includes(versionId)) {
-      setSelectedVersions(selectedVersions.filter(id => id !== versionId));
-    } else if (selectedVersions.length < 2) {
-      setSelectedVersions([...selectedVersions, versionId]);
-    } else {
-      // 已选2个，替换第一个
-      setSelectedVersions([selectedVersions[1], versionId]);
+  // 退出对比模式时清空状态
+  useEffect(() => {
+    if (!compareMode) {
+      setCompareV1(undefined);
+      setCompareV2(undefined);
+      setDiffData(null);
     }
-    // 清除 diff 结果
-    setDiffResult(null);
-  };
+  }, [compareMode]);
 
-  const handlePreview = async (versionId: string) => {
+  const handleCreateSnapshot = async () => {
+    setCreatingSnapshot(true);
     try {
-      setPreviewLoading(true);
-      setPreviewVersion(null);
-      const version = await versionApi.get(projectId, versionId);
-      setPreviewVersion(version);
-    } catch (err) {
-      console.error('加载版本详情失败:', err);
+      await versionApi.createSnapshot(projectId, snapshotSummary || undefined);
+      message.success('快照创建成功');
+      setSnapshotModalOpen(false);
+      setSnapshotSummary('');
+      await loadVersions();
+    } catch {
+      message.error('创建快照失败');
     } finally {
-      setPreviewLoading(false);
+      setCreatingSnapshot(false);
     }
   };
 
-  const handleDiff = async () => {
-    if (selectedVersions.length !== 2) return;
+  const handleRollback = (version: VersionSummary) => {
+    Modal.confirm({
+      title: '确认回滚',
+      content: (
+        <div>
+          <p>确认回滚到 <strong>V{version.version_number}</strong> 吗？</p>
+          <p style={{ color: '#888', fontSize: 12, marginTop: 8 }}>
+            回滚前会自动创建当前状态的快照，以便需要时恢复。
+          </p>
+        </div>
+      ),
+      okText: '确认回滚',
+      cancelText: '取消',
+      okButtonProps: { danger: true },
+      onOk: async () => {
+        setRollingBackId(version.id);
+        try {
+          await versionApi.rollback(projectId, version.id, true);
+          message.success('回滚成功，页面即将刷新');
+          setTimeout(() => window.location.reload(), 800);
+        } catch {
+          message.error('回滚失败');
+        } finally {
+          setRollingBackId(null);
+        }
+      },
+    });
+  };
 
+  const handleCompare = async () => {
+    if (!compareV1 || !compareV2) {
+      message.warning('请选择两个版本进行对比');
+      return;
+    }
+    if (compareV1 === compareV2) {
+      message.warning('请选择不同的版本');
+      return;
+    }
+    setDiffLoading(true);
+    setDiffData(null);
     try {
-      setDiffLoading(true);
-      const result = await versionApi.diff(projectId, selectedVersions[0], selectedVersions[1]);
-      setDiffResult(result);
-    } catch (err) {
-      console.error('对比版本失败:', err);
+      const result = await versionApi.diff(projectId, compareV1, compareV2);
+      setDiffData(result);
+    } catch {
+      message.error('获取版本差异失败');
     } finally {
       setDiffLoading(false);
     }
   };
 
-  const handleRollback = async () => {
-    if (!rollbackConfirm) return;
+  // 版本选项列表
+  const versionOptions = versions.map((v) => ({
+    value: v.id,
+    label: `V${v.version_number} - ${CHANGE_TYPE_LABELS[v.change_type] || v.change_type} (${formatDate(v.created_at)})`,
+  }));
 
-    try {
-      setRollbackLoading(true);
-      await versionApi.rollback(projectId, rollbackConfirm.id, true);
-      // 重新加载版本列表
-      await loadVersions();
-      setRollbackConfirm(null);
-      setPreviewVersion(null);
-      setDiffResult(null);
-      setSelectedVersions([]);
-    } catch (err) {
-      console.error('回滚失败:', err);
-    } finally {
-      setRollbackLoading(false);
-    }
-  };
-
-  const formatDate = (dateString: string) => {
-    const date = new Date(dateString);
-    return date.toLocaleString('zh-CN', {
-      year: 'numeric',
-      month: '2-digit',
-      day: '2-digit',
-      hour: '2-digit',
-      minute: '2-digit',
-    });
-  };
-
-  const renderDiffContent = (oldContent: string | null, newContent: string | null) => {
-    if (!oldContent && !newContent) return null;
-
-    // 简单的行级 diff 显示
-    const oldLines = (oldContent || '').split('\n');
-    const newLines = (newContent || '').split('\n');
-
-    const diffLines: Array<{ type: 'unchanged' | 'added' | 'removed'; content: string }> = [];
-
-    // 简单 diff 算法：逐行比较
-    const seenNew = new Set<number>();
-    for (let i = 0; i < oldLines.length; i++) {
-      const oldLine = oldLines[i];
-      const newIndex = newLines.findIndex((l, idx) => l === oldLine && !seenNew.has(idx));
-      if (newIndex >= 0) {
-        seenNew.add(newIndex);
-        diffLines.push({ type: 'unchanged', content: oldLine });
-      } else {
-        diffLines.push({ type: 'removed', content: oldLine });
-      }
-    }
-
-    for (let i = 0; i < newLines.length; i++) {
-      if (!seenNew.has(i)) {
-        diffLines.push({ type: 'added', content: newLines[i] });
-      }
-    }
-
-    return (
-      <div className="font-mono text-xs whitespace-pre-wrap">
-        {diffLines.slice(0, 100).map((line, idx) => (
-          <div
-            key={idx}
-            className={`px-2 ${
-              line.type === 'added'
-                ? 'bg-green-100 text-green-800'
-                : line.type === 'removed'
-                ? 'bg-red-100 text-red-800 line-through'
-                : 'text-gray-600'
-            }`}
-          >
-            {line.type === 'added' && '+ '}
-            {line.type === 'removed' && '- '}
-            {line.type === 'unchanged' && '  '}
-            {line.content}
+  const timelineItems = versions.map((version) => ({
+    key: version.id,
+    dot: (
+      <span style={{ fontSize: 14, color: CHANGE_TYPE_COLORS[version.change_type] || '#666' }}>
+        {CHANGE_TYPE_ICONS[version.change_type] || <HistoryOutlined />}
+      </span>
+    ),
+    children: (
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <Space size={6} wrap>
+            <Typography.Text strong>V{version.version_number}</Typography.Text>
+            <Tag color={CHANGE_TYPE_COLORS[version.change_type] || 'default'}>
+              {CHANGE_TYPE_LABELS[version.change_type] || version.change_type}
+            </Tag>
+          </Space>
+          <div style={{ fontSize: 12, color: '#888', marginTop: 2 }}>
+            {formatDate(version.created_at)}
           </div>
-        ))}
-        {diffLines.length > 100 && (
-          <div className="px-2 text-gray-500 text-center py-2">
-            ... 省略 {diffLines.length - 100} 行
-          </div>
-        )}
-      </div>
-    );
-  };
-
-  const renderChapterChange = (change: ChapterChange) => (
-    <div key={change.chapter_id} className="border-b border-gray-200 py-3 last:border-b-0">
-      <div className="flex items-center justify-between mb-2">
-        <div className="flex items-center space-x-2">
-          <span
-            className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${
-              change.type === 'added'
-                ? 'bg-green-100 text-green-800'
-                : change.type === 'deleted'
-                ? 'bg-red-100 text-red-800'
-                : 'bg-yellow-100 text-yellow-800'
-            }`}
-          >
-            {change.type === 'added' ? '新增' : change.type === 'deleted' ? '删除' : '修改'}
-          </span>
-          <span className="font-medium text-gray-900">
-            {change.chapter_number} {change.title}
-          </span>
-        </div>
-      </div>
-      {(change.title_changed || change.content_changed) && (
-        <div className="mt-2 space-y-2">
-          {change.title_changed && (
-            <div>
-              <p className="text-xs text-gray-500 mb-1">标题变更：</p>
-              <div className="text-sm">
-                <span className="text-red-600 line-through">{change.old_title}</span>
-                {' → '}
-                <span className="text-green-600">{change.new_title}</span>
-              </div>
-            </div>
-          )}
-          {change.content_changed && (
-            <div>
-              <p className="text-xs text-gray-500 mb-1">内容变更：</p>
-              <div className="border rounded-md overflow-hidden bg-gray-50">
-                {renderDiffContent(change.old_content, change.new_content)}
-              </div>
+          {version.change_summary && (
+            <div style={{ fontSize: 13, color: '#555', marginTop: 4, wordBreak: 'break-all' }}>
+              {version.change_summary}
             </div>
           )}
         </div>
+        <Button
+          size="small"
+          type="text"
+          danger
+          icon={<RollbackOutlined />}
+          loading={rollingBackId === version.id}
+          onClick={() => handleRollback(version)}
+          style={{ marginLeft: 8, flexShrink: 0 }}
+        >
+          回滚
+        </Button>
+      </div>
+    ),
+  }));
+
+  // 对比模式 UI
+  const renderComparePanel = () => (
+    <div>
+      <div style={{ marginBottom: 12 }}>
+        <Typography.Text type="secondary" style={{ fontSize: 12, display: 'block', marginBottom: 4 }}>
+          旧版本（左）
+        </Typography.Text>
+        <Select
+          style={{ width: '100%' }}
+          placeholder="选择旧版本"
+          value={compareV1}
+          onChange={setCompareV1}
+          options={versionOptions}
+          showSearch
+          optionFilterProp="label"
+        />
+      </div>
+      <div style={{ marginBottom: 12 }}>
+        <Typography.Text type="secondary" style={{ fontSize: 12, display: 'block', marginBottom: 4 }}>
+          新版本（右）
+        </Typography.Text>
+        <Select
+          style={{ width: '100%' }}
+          placeholder="选择新版本"
+          value={compareV2}
+          onChange={setCompareV2}
+          options={versionOptions}
+          showSearch
+          optionFilterProp="label"
+        />
+      </div>
+      <Button
+        type="primary"
+        block
+        onClick={handleCompare}
+        loading={diffLoading}
+        disabled={!compareV1 || !compareV2}
+        icon={<SwapOutlined />}
+      >
+        对比版本
+      </Button>
+
+      <Divider style={{ margin: '16px 0' }} />
+
+      {diffLoading && (
+        <div style={{ display: 'flex', justifyContent: 'center', padding: 40 }}>
+          <Spin tip="正在计算差异..." />
+        </div>
+      )}
+
+      {diffData && !diffLoading && <VersionDiff diffData={diffData} />}
+
+      {!diffData && !diffLoading && (
+        <Empty description="选择两个版本后点击对比" style={{ marginTop: 24 }} />
       )}
     </div>
   );
 
-  if (!isOpen) return null;
-
   return (
     <>
-      {/* 遮罩层 */}
-      <div
-        className="fixed inset-0 bg-black bg-opacity-50 z-40"
-        onClick={onClose}
-      />
-
-      {/* 侧边栏 */}
-      <div className="fixed right-0 top-0 h-full w-[600px] bg-white shadow-xl z-50 flex flex-col">
-        {/* 头部 */}
-        <div className="flex items-center justify-between px-4 py-3 border-b border-gray-200">
-          <h2 className="text-lg font-semibold text-gray-900">版本历史</h2>
-          <button
-            onClick={onClose}
-            className="p-1 rounded-full text-gray-400 hover:text-gray-600 hover:bg-gray-100"
-          >
-            <XMarkIcon className="w-5 h-5" />
-          </button>
-        </div>
-
-        {/* 内容区域 */}
-        <div className="flex-1 overflow-y-auto">
-          {loading ? (
-            <div className="flex items-center justify-center py-8">
-              <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
-            </div>
-          ) : error ? (
-            <div className="p-4 text-center text-red-600">{error}</div>
-          ) : versions.length === 0 ? (
-            <div className="p-4 text-center text-gray-500">暂无版本历史</div>
-          ) : (
-            <div className="p-4 space-y-4">
-              {/* Diff 操作栏 */}
-              {selectedVersions.length > 0 && (
-                <div className="bg-blue-50 p-3 rounded-lg">
-                  <div className="flex items-center justify-between">
-                    <span className="text-sm text-blue-700">
-                      已选择 {selectedVersions.length} 个版本
-                      {selectedVersions.length === 2 && ' (点击"对比"查看差异)'}
-                    </span>
-                    <button
-                      onClick={handleDiff}
-                      disabled={selectedVersions.length !== 2 || diffLoading}
-                      className="px-3 py-1 text-sm font-medium text-white bg-blue-600 rounded hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed"
-                    >
-                      {diffLoading ? '对比中...' : '对比'}
-                    </button>
-                  </div>
-                </div>
-              )}
-
-              {/* Diff 结果 */}
-              {diffResult && (
-                <div className="bg-gray-50 p-4 rounded-lg border border-gray-200">
-                  <h3 className="font-medium text-gray-900 mb-3">版本对比结果</h3>
-                  <div className="text-sm text-gray-600 mb-3">
-                    <p>V{diffResult.v1.version_number} ↔ V{diffResult.v2.version_number}</p>
-                    <p className="mt-1">
-                      总变更: {diffResult.diff.total_changes} 项
-                      (新增 {diffResult.diff.added}, 删除 {diffResult.diff.deleted}, 修改 {diffResult.diff.modified})
-                    </p>
-                  </div>
-                  <div className="max-h-80 overflow-y-auto">
-                    {diffResult.diff.changes.map(renderChapterChange)}
-                  </div>
-                </div>
-              )}
-
-              {/* 版本预览 */}
-              {previewVersion && (
-                <div className="bg-gray-50 p-4 rounded-lg border border-gray-200">
-                  <div className="flex items-center justify-between mb-3">
-                    <h3 className="font-medium text-gray-900">
-                      版本 V{previewVersion.version_number} 预览
-                    </h3>
-                    <button
-                      onClick={() => setPreviewVersion(null)}
-                      className="text-sm text-gray-500 hover:text-gray-700"
-                    >
-                      关闭
-                    </button>
-                  </div>
-                  <div className="text-sm text-gray-600 mb-2">
-                    <p>变更类型: {CHANGE_TYPE_LABELS[previewVersion.change_type as ChangeType]}</p>
-                    {previewVersion.change_summary && (
-                      <p className="mt-1">摘要: {previewVersion.change_summary}</p>
-                    )}
-                  </div>
-                  <div className="mt-3 p-3 bg-white rounded border max-h-60 overflow-y-auto">
-                    <pre className="text-xs whitespace-pre-wrap">
-                      {JSON.stringify(previewVersion.snapshot_data, null, 2)}
-                    </pre>
-                  </div>
-                </div>
-              )}
-
-              {/* 版本列表 */}
-              <div className="space-y-2">
-                {versions.map((version) => (
-                  <div
-                    key={version.id}
-                    className={`p-3 border rounded-lg cursor-pointer transition-colors ${
-                      selectedVersions.includes(version.id)
-                        ? 'border-blue-500 bg-blue-50'
-                        : 'border-gray-200 hover:border-gray-300 hover:bg-gray-50'
-                    }`}
-                  >
-                    <div className="flex items-start justify-between">
-                      <div className="flex items-start space-x-3">
-                        <input
-                          type="checkbox"
-                          checked={selectedVersions.includes(version.id)}
-                          onChange={() => handleVersionSelect(version.id)}
-                          className="mt-1 h-4 w-4 text-blue-600 rounded border-gray-300 focus:ring-blue-500"
-                        />
-                        <div>
-                          <div className="flex items-center space-x-2">
-                            <span className="font-medium text-gray-900">
-                              V{version.version_number}
-                            </span>
-                            <span
-                              className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${
-                                CHANGE_TYPE_COLORS[version.change_type as ChangeType]
-                              }`}
-                            >
-                              {CHANGE_TYPE_LABELS[version.change_type as ChangeType]}
-                            </span>
-                          </div>
-                          {version.change_summary && (
-                            <p className="mt-1 text-sm text-gray-600 line-clamp-1">
-                              {version.change_summary}
-                            </p>
-                          )}
-                          <div className="mt-1 flex items-center space-x-3 text-xs text-gray-500">
-                            <span className="flex items-center">
-                              <ClockIcon className="w-3 h-3 mr-1" />
-                              {formatDate(version.created_at)}
-                            </span>
-                          </div>
-                        </div>
-                      </div>
-                      <div className="flex items-center space-x-2">
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            handlePreview(version.id);
-                          }}
-                          disabled={previewLoading}
-                          className="p-1 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded"
-                          title="预览"
-                        >
-                          <DocumentTextIcon className="w-4 h-4" />
-                        </button>
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setRollbackConfirm(version);
-                          }}
-                          className="p-1 text-gray-400 hover:text-orange-600 hover:bg-orange-50 rounded"
-                          title="回滚到此版本"
-                        >
-                          <ArrowPathIcon className="w-4 h-4" />
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                ))}
-              </div>
-
-              {/* 分页信息 */}
-              {total > versions.length && (
-                <div className="text-center text-sm text-gray-500 py-2">
-                  显示 {versions.length} / {total} 条记录
-                </div>
-              )}
-            </div>
-          )}
-        </div>
-      </div>
-
-      {/* 回滚确认弹窗 */}
-      {rollbackConfirm && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 z-60 flex items-center justify-center">
-          <div className="bg-white rounded-lg p-6 max-w-md w-full mx-4 shadow-xl">
-            <h3 className="text-lg font-semibold text-gray-900 mb-4">确认回滚</h3>
-            <p className="text-gray-600 mb-4">
-              确定要回滚到版本 <span className="font-medium">V{rollbackConfirm.version_number}</span> 吗？
-            </p>
-            <p className="text-sm text-gray-500 mb-4">
-              回滚前会自动创建当前状态的快照，以便需要时恢复。
-            </p>
-            <div className="flex justify-end space-x-3">
-              <button
-                onClick={() => setRollbackConfirm(null)}
-                disabled={rollbackLoading}
-                className="px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-md hover:bg-gray-50"
-              >
-                取消
-              </button>
-              <button
-                onClick={handleRollback}
-                disabled={rollbackLoading}
-                className="px-4 py-2 text-sm font-medium text-white bg-orange-600 rounded-md hover:bg-orange-700 disabled:bg-gray-400"
-              >
-                {rollbackLoading ? '回滚中...' : '确认回滚'}
-              </button>
-            </div>
+      <Drawer
+        title={
+          <Space>
+            <HistoryOutlined />
+            <span>版本历史</span>
+            {total > 0 && (
+              <Tag style={{ marginLeft: 4 }}>{total}</Tag>
+            )}
+          </Space>
+        }
+        placement="right"
+        width={compareMode ? 520 : 400}
+        open={isOpen}
+        onClose={onClose}
+        extra={
+          <Space>
+            <Button
+              size="small"
+              type={compareMode ? 'primary' : 'default'}
+              icon={<SwapOutlined />}
+              onClick={() => setCompareMode(!compareMode)}
+            >
+              {compareMode ? '退出对比' : '版本对比'}
+            </Button>
+            <Button
+              size="small"
+              icon={<CameraOutlined />}
+              onClick={() => setSnapshotModalOpen(true)}
+            >
+              创建快照
+            </Button>
+          </Space>
+        }
+      >
+        {loading ? (
+          <div style={{ display: 'flex', justifyContent: 'center', padding: 40 }}>
+            <Spin />
           </div>
-        </div>
-      )}
+        ) : error ? (
+          <div style={{ textAlign: 'center', color: 'red', padding: 40 }}>{error}</div>
+        ) : versions.length === 0 ? (
+          <Empty description="暂无版本历史" style={{ marginTop: 40 }} />
+        ) : compareMode ? (
+          renderComparePanel()
+        ) : (
+          <>
+            <Timeline items={timelineItems} style={{ marginTop: 8 }} />
+            {total > versions.length && (
+              <div style={{ textAlign: 'center', color: '#888', fontSize: 12, padding: '8px 0' }}>
+                显示 {versions.length} / {total} 条记录
+              </div>
+            )}
+          </>
+        )}
+      </Drawer>
+
+      <Modal
+        title="创建快照"
+        open={snapshotModalOpen}
+        onCancel={() => {
+          setSnapshotModalOpen(false);
+          setSnapshotSummary('');
+        }}
+        onOk={handleCreateSnapshot}
+        okText="创建"
+        confirmLoading={creatingSnapshot}
+      >
+        <div style={{ marginBottom: 8, color: '#555' }}>可选填写本次快照的摘要说明：</div>
+        <Input.TextArea
+          rows={3}
+          placeholder="如：正式提交前备份"
+          value={snapshotSummary}
+          onChange={(e) => setSnapshotSummary(e.target.value)}
+        />
+      </Modal>
     </>
   );
 };

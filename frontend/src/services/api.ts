@@ -19,6 +19,43 @@ import type {
 } from '../types/chapter';
 import type { Comment, CommentListResponse, CommentCreateRequest } from '../types/comment';
 import type { ConsistencyCheckResponse } from '../types/consistency';
+
+// ==================== 全文一致性校验新接口类型 ====================
+
+export interface ConsistencyIssue {
+  severity: 'error' | 'warning' | 'info';
+  category: 'data' | 'terminology' | 'timeline' | 'commitment' | 'scope';
+  description: string;
+  chapter_a: string;
+  chapter_b: string;
+  chapter_id_a?: string;
+  chapter_id_b?: string;
+  detail_a: string;
+  detail_b: string;
+  suggestion: string;
+}
+
+export interface ConsistencyCheckResult {
+  status: string;
+  total_chapters_checked: number;
+  issues: ConsistencyIssue[];
+  summary: string;
+  overall_consistency: 'consistent' | 'minor_issues' | 'major_issues';
+  contradiction_count: number;
+  critical_count: number;
+  created_at?: string;
+  check_id?: string;
+}
+
+export interface ConsistencyHistoryItem {
+  id: string;
+  project_id: string;
+  summary: string;
+  overall_consistency: string;
+  contradiction_count: number;
+  critical_count: number;
+  created_at: string;
+}
 import type {
   RatingChecklistResponse,
   ClauseResponseRequest,
@@ -349,6 +386,8 @@ export interface ChapterContentRequest {
   project_overview: string;
   model_name?: string;
   provider_config_id?: string;
+  use_knowledge?: boolean;
+  confirmed_material_ids?: string[];
 }
 
 export interface ProviderModelsOption {
@@ -374,6 +413,46 @@ export const configApi = {
     api.post<ProviderModelsResponse>('/api/config/models'),
 };
 
+// 导出模板相关类型
+export interface ExportTemplate {
+  id: string;
+  name: string;
+  description?: string;
+  is_builtin: boolean;
+  format_config: any;
+  created_at: string;
+  updated_at: string;
+}
+
+// 导出模板 API
+export const exportTemplateApi = {
+  list: async (): Promise<ExportTemplate[]> => {
+    const response = await api.get<ExportTemplate[]>('/api/export-templates');
+    return response.data;
+  },
+  get: async (id: string): Promise<ExportTemplate> => {
+    const response = await api.get<ExportTemplate>(`/api/export-templates/${id}`);
+    return response.data;
+  },
+  create: async (data: any): Promise<ExportTemplate> => {
+    const response = await api.post<ExportTemplate>('/api/export-templates', data);
+    return response.data;
+  },
+  update: async (id: string, data: any): Promise<ExportTemplate> => {
+    const response = await api.put<ExportTemplate>(`/api/export-templates/${id}`, data);
+    return response.data;
+  },
+  delete: async (id: string): Promise<void> => {
+    await api.delete(`/api/export-templates/${id}`);
+  },
+  extractFromDocument: async (data: { project_id: string; file_content?: string }): Promise<any> => {
+    const response = await api.post('/api/export-templates/extract-from-document', data);
+    return response.data;
+  },
+  preview: (data: any) =>
+    api.post('/api/document/export-preview', data, { responseType: 'blob' }),
+};
+
 // 文档相关API
 export const documentApi = {
   // 上传文件
@@ -389,9 +468,15 @@ export const documentApi = {
 
 
   // 流式分析文档
-  analyzeDocumentStream: (data: AnalysisRequest) => {
-    return api.post('/api/document/analyze-stream', data, {
-      responseType: 'stream',
+  analyzeDocumentStream: async (data: AnalysisRequest): Promise<Response> => {
+    const token = getStoredToken();
+    return fetch(`${API_BASE_URL}/api/document/analyze-stream`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+      body: JSON.stringify(data),
     });
   },
 
@@ -404,16 +489,29 @@ export const documentApi = {
   },
 
   // 流式分析项目文档（保存到数据库）
-  analyzeProjectStream: (
+  analyzeProjectStream: async (
     data: {
       project_id: string;
       analysis_type: 'overview' | 'requirements';
       model_name?: string;
       provider_config_id?: string;
     }
-  ) => {
-    return api.post('/api/document/analyze-project-stream', data, {
-      responseType: 'stream',
+  ): Promise<Response> => {
+    // 必须使用原生 fetch 才能获得浏览器 ReadableStream 支持
+    // axios 的 responseType: 'stream' 在浏览器端不生效
+    const token = getStoredToken();
+    const csrfToken = getCsrfToken() || getCsrfTokenFromCookie();
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+    };
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+    if (csrfToken) headers['X-CSRF-Token'] = csrfToken;
+
+    return fetch(`${API_BASE_URL}/api/document/analyze-project-stream`, {
+      method: 'POST',
+      headers,
+      credentials: 'include',
+      body: JSON.stringify(data),
     });
   },
 
@@ -423,9 +521,16 @@ export const documentApi = {
   },
 
   // 导出Word文档
-  exportWord: (data: { project_name: string; project_overview?: string; project_id?: string; outline: OutlineItem[] }) => {
+  exportWord: (data: { project_name: string; project_overview?: string; project_id?: string; outline: OutlineItem[]; template_id?: string }) => {
     return api.post('/api/document/export-word', data, {
       responseType: 'blob',
+    });
+  },
+
+  exportPdf: (data: { project_name: string; project_overview?: string; project_id?: string; outline: OutlineItem[]; template_id?: string }) => {
+    return api.post('/api/document/export-pdf', data, {
+      responseType: 'blob',
+      timeout: 120000,  // PDF 转换可能较慢
     });
   },
 };
@@ -522,6 +627,81 @@ export const materialApi = {
       return response.data;
     } catch (error) { handleApiError(error, '创建素材绑定失败'); }
   },
+
+  disable: async (id: string): Promise<{ success: boolean }> => {
+    try {
+      const response = await api.post<{ success: boolean }>(`/api/materials/${id}/disable`);
+      return response.data;
+    } catch (error) { handleApiError(error, '停用素材失败'); }
+  },
+
+  enable: async (id: string): Promise<{ success: boolean }> => {
+    try {
+      const response = await api.post<{ success: boolean }>(`/api/materials/${id}/enable`);
+      return response.data;
+    } catch (error) { handleApiError(error, '启用素材失败'); }
+  },
+
+  suggestForChapter: async (data: { project_id: string; chapter_title: string; chapter_content?: string; top_k?: number }): Promise<{ suggestions: Array<MaterialAsset & { score: number }> }> => {
+    try {
+      const response = await api.post<{ suggestions: Array<MaterialAsset & { score: number }> }>('/api/materials/suggest-for-chapter', data);
+      return response.data;
+    } catch (error) { handleApiError(error, '获取素材推荐失败'); }
+  },
+};
+
+/** 素材智能匹配推荐项 */
+export interface SmartMatchRecommendation {
+  material_id: string;
+  material_name: string;
+  category: string;
+  relevance_score: number;
+  reason: string;
+}
+
+/** 素材智能匹配结果（一章节一条） */
+export interface SmartMatchResult {
+  chapter_id: string;
+  chapter_title: string;
+  chapter_number: string;
+  recommended_materials: SmartMatchRecommendation[];
+}
+
+/** 自动绑定结果 */
+export interface AutoBindResult {
+  bound_count: number;
+  skipped_count: number;
+  total_chapters: number;
+  details: Array<{
+    chapter_id: string;
+    chapter_title: string;
+    material_id: string;
+    material_name: string;
+    status: 'bound' | 'already_bound';
+  }>;
+}
+
+export const materialSmartApi = {
+  /** 智能匹配：返回各章节推荐素材列表 */
+  match: async (projectId: string, chapterId?: string): Promise<SmartMatchResult[]> => {
+    try {
+      const response = await api.post<SmartMatchResult[]>('/api/materials/smart-match', {
+        project_id: projectId,
+        chapter_id: chapterId,
+      });
+      return response.data;
+    } catch (error) { handleApiError(error, '素材智能匹配失败'); }
+  },
+
+  /** 一键自动绑定：为所有章节自动创建最优素材绑定 */
+  autoBind: async (projectId: string): Promise<AutoBindResult> => {
+    try {
+      const response = await api.post<AutoBindResult>('/api/materials/auto-bind', {
+        project_id: projectId,
+      });
+      return response.data;
+    } catch (error) { handleApiError(error, '自动绑定素材失败'); }
+  },
 };
 
 // 目录相关API
@@ -531,32 +711,76 @@ export const outlineApi = {
     api.post('/api/outline/generate', data),
 
   // 流式生成目录
-  generateOutlineStream: (data: OutlineRequest) => {
-    return api.post('/api/outline/generate-stream', data, {
-      responseType: 'stream',
+  generateOutlineStream: async (data: OutlineRequest): Promise<Response> => {
+    const token = getStoredToken();
+    const csrfToken = getCsrfToken() || getCsrfTokenFromCookie();
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+    };
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+    if (csrfToken) headers['X-CSRF-Token'] = csrfToken;
+
+    return fetch(`${API_BASE_URL}/api/outline/generate-stream`, {
+      method: 'POST',
+      headers,
+      credentials: 'include',
+      body: JSON.stringify(data),
     });
   },
 
   // 流式生成项目目录（保存到数据库）
-  generateProjectOutlineStream: (data: { project_id: string; model_name?: string; provider_config_id?: string }) => {
-    return api.post('/api/outline/generate-project-stream', data, {
-      responseType: 'stream',
+  generateProjectOutlineStream: async (data: { project_id: string; model_name?: string; provider_config_id?: string }): Promise<Response> => {
+    const token = getStoredToken();
+    const csrfToken = getCsrfToken() || getCsrfTokenFromCookie();
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+    };
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+    if (csrfToken) headers['X-CSRF-Token'] = csrfToken;
+
+    return fetch(`${API_BASE_URL}/api/outline/generate-project-stream`, {
+      method: 'POST',
+      headers,
+      credentials: 'include',
+      body: JSON.stringify(data),
     });
   },
 
   // 流式生成项目一级目录
-  generateProjectOutlineL1Stream: (data: { project_id: string; model_name?: string; provider_config_id?: string }) => {
-    return api.post('/api/outline/generate-project-l1-stream', data, {
-      responseType: 'stream',
+  generateProjectOutlineL1Stream: async (data: { project_id: string; model_name?: string; provider_config_id?: string }): Promise<Response> => {
+    const token = getStoredToken();
+    const csrfToken = getCsrfToken() || getCsrfTokenFromCookie();
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+    };
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+    if (csrfToken) headers['X-CSRF-Token'] = csrfToken;
+
+    return fetch(`${API_BASE_URL}/api/outline/generate-project-l1-stream`, {
+      method: 'POST',
+      headers,
+      credentials: 'include',
+      body: JSON.stringify(data),
     });
   },
 
   // 流式生成项目二三级目录
-  generateProjectOutlineL2L3Stream: (
+  generateProjectOutlineL2L3Stream: async (
     data: { project_id: string; model_name?: string; provider_config_id?: string; outline_data?: { outline: OutlineItem[] } }
-  ) => {
-    return api.post('/api/outline/generate-project-l2l3-stream', data, {
-      responseType: 'stream',
+  ): Promise<Response> => {
+    const token = getStoredToken();
+    const csrfToken = getCsrfToken() || getCsrfTokenFromCookie();
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+    };
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+    if (csrfToken) headers['X-CSRF-Token'] = csrfToken;
+
+    return fetch(`${API_BASE_URL}/api/outline/generate-project-l2l3-stream`, {
+      method: 'POST',
+      headers,
+      credentials: 'include',
+      body: JSON.stringify(data),
     });
   },
 
@@ -584,9 +808,21 @@ export const contentApi = {
     api.post('/api/content/generate-chapter', data),
 
   // 流式生成单章节内容
-  generateChapterContentStream: (data: ChapterContentRequest) => {
-    return api.post('/api/content/generate-chapter-stream', data, {
-      responseType: 'stream',
+  generateChapterContentStream: async (data: ChapterContentRequest, signal?: AbortSignal): Promise<Response> => {
+    const token = getStoredToken();
+    const csrfToken = getCsrfToken() || getCsrfTokenFromCookie();
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+    };
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+    if (csrfToken) headers['X-CSRF-Token'] = csrfToken;
+
+    return fetch(`${API_BASE_URL}/api/content/generate-chapter-stream`, {
+      method: 'POST',
+      headers,
+      credentials: 'include',
+      body: JSON.stringify(data),
+      signal,
     });
   },
 };
@@ -708,16 +944,26 @@ export const commentApi = {
 // 校对相关 API
 export const proofreadApi = {
   // 触发章节校对（流式返回）
-  proofreadChapter: (chapterId: string) => {
-    return api.post(`/api/chapters/${chapterId}/proofread`, undefined, {
-      responseType: 'stream',
+  proofreadChapter: async (chapterId: string): Promise<Response> => {
+    const token = getStoredToken();
+    const csrfToken = getCsrfToken() || getCsrfTokenFromCookie();
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+    };
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+    if (csrfToken) headers['X-CSRF-Token'] = csrfToken;
+
+    return fetch(`${API_BASE_URL}/api/chapters/${chapterId}/proofread`, {
+      method: 'POST',
+      headers,
+      credentials: 'include',
     });
   },
 };
 
 // 一致性检查相关 API
 export const consistencyApi = {
-  // 检查项目跨章节一致性
+  // 检查项目跨章节一致性（旧接口，从项目路由调用）
   checkConsistency: async (
     projectId: string,
     chapterSummaries?: { chapter_number: string; title: string; summary: string; chapter_id?: string }[]
@@ -735,6 +981,38 @@ export const consistencyApi = {
         `/api/projects/${projectId}/consistency-check`
       );
       return response.data;
+    }
+  },
+
+  // 执行全文一致性校验（新接口，从数据库读取章节内容）
+  check: async (projectId: string): Promise<ConsistencyCheckResult> => {
+    try {
+      const response = await api.post<ConsistencyCheckResult>('/api/consistency/check', {
+        project_id: projectId,
+      });
+      return response.data;
+    } catch (error) {
+      handleApiError(error, '一致性校验失败');
+    }
+  },
+
+  // 获取最近一次校验结果
+  latest: async (projectId: string): Promise<ConsistencyCheckResult> => {
+    try {
+      const response = await api.get<ConsistencyCheckResult>(`/api/consistency/${projectId}/latest`);
+      return response.data;
+    } catch (error) {
+      handleApiError(error, '获取校验结果失败');
+    }
+  },
+
+  // 获取校验历史
+  history: async (projectId: string): Promise<ConsistencyHistoryItem[]> => {
+    try {
+      const response = await api.get<ConsistencyHistoryItem[]>(`/api/consistency/${projectId}/history`);
+      return response.data;
+    } catch (error) {
+      handleApiError(error, '获取校验历史失败');
     }
   },
 
@@ -962,6 +1240,41 @@ export const requestLogApi = {
 
 // ==================== 标书审查 API ====================
 
+/**
+ * 检查当前 token 是否即将过期（剩余 < 60 秒），如需则刷新。
+ * 返回最新的有效 token，或 null（未登录）。
+ */
+async function refreshTokenIfNeeded(): Promise<string | null> {
+  const token = getStoredToken();
+  if (!token) return null;
+
+  try {
+    // base64 decode JWT payload（无需第三方库）
+    const payloadB64 = token.split('.')[1];
+    if (!payloadB64) return token;
+    const payload = JSON.parse(atob(payloadB64.replace(/-/g, '+').replace(/_/g, '/')));
+    const exp: number | undefined = payload.exp;
+    const nowSec = Math.floor(Date.now() / 1000);
+
+    // 如果还有 60 秒以上，无需刷新
+    if (exp !== undefined && exp - nowSec > 60) return token;
+  } catch {
+    // decode 失败则忽略，继续尝试刷新
+  }
+
+  // token 已过期或剩余 < 60 秒，调用刷新接口
+  try {
+    const response = await api.post<Token>('/api/auth/refresh');
+    const { access_token } = response.data;
+    setStoredToken(access_token);
+    setAuthToken(access_token);
+    return access_token;
+  } catch {
+    // 刷新失败，返回现有 token，让后续请求自然触发 401 处理
+    return getStoredToken();
+  }
+}
+
 export const reviewApi = {
   // 上传投标文件
   uploadBidFile: async (
@@ -984,17 +1297,19 @@ export const reviewApi = {
     request: ReviewExecuteRequest,
     token?: string,
   ): Promise<Response> => {
-    const response = await authenticatedFetch(
-      `${API_BASE_URL}/api/review/execute`,
-      {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(request),
-      },
-      token
-    );
+    const authToken = token || await refreshTokenIfNeeded();
+    const csrfToken = getCsrfToken() || getCsrfTokenFromCookie();
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+    };
+    if (authToken) headers['Authorization'] = `Bearer ${authToken}`;
+    if (csrfToken) headers['X-CSRF-Token'] = csrfToken;
+    const response = await fetch(`${API_BASE_URL}/api/review/execute`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(request),
+      credentials: 'include',
+    });
     return response;
   },
 
@@ -1015,22 +1330,304 @@ export const reviewApi = {
     request: ReviewExportRequest,
     token?: string,
   ): Promise<Blob> => {
-    const response = await authenticatedFetch(
-      `${API_BASE_URL}/api/review/export-word`,
-      {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(request),
-      },
-      token
-    );
+    const authToken = token || await refreshTokenIfNeeded();
+    const csrfToken = getCsrfToken() || getCsrfTokenFromCookie();
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+    };
+    if (authToken) headers['Authorization'] = `Bearer ${authToken}`;
+    if (csrfToken) headers['X-CSRF-Token'] = csrfToken;
+    const response = await fetch(`${API_BASE_URL}/api/review/export-word`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(request),
+      credentials: 'include',
+    });
     if (!response.ok) {
       const error = await response.json().catch(() => ({}));
       throw new Error(error.detail || '导出失败');
     }
     return response.blob();
+  },
+};
+
+// ==================== 评分标准 API ====================
+
+export interface ScoringCriteriaItem {
+  id: string;
+  item_id: string;
+  category: string | null;
+  item: string;
+  max_score: number | null;
+  scoring_rule: string | null;
+  keywords: string[];
+  source_text: string | null;
+  bound_chapter_id: string | null;
+}
+
+export interface ScoringExtractResponse {
+  success: boolean;
+  count: number;
+  total_score: number | null;
+  technical_score: number | null;
+  commercial_score: number | null;
+  other_score: number | null;
+  items: ScoringCriteriaItem[];
+}
+
+export interface ScoringCoverageResponse {
+  total: number;
+  bound: number;
+  unbound: number;
+  bound_score: number;
+  unbound_score: number;
+  total_score: number;
+  coverage_rate: number;
+  high_score_unbound: ScoringCriteriaItem[];
+}
+
+export const scoringApi = {
+  extract: async (projectId: string, modelName?: string, providerConfigId?: string): Promise<ScoringExtractResponse> => {
+    try {
+      const response = await api.post<ScoringExtractResponse>('/api/scoring/extract', {
+        project_id: projectId,
+        model_name: modelName,
+        provider_config_id: providerConfigId,
+      });
+      return response.data;
+    } catch (error) { handleApiError(error, '提取评分标准失败'); }
+  },
+
+  list: async (projectId: string): Promise<ScoringCriteriaItem[]> => {
+    try {
+      const response = await api.get<ScoringCriteriaItem[]>(`/api/scoring/${projectId}`);
+      return response.data;
+    } catch (error) { handleApiError(error, '获取评分标准列表失败'); }
+  },
+
+  updateItem: async (projectId: string, scoringId: string, data: Partial<ScoringCriteriaItem>): Promise<ScoringCriteriaItem> => {
+    try {
+      const response = await api.put<ScoringCriteriaItem>(`/api/scoring/${projectId}/${scoringId}`, data);
+      return response.data;
+    } catch (error) { handleApiError(error, '更新评分项失败'); }
+  },
+
+  autoBind: async (projectId: string): Promise<{ success: boolean; bound_count: number; total_count: number }> => {
+    try {
+      const response = await api.post(`/api/scoring/${projectId}/auto-bind`);
+      return response.data;
+    } catch (error) { handleApiError(error, '自动绑定失败'); }
+  },
+
+  coverage: async (projectId: string): Promise<ScoringCoverageResponse> => {
+    try {
+      const response = await api.get<ScoringCoverageResponse>(`/api/scoring/${projectId}/coverage`);
+      return response.data;
+    } catch (error) { handleApiError(error, '获取评分覆盖率失败'); }
+  },
+};
+
+// ==================== 废标检查 API ====================
+
+export interface DisqualificationItem {
+  id: string;
+  item_id: string;
+  category: string;
+  requirement: string;
+  check_type: string;
+  severity: string; // fatal | warning
+  source_text?: string;
+  status: string; // unchecked | passed | failed | not_applicable
+  checked_by?: string;
+  checked_at?: string;
+  note?: string;
+}
+
+export interface DisqualificationSummary {
+  total: number;
+  checked: number;
+  passed: number;
+  failed: number;
+  not_applicable: number;
+  unchecked: number;
+  fatal_unresolved: number;
+}
+
+export interface ValidateBeforeExportResponse {
+  has_risk: boolean;
+  fatal_unresolved_items: DisqualificationItem[];
+  message: string;
+}
+
+export const disqualificationApi = {
+  extract: async (projectId: string, modelName?: string): Promise<DisqualificationItem[]> => {
+    try {
+      const response = await api.post<DisqualificationItem[]>('/api/disqualification/extract', {
+        project_id: projectId,
+        ...(modelName ? { model_name: modelName } : {}),
+      });
+      return response.data;
+    } catch (error) { handleApiError(error, '提取废标检查项失败'); }
+  },
+
+  list: async (projectId: string): Promise<DisqualificationItem[]> => {
+    try {
+      const response = await api.get<DisqualificationItem[]>(`/api/disqualification/${projectId}`);
+      return response.data;
+    } catch (error) { handleApiError(error, '获取废标检查清单失败'); }
+  },
+
+  updateItem: async (projectId: string, itemId: string, data: { status: string; note?: string }): Promise<DisqualificationItem> => {
+    try {
+      const response = await api.put<DisqualificationItem>(`/api/disqualification/${projectId}/${itemId}`, data);
+      return response.data;
+    } catch (error) { handleApiError(error, '更新检查项状态失败'); }
+  },
+
+  summary: async (projectId: string): Promise<DisqualificationSummary> => {
+    try {
+      const response = await api.get<DisqualificationSummary>(`/api/disqualification/${projectId}/summary`);
+      return response.data;
+    } catch (error) { handleApiError(error, '获取废标检查摘要失败'); }
+  },
+
+  validateBeforeExport: async (projectId: string): Promise<ValidateBeforeExportResponse> => {
+    try {
+      const response = await api.post<ValidateBeforeExportResponse>(`/api/disqualification/${projectId}/validate-before-export`);
+      return response.data;
+    } catch (error) { handleApiError(error, '导出前废标校验失败'); }
+  },
+};
+
+// ==================== 章节模板（标书知识库）API ====================
+
+export interface ChapterTemplate {
+  id: string;
+  name: string;
+  description?: string;
+  category?: string;
+  tags: string[];
+  content: string;
+  source_project_id?: string;
+  source_project_name?: string;
+  source_chapter_id?: string;
+  created_by: string;
+  usage_count: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export const chapterTemplateApi = {
+  list: async (params?: { category?: string; keyword?: string; tags?: string }): Promise<ChapterTemplate[]> => {
+    try {
+      const response = await api.get<ChapterTemplate[]>('/api/chapter-templates', { params });
+      return response.data;
+    } catch (error) { handleApiError(error, '获取章节模板列表失败'); }
+  },
+
+  get: async (id: string): Promise<ChapterTemplate> => {
+    try {
+      const response = await api.get<ChapterTemplate>(`/api/chapter-templates/${id}`);
+      return response.data;
+    } catch (error) { handleApiError(error, '获取章节模板失败'); }
+  },
+
+  create: async (data: { name: string; description?: string; category?: string; tags?: string[]; content: string }): Promise<ChapterTemplate> => {
+    try {
+      const response = await api.post<ChapterTemplate>('/api/chapter-templates', data);
+      return response.data;
+    } catch (error) { handleApiError(error, '创建章节模板失败'); }
+  },
+
+  fromChapter: async (chapterId: string, data?: { name?: string; category?: string; tags?: string[] }): Promise<ChapterTemplate> => {
+    try {
+      const response = await api.post<ChapterTemplate>('/api/chapter-templates/from-chapter', {
+        chapter_id: chapterId,
+        ...data,
+      });
+      return response.data;
+    } catch (error) { handleApiError(error, '从章节创建模板失败'); }
+  },
+
+  update: async (id: string, data: { name?: string; description?: string; category?: string; tags?: string[]; content?: string }): Promise<ChapterTemplate> => {
+    try {
+      const response = await api.put<ChapterTemplate>(`/api/chapter-templates/${id}`, data);
+      return response.data;
+    } catch (error) { handleApiError(error, '更新章节模板失败'); }
+  },
+
+  delete: async (id: string): Promise<void> => {
+    try {
+      await api.delete(`/api/chapter-templates/${id}`);
+    } catch (error) { handleApiError(error, '删除章节模板失败'); }
+  },
+
+  apply: async (templateId: string, targetChapterId: string): Promise<{ success: boolean; message: string; content: string }> => {
+    try {
+      const response = await api.post<{ success: boolean; message: string; content: string }>(
+        `/api/chapter-templates/${templateId}/apply`,
+        { target_chapter_id: targetChapterId }
+      );
+      return response.data;
+    } catch (error) { handleApiError(error, '套用模板失败'); }
+  },
+
+  search: async (query: string): Promise<ChapterTemplate[]> => {
+    try {
+      const response = await api.post<ChapterTemplate[]>('/api/chapter-templates/search', { query });
+      return response.data;
+    } catch (error) { handleApiError(error, '搜索章节模板失败'); }
+  },
+};
+
+// ==================== 进度看板 API ====================
+
+export interface DashboardChapterStats {
+  total: number;
+  pending: number;
+  generated: number;
+  reviewing: number;
+  finalized: number;
+}
+
+export interface DashboardProjectItem {
+  id: string;
+  name: string;
+  status: string;
+  created_at: string;
+  updated_at: string;
+  chapter_stats: DashboardChapterStats;
+  completion_percentage: number;
+}
+
+export interface DashboardStatusCount {
+  draft: number;
+  in_progress: number;
+  reviewing: number;
+  completed: number;
+}
+
+export interface DashboardChapterStatusCount {
+  pending: number;
+  generated: number;
+  reviewing: number;
+  finalized: number;
+}
+
+export interface DashboardResponse {
+  total_projects: number;
+  by_status: DashboardStatusCount;
+  total_chapters: number;
+  chapter_by_status: DashboardChapterStatusCount;
+  projects: DashboardProjectItem[];
+}
+
+export const dashboardApi = {
+  overview: async (): Promise<DashboardResponse> => {
+    try {
+      const response = await api.get<DashboardResponse>('/api/projects/dashboard');
+      return response.data;
+    } catch (error) { handleApiError(error, '获取进度看板数据失败'); }
   },
 };
 

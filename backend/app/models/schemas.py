@@ -102,6 +102,11 @@ class ChapterContentRequest(BaseModel):
     project_overview: str = Field("", description="项目概述")
     model_name: Optional[str] = Field(None, description="可选的模型名称，覆盖默认配置")
     provider_config_id: Optional[str] = Field(None, description="可选的 Provider 配置 ID，覆盖默认配置")
+    use_knowledge: bool = Field(True, description="是否检索知识库注入上下文")
+    rating_response_checklist: Optional[List[Dict[str, Any]]] = Field(None, description="评分响应检查表")
+    source_chapter_content: Optional[str] = Field(None, description="原章节内容，用于改写")
+    rewrite_suggestions: Optional[List[str]] = Field(None, description="改写建议列表")
+    confirmed_material_ids: List[str] = Field(default_factory=list, description="用户确认选中的素材 ID 列表")
 
 
 class ErrorResponse(BaseModel):
@@ -116,7 +121,7 @@ class WordExportRequest(BaseModel):
     project_overview: Optional[str] = Field(None, description="项目概述")
     project_id: Optional[str] = Field(None, description="可选的项目ID，用于读取章节素材绑定")
     outline: List[OutlineItem] = Field(..., description="目录结构，包含内容")
-    images: Optional[Dict[str, str]] = Field(None, description="图片映射表，key为 [图片N] 标记，value为图片文件相对路径")
+    template_id: Optional[str] = Field(None, description="可选的导出格式模板ID，不传则使用 GB/T 9704 内置模板")
 
 
 # ============ 项目上下文相关 Schema ============
@@ -266,24 +271,40 @@ class ContentGenerateWithKnowledgeRequest(BaseModel):
     model_name: Optional[str] = Field(None, description="可选的模型名称，覆盖默认配置")
 
 
-# ============ 素材解析相关 Schema ============
+# ============ 导出格式模板 Schema ============
 
-class MaterialImageInfo(BaseModel):
-    """素材中提取的单张图片信息"""
-    index: int = Field(..., description="图片序号")
-    marker: str = Field(..., description="文本中的图片标记，如 [图片1]")
-    file_path: str = Field(..., description="图片文件相对路径")
-    format: str = Field(..., description="图片格式 (jpg/png/...)")
-    size: int = Field(..., description="图片字节大小")
-    page: Optional[int] = Field(None, description="PDF 页码（仅 PDF 文件）")
+class ExportTemplateCreate(BaseModel):
+    """创建导出格式模板请求"""
+    name: str = Field(..., max_length=100, description="模板名称")
+    description: Optional[str] = Field(None, max_length=500, description="模板描述")
+    format_config: Dict[str, Any] = Field(..., description="格式配置 JSON")
 
 
-class MaterialParseResponse(BaseModel):
-    """素材解析响应：文本和图片分离"""
-    success: bool
-    message: str
-    material_id: str = Field(..., description="本次解析的唯一标识")
-    source_filename: str = Field(..., description="原始文件名")
-    text: Optional[str] = Field(None, description="提取的纯文本内容")
-    images: List[MaterialImageInfo] = Field(default_factory=list, description="提取的图片列表")
-    image_count: int = Field(0, description="提取的图片数量")
+class ExportTemplateUpdate(BaseModel):
+    """更新导出格式模板请求（内置模板只能改 name/description）"""
+    name: Optional[str] = Field(None, max_length=100, description="模板名称")
+    description: Optional[str] = Field(None, max_length=500, description="模板描述")
+    format_config: Optional[Dict[str, Any]] = Field(None, description="格式配置 JSON（内置模板不可修改）")
+
+
+class ExportTemplateResponse(BaseModel):
+    """导出格式模板响应"""
+    id: str
+    name: str
+    description: Optional[str] = None
+    is_builtin: bool
+    created_by: Optional[str] = None
+    format_config: Dict[str, Any]
+    source_file_path: Optional[str] = None
+    created_at: str
+    updated_at: str
+
+    model_config = {"from_attributes": True}
+
+
+class ExtractFormatRequest(BaseModel):
+    """从文档提取格式要求请求"""
+    project_id: Optional[str] = Field(None, description="项目ID（从项目文档提取）")
+    file_content: Optional[str] = Field(None, description="直接传入文档文本（优先级高于 project_id）")
+    model_name: Optional[str] = Field(None, description="可选的模型名称")
+    provider_config_id: Optional[str] = Field(None, description="可选的 Provider 配置 ID")

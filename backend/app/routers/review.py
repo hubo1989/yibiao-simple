@@ -395,6 +395,7 @@ async def get_review_history(
         ReviewHistoryItem(
             task_id=task.id,
             status=task.status,
+            bid_filename=task.bid_filename,
             summary=task.summary,
             model_name=task.model_name,
             created_at=task.created_at,
@@ -466,3 +467,86 @@ async def export_reviewed_word(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"导出 Word 失败: {str(e)}",
         ) from e
+
+
+# ============ 审查问题 AI 修复（流式） ============
+
+
+from pydantic import BaseModel as _PydanticBase, Field as _Field
+
+
+class ApplyFixRequest(_PydanticBase):
+    """应用审查问题修复请求"""
+    chapter_id: str = _Field(..., description="章节标识（用于定位）")
+    current_content: str = _Field(..., description="当前章节内容")
+    issue_ids: list[str] = _Field(default_factory=list, description="要修复的问题 ID 列表，空表示使用全部问题")
+
+
+@router.post("/apply-fix-stream/{task_id}")
+async def apply_review_fix_stream(
+    task_id: uuid.UUID,
+    request: ApplyFixRequest,
+    current_user: Annotated[User, Depends(require_editor)] = None,
+    db: Annotated[AsyncSession, Depends(get_db)] = None,
+):
+    """对审查发现的问题，用 AI 生成修复建议，流式返回修改后内容"""
+    from ..services.openai_service import OpenAIService
+
+    task = await db.get(BidReviewTask, task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="审查任务不存在")
+
+    await _verify_project_member(task.project_id, current_user.id, db)
+
+    if task.status != ReviewTaskStatus.COMPLETED:
+        raise HTTPException(status_code=400, detail="审查任务尚未完成")
+
+    # 从审查结果里提取所有问题作为 suggestions
+    all_issues: list[str] = []
+    for result_field in [task.responsiveness_result, task.compliance_result, task.consistency_result]:
+        if not result_field:
+            continue
+        # 结果通常是 {"issues": [...]} 或 {"items": [...]}
+        for key in ("issues", "items", "results", "details"):
+            items = result_field.get(key, [])
+            if items and isinstance(items, list):
+                for it in items:
+                    if isinstance(it, dict):
+                        issue_id = str(it.get("id", ""))
+                        if request.issue_ids and issue_id not in request.issue_ids:
+                            continue
+                        desc = it.get("description") or it.get("issue") or it.get("content") or ""
+                        suggestion = it.get("suggestion") or it.get("fix") or it.get("recommendation") or ""
+                        text = f"{desc}" + (f"；建议：{suggestion}" if suggestion else "")
+                        if text.strip():
+                            all_issues.append(text.strip())
+                break
+
+    if not all_issues:
+        raise HTTPException(status_code=400, detail="未找到可修复的审查问题")
+
+    chapter_title = request.chapter_id
+
+    openai_service = OpenAIService(db=db)
+    await openai_service._ensure_initialized()
+
+    if not openai_service.api_key:
+        raise HTTPException(status_code=400, detail="请先配置 AI 服务 API 密钥")
+
+    async def generate():
+        try:
+            yield f"data: {json.dumps({'status': 'started', 'message': '正在根据审查问题生成修改内容...'}, ensure_ascii=False)}\n\n"
+            full_content = ""
+            async for chunk in openai_service.rewrite_chapter_with_suggestions_stream(
+                chapter_title=chapter_title,
+                chapter_content=request.current_content,
+                suggestions=all_issues,
+            ):
+                full_content += chunk
+                yield f"data: {json.dumps({'status': 'streaming', 'content': chunk, 'full_content': full_content}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'status': 'completed', 'content': full_content}, ensure_ascii=False)}\n\n"
+        except Exception as e:
+            yield f"data: {json.dumps({'status': 'error', 'message': str(e)}, ensure_ascii=False)}\n\n"
+        yield "data: [DONE]\n\n"
+
+    return sse_response(generate())
