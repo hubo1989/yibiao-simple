@@ -41,9 +41,6 @@ export const statusColors: Record<string, string> = {
 
 /**
  * 获取文件 URL
+ * @deprecated 请从 services/api.ts 中导入 getFileUrl，此处仅保留向后兼容性
  */
-export function getFileUrl(path: string | undefined | null): string {
-  if (!path) return '';
-  const baseUrl = process.env.REACT_APP_API_URL || 'http://localhost:8000';
-  return `${baseUrl}/${path.replace(/^\/+/, '')}`;
-}
+export { getFileUrl } from '../services/api';

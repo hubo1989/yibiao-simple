@@ -1325,6 +1325,30 @@ export const reviewApi = {
     return response.data;
   },
 
+  // AI 修复（流式）
+  applyFixStream: async (
+    taskId: string,
+    issueIds: string[],
+  ): Promise<Response> => {
+    const authToken = await refreshTokenIfNeeded();
+    const csrfToken = getCsrfToken() || getCsrfTokenFromCookie();
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+    };
+    if (authToken) headers['Authorization'] = `Bearer ${authToken}`;
+    if (csrfToken) headers['X-CSRF-Token'] = csrfToken;
+    return fetch(`${API_BASE_URL}/api/review/apply-fix-stream/${taskId}`, {
+      method: 'POST',
+      headers,
+      credentials: 'include',
+      body: JSON.stringify({
+        chapter_id: '审查修复',
+        current_content: '',
+        issue_ids: issueIds,
+      }),
+    });
+  },
+
   // 导出带批注的 Word
   exportWord: async (
     request: ReviewExportRequest,

@@ -1,11 +1,11 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Button, Card, Empty, Form, Image, Input, Modal, Popconfirm, Select, Space, Tag, Upload, message } from 'antd';
 import { InboxOutlined, PlusOutlined, ImportOutlined, EditOutlined, DeleteOutlined, SearchOutlined, ReloadOutlined, StopOutlined, CheckCircleOutlined } from '@ant-design/icons';
-import { materialApi } from '../services/api';
+import { materialApi, getFileUrl } from '../services/api';
 import type { MaterialAsset, MaterialCategory } from '../types/material';
 import { useLayoutHeader } from '../layouts/layoutHeader';
 import IngestionWizard from '../components/IngestionWizard';
-import { getFileUrl, getErrorMessage, ApiError } from '../utils/error';
+import { getErrorMessage, ApiError } from '../utils/error';
 
 // 计算距今天数（正数=未来，负数=已过期）
 function daysUntil(dateStr: string | null | undefined): number | null {

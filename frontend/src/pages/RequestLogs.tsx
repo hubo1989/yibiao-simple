@@ -4,6 +4,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { requestLogApi } from '../services/api';
 import type { RequestLog, RequestLogQuery, RequestStats } from '../types/requestLog';
+import { formatDateTime } from '../utils/date';
 
 const RequestLogs: React.FC = () => {
   const [logs, setLogs] = useState<RequestLog[]>([]);
@@ -50,19 +51,6 @@ const RequestLogs: React.FC = () => {
     loadLogs();
     loadStats();
   }, [loadLogs, loadStats]);
-
-  // 格式化时间
-  const formatTime = (dateStr: string) => {
-    const date = new Date(dateStr);
-    return date.toLocaleString('zh-CN', {
-      year: 'numeric',
-      month: '2-digit',
-      day: '2-digit',
-      hour: '2-digit',
-      minute: '2-digit',
-      second: '2-digit',
-    });
-  };
 
   // 格式化耗时
   const formatDuration = (ms: number) => {
@@ -217,7 +205,7 @@ const RequestLogs: React.FC = () => {
                     {logs.map((log) => (
                       <tr key={log.id} className="hover:bg-gray-50">
                         <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                          {formatTime(log.created_at)}
+                          {formatDateTime(log.created_at)}
                         </td>
                         <td className="px-6 py-4 whitespace-nowrap">
                           <span className={`px-2 py-1 text-xs font-medium rounded ${getMethodColor(log.method)}`}>
@@ -374,7 +362,7 @@ const RequestLogs: React.FC = () => {
                   </div>
                   <div className="col-span-2">
                     <p className="text-sm font-medium text-gray-500">时间</p>
-                    <p className="mt-1 text-sm text-gray-900">{formatTime(selectedLog.created_at)}</p>
+                    <p className="mt-1 text-sm text-gray-900">{formatDateTime(selectedLog.created_at)}</p>
                   </div>
                 </div>
 

@@ -222,20 +222,7 @@ const BidReview: React.FC = () => {
     setApplyFixStreaming(true);
     setApplyFixDrawerOpen(true);
     try {
-      const apiBase = (window as any).__API_BASE_URL__ || '';
-      const authToken = token || localStorage.getItem('access_token') || '';
-      const response = await fetch(`${apiBase}/api/review/apply-fix-stream/${taskId}`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}),
-        },
-        body: JSON.stringify({
-          chapter_id: '审查修复',
-          current_content: '',
-          issue_ids: selectedIssueIds,
-        }),
-      });
+      const response = await reviewApi.applyFixStream(taskId, selectedIssueIds);
       if (!response.ok) throw new Error(`请求失败: ${response.status}`);
       const reader = response.body?.getReader();
       if (!reader) throw new Error('无法读取响应流');

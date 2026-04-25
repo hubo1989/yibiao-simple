@@ -1492,15 +1492,21 @@ const ContentEdit: React.FC<ContentEditProps> = ({
   const [showExportDialog, setShowExportDialog] = useState(false);
 
   const buildExportOutline = useCallback((items: OutlineItem[]): OutlineItem[] => {
+    const getContent = (item: OutlineItem): string => {
+      if (!item.children || item.children.length === 0) {
+        const leafItem = leafItems.find(leaf => leaf.id === item.id);
+        return leafItem?.content || item.content || '';
+      }
+      return item.content || '';
+    };
     return items.map(item => {
-      const latestContent = getLatestContent(item);
+      const latestContent = getContent(item);
       const exportedItem: OutlineItem = { ...item, content: latestContent };
       if (item.children && item.children.length > 0) {
         exportedItem.children = buildExportOutline(item.children);
       }
       return exportedItem;
     });
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [leafItems]);
 
   if (!outlineData) {
