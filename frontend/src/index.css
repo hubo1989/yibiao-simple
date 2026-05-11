@@ -1,17 +1,50 @@
+/* 设计系统 tokens（CSS 变量） */
+@import './styles/tokens.css';
+/* AI 动效库 */
+@import './styles/animations.css';
+/* Ant Design 暗色主题覆盖 */
+@import './styles/overrides.css';
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
+/* ─── 全局字体导入 ─── */
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
+
 body {
   margin: 0;
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen',
-    'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue',
-    sans-serif;
+  font-family: var(--font-sans);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  background-color: var(--bg-primary);
+  color: var(--text-primary);
 }
 
 code {
-  font-family: source-code-pro, Menlo, Monaco, Consolas, 'Courier New',
-    monospace;
+  font-family: var(--font-mono);
+}
+
+/* ─── 工具类 ─── */
+@layer utilities {
+  .glass {
+    background: rgba(26, 24, 37, 0.7);
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
+    border: 1px solid var(--border);
+  }
+
+  .ai-generated {
+    border-left: 3px solid var(--accent);
+    padding-left: 16px;
+    background: var(--ai-bg);
+    border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+  }
+
+  .text-gradient {
+    background: var(--accent-grad);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
 }

@@ -1,0 +1,241 @@
+/*
+ * 易标AI — AI Native 动效库
+ */
+
+/* ─── AI 呼吸灯（生成中边框脉冲） ─── */
+@keyframes ai-pulse {
+  0%, 100% {
+    border-color: rgba(124, 58, 237, 0.2);
+    box-shadow: 0 0 8px rgba(124, 58, 237, 0.1);
+  }
+  50% {
+    border-color: rgba(124, 58, 237, 0.6);
+    box-shadow: 0 0 24px rgba(124, 58, 237, 0.3);
+  }
+}
+
+.ai-pulse {
+  animation: ai-pulse 2s ease-in-out infinite;
+}
+
+/* ─── AI 打字机光标 ─── */
+@keyframes cursor-blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0; }
+}
+
+.ai-cursor::after {
+  content: '▊';
+  display: inline;
+  color: var(--accent);
+  animation: cursor-blink 0.8s step-end infinite;
+  margin-left: 2px;
+  font-size: 0.9em;
+}
+
+/* ─── AI 流光边框 ─── */
+@keyframes shimmer-border {
+  0% {
+    background-position: -200% center;
+  }
+  100% {
+    background-position: 200% center;
+  }
+}
+
+.ai-shimmer {
+  position: relative;
+}
+.ai-shimmer::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  padding: 1px;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    var(--accent) 25%,
+    var(--accent-blue) 50%,
+    var(--accent) 75%,
+    transparent 100%
+  );
+  background-size: 200% 100%;
+  animation: shimmer-border 3s linear infinite;
+  -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  pointer-events: none;
+}
+
+/* ─── 脉冲指示器（AI 正在思考） ─── */
+@keyframes thinking-dot {
+  0%, 80%, 100% {
+    transform: scale(0.6);
+    opacity: 0.4;
+  }
+  40% {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+.ai-thinking-dots {
+  display: inline-flex;
+  gap: 4px;
+  align-items: center;
+}
+.ai-thinking-dots span {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+  animation: thinking-dot 1.4s ease-in-out infinite;
+}
+.ai-thinking-dots span:nth-child(2) {
+  animation-delay: 0.16s;
+}
+.ai-thinking-dots span:nth-child(3) {
+  animation-delay: 0.32s;
+}
+
+/* ─── 进入动画 ─── */
+@keyframes fade-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+@keyframes slide-up {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes slide-in-right {
+  from {
+    opacity: 0;
+    transform: translateX(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@keyframes scale-in {
+  from {
+    opacity: 0;
+    transform: scale(0.95);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.animate-fade-in {
+  animation: fade-in var(--duration-base) var(--ease-out) forwards;
+}
+.animate-slide-up {
+  animation: slide-up var(--duration-slow) var(--ease-out) forwards;
+}
+.animate-slide-in-right {
+  animation: slide-in-right var(--duration-slow) var(--ease-out) forwards;
+}
+.animate-scale-in {
+  animation: scale-in var(--duration-base) var(--ease-spring) forwards;
+}
+
+/* ─── 成功弹出 ─── */
+@keyframes pop-check {
+  0% {
+    transform: scale(0);
+    opacity: 0;
+  }
+  50% {
+    transform: scale(1.2);
+  }
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+.animate-pop-check {
+  animation: pop-check 0.4s var(--ease-spring) forwards;
+}
+
+/* ─── 进度条增长 ─── */
+@keyframes progress-grow {
+  from { width: 0%; }
+}
+
+.animate-progress {
+  animation: progress-grow 0.6s var(--ease-out) forwards;
+}
+
+/* ─── 浮动光点（登录页背景） ─── */
+@keyframes float-particle {
+  0%, 100% {
+    transform: translateY(0px) translateX(0px);
+    opacity: 0.3;
+  }
+  33% {
+    transform: translateY(-20px) translateX(10px);
+    opacity: 0.6;
+  }
+  66% {
+    transform: translateY(-10px) translateX(-15px);
+    opacity: 0.4;
+  }
+}
+
+/* ─── 极光渐变 ─── */
+@keyframes aurora {
+  0%, 100% {
+    background-position: 0% 50%;
+  }
+  50% {
+    background-position: 100% 50%;
+  }
+}
+
+.bg-aurora {
+  background: linear-gradient(
+    -45deg,
+    #0f0d15,
+    #1a1040,
+    #0f0d15,
+    #15102a,
+    #0f0d15
+  );
+  background-size: 400% 400%;
+  animation: aurora 15s ease infinite;
+}
+
+/* ─── 骨架屏 ─── */
+@keyframes skeleton-shimmer {
+  0% {
+    background-position: -200px 0;
+  }
+  100% {
+    background-position: calc(200px + 100%) 0;
+  }
+}
+
+.skeleton {
+  background: linear-gradient(
+    90deg,
+    var(--bg-surface) 0px,
+    var(--bg-elevated) 40px,
+    var(--bg-surface) 80px
+  );
+  background-size: 200px 100%;
+  animation: skeleton-shimmer 1.5s ease-in-out infinite;
+  border-radius: var(--radius-sm);
+}

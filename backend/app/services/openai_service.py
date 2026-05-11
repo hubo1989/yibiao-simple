@@ -324,19 +324,110 @@ class OpenAIService:
         adjacent_boundary: str,
         tech_requirements: str = "",
         knowledge_context: str = "",
+        previous_chapters_summary: str = "",
     ) -> str:
         """构建章节生成前的响应计划摘要，强化评分响应闭环。"""
-        return (
-            "### 本章响应计划\n"
-            f"- 章节标题：{chapter_title or '未命名章节'}\n"
-            f"- 章节描述：{chapter_description or '无'}\n"
-            f"- 核心评分问题：{chapter_rating_focus or '未指定'}\n"
-            f"- 主职责定位：{chapter_role or '未指定'}\n"
-            f"- 去重边界：{adjacent_boundary or '未指定'}\n"
-            f"- 技术要求上下文长度：{len(tech_requirements or '')}\n"
-            f"- 知识库上下文长度：{len(knowledge_context or '')}\n"
+        plan_lines = [
+            "### 本章响应计划",
+            f"- 章节标题：{chapter_title or '未命名章节'}",
+            f"- 章节描述：{chapter_description or '无'}",
+            f"- 核心评分问题：{chapter_rating_focus or '未指定'}",
+            f"- 主职责定位：{chapter_role or '未指定'}",
+            f"- 去重边界：{adjacent_boundary or '未指定'}",
+            f"- 技术要求上下文长度：{len(tech_requirements or '')}",
+            f"- 知识库上下文长度：{len(knowledge_context or '')}",
+        ]
+
+        if previous_chapters_summary:
+            plan_lines.append("")
+            plan_lines.append("### 前章已覆盖内容")
+            plan_lines.append(previous_chapters_summary)
+            plan_lines.append("注意：前章已覆盖的内容不得重复展开，只可简要衔接。")
+
+        plan_lines.append(
             "写作要求：先回答评分项想看什么，再写方案动作、落地机制、验证方式，最后补充边界和保障。"
         )
+        return "\n".join(plan_lines)
+
+    @staticmethod
+    def _build_chapter_rating_clauses(
+        *,
+        chapter_rating_focus: str,
+        project_response_matrix: str,
+    ) -> str:
+        """从评分聚焦和响应矩阵中提取本章应响应的评分条款清单。"""
+        clauses: list[str] = []
+
+        # 从 chapter_rating_focus 中提取
+        focus_text = (chapter_rating_focus or "").strip()
+        if focus_text:
+            # 尝试解析评分点编号
+            import re
+            # 匹配 "第X条" "评分项X" 等编号模式
+            numbered_items = re.findall(
+                r'(?:第\s*\d+\s*条|[（(]\s*\d+\s*[）)])[^。；\n]*',
+                focus_text
+            )
+            if numbered_items:
+                for idx, item in enumerate(numbered_items, start=1):
+                    clauses.append(f"第{idx}条评分项：{item.strip()}")
+            else:
+                # 按行拆分
+                for line in focus_text.split("\n"):
+                    line = line.strip()
+                    if line:
+                        clauses.append(line)
+
+        # 从 project_response_matrix 中补充
+        matrix_text = (project_response_matrix or "").strip()
+        if matrix_text and not clauses:
+            # 如果 rating_focus 没有解析出条款，从响应矩阵中提取编号行
+            import re
+            numbered_lines = re.findall(
+                r'\[\s*\d+\s*\][^\n]*',
+                matrix_text
+            )
+            for line in numbered_lines:
+                clauses.append(line.strip())
+
+        if not clauses:
+            return ""
+
+        return "\n".join(clauses)
+
+    @staticmethod
+    def _build_previous_summary(previous_summaries: list) -> str:
+        """从已收集的章摘要列表中构建前章摘要文本。"""
+        if not previous_summaries:
+            return ""
+        lines = []
+        for s in previous_summaries:
+            lines.append(
+                f"- [{s.get('id', '?')}] {s.get('title', '未命名')}: {s.get('summary', '')}"
+            )
+        return "\n".join(lines)
+
+    @staticmethod
+    def _append_chapter_summary(
+        previous_summaries: list,
+        chapter_id: str,
+        chapter_title: str,
+        content: str,
+    ) -> None:
+        """将当前章节摘要追加到缓存列表中。
+
+        取内容前 200 字生成简短摘要，纯本地处理，不调 LLM。
+        """
+        # 取前 150 字作为核心内容摘要
+        preview = (content or "").strip()[:150]
+        # 清理换行
+        preview = " ".join(preview.split())
+
+        previous_summaries.append({
+            "id": chapter_id,
+            "title": chapter_title,
+            "summary": preview,
+        })
 
     @staticmethod
     def _build_project_response_matrix(rating_checklist: list[dict[str, Any]] | None) -> str:
@@ -687,6 +778,8 @@ class OpenAIService:
         project_overview: str = "",
         knowledge_context: str = "",
         project_response_matrix: str = "",
+        disqualification_redlines: str = "",
+        terminology_guide: str = "",
     ) -> Dict[str, Any]:
         """
         为目录结构生成内容
@@ -709,7 +802,9 @@ class OpenAIService:
 
             # 递归处理目录
             await self._process_outline_recursive(
-                result_outline['outline'], [], project_overview, knowledge_context, project_response_matrix
+                result_outline['outline'], [], project_overview, knowledge_context,
+                project_response_matrix, disqualification_redlines, terminology_guide,
+                previous_summaries=[]
             )
 
             return result_outline
@@ -724,8 +819,14 @@ class OpenAIService:
         project_overview: str = "",
         knowledge_context: str = "",
         project_response_matrix: str = "",
+        disqualification_redlines: str = "",
+        terminology_guide: str = "",
+        previous_summaries: list = None,
     ):
         """递归处理章节列表"""
+        if previous_summaries is None:
+            previous_summaries = []
+
         for chapter in chapters:
             chapter_id = chapter.get('id', 'unknown')
             chapter_title = chapter.get('title', '未命名章节')
@@ -747,6 +848,9 @@ class OpenAIService:
             current_parent_chapters.append(current_chapter_info)
 
             if is_leaf:
+                # 构建前章摘要
+                prev_summary_text = self._build_previous_summary(previous_summaries)
+
                 # 为叶子节点生成内容，传递同级章节信息
                 content = ""
                 async for chunk in self._generate_chapter_content(
@@ -756,10 +860,17 @@ class OpenAIService:
                     project_overview,
                     knowledge_context,
                     project_response_matrix=project_response_matrix,
+                    disqualification_redlines=disqualification_redlines,
+                    previous_chapters_summary=prev_summary_text,
+                    terminology_guide=terminology_guide,
                 ):
                     content += chunk
                 if content:
                     chapter['content'] = content
+                    # 收集本章摘要供后续章节使用
+                    self._append_chapter_summary(
+                        previous_summaries, chapter_id, chapter_title, content
+                    )
             else:
                 # 递归处理子章节
                 await self._process_outline_recursive(
@@ -768,6 +879,9 @@ class OpenAIService:
                     project_overview,
                     knowledge_context,
                     project_response_matrix,
+                    disqualification_redlines,
+                    terminology_guide,
+                    previous_summaries=previous_summaries,
                 )
     
     async def _generate_chapter_content(
@@ -782,6 +896,9 @@ class OpenAIService:
         chapter_rating_focus: str = "",
         chapter_role: str = "",
         adjacent_boundary: str = "",
+        disqualification_redlines: str = "",
+        previous_chapters_summary: str = "",
+        terminology_guide: str = "",
     ) -> AsyncGenerator[str, None]:
         """
         为单个章节流式生成内容
@@ -796,6 +913,9 @@ class OpenAIService:
             chapter_rating_focus: 当前章节绑定的评分点
             chapter_role: 当前章节职责定位
             adjacent_boundary: 当前章节与相邻章节边界
+            disqualification_redlines: 废标红线条款文本（严禁违反）
+            previous_chapters_summary: 前几章已覆盖内容摘要
+            terminology_guide: 术语使用规范指南
 
         Yields:
             生成的内容流
@@ -808,6 +928,13 @@ class OpenAIService:
             chapter_role = chapter_role or chapter.get('chapter_role', '')
             adjacent_boundary = adjacent_boundary or chapter.get('avoid_overlap', '') or chapter.get('adjacent_boundary', '')
             project_response_matrix = project_response_matrix or chapter.get('project_response_matrix', '')
+
+            # 构建本章评分条款清单
+            chapter_rating_clauses = self._build_chapter_rating_clauses(
+                chapter_rating_focus=chapter_rating_focus,
+                project_response_matrix=project_response_matrix,
+            )
+
             chapter_response_plan = self._build_chapter_response_plan(
                 chapter_title=chapter_title,
                 chapter_description=chapter_description,
@@ -816,6 +943,7 @@ class OpenAIService:
                 adjacent_boundary=adjacent_boundary,
                 tech_requirements=tech_requirements,
                 knowledge_context=knowledge_context,
+                previous_chapters_summary=previous_chapters_summary,
             )
 
             # 使用 PromptService 获取提示词
@@ -830,11 +958,15 @@ class OpenAIService:
                     "project_overview": project_overview,
                     "tech_requirements": tech_requirements,
                     "chapter_rating_focus": chapter_rating_focus,
+                    "chapter_rating_clauses": chapter_rating_clauses,
                     "chapter_role": chapter_role,
                     "adjacent_boundary": adjacent_boundary,
+                    "previous_chapters_summary": previous_chapters_summary,
                     "chapter_response_plan": chapter_response_plan,
                     "project_response_matrix": project_response_matrix,
                     "knowledge_context": knowledge_context,
+                    "disqualification_redlines": disqualification_redlines,
+                    "terminology_guide": terminology_guide,
                     "parent_chapters": parent_chapters or [],
                     "sibling_chapters": [s for s in (sibling_chapters or []) if s.get('id') != chapter_id],
                     "chapter_id": chapter_id,
@@ -851,11 +983,15 @@ class OpenAIService:
                     "project_overview": project_overview,
                     "tech_requirements": tech_requirements,
                     "chapter_rating_focus": chapter_rating_focus,
+                    "chapter_rating_clauses": chapter_rating_clauses,
                     "chapter_role": chapter_role,
                     "adjacent_boundary": adjacent_boundary,
+                    "previous_chapters_summary": previous_chapters_summary,
                     "chapter_response_plan": chapter_response_plan,
                     "project_response_matrix": project_response_matrix,
                     "knowledge_context": knowledge_context,
+                    "disqualification_redlines": disqualification_redlines,
+                    "terminology_guide": terminology_guide,
                     "parent_chapters": parent_chapters or [],
                     "sibling_chapters": [s for s in (sibling_chapters or []) if s.get('id') != chapter_id],
                     "chapter_id": chapter_id,
@@ -1622,6 +1758,41 @@ class OpenAIService:
             full_content += chunk
 
         return full_content
+
+    async def generate_chapter_content_collect(
+        self,
+        chapter: dict,
+        parent_chapters: list | None = None,
+        sibling_chapters: list | None = None,
+        project_overview: str = "",
+        knowledge_context: str = "",
+        tech_requirements: str = "",
+        project_response_matrix: str = "",
+        chapter_rating_focus: str = "",
+        chapter_role: str = "",
+        adjacent_boundary: str = "",
+    ) -> str:
+        """
+        为单个章节生成内容，收集完整结果（非流式）。
+        
+        是 _generate_chapter_content() 的公共封装，
+        供精修流程等需要完整内容的场景使用。
+        """
+        content = ""
+        async for chunk in self._generate_chapter_content(
+            chapter=chapter,
+            parent_chapters=parent_chapters,
+            sibling_chapters=sibling_chapters,
+            project_overview=project_overview,
+            knowledge_context=knowledge_context,
+            tech_requirements=tech_requirements,
+            project_response_matrix=project_response_matrix,
+            chapter_rating_focus=chapter_rating_focus,
+            chapter_role=chapter_role,
+            adjacent_boundary=adjacent_boundary,
+        ):
+            content += chunk
+        return content
 
     async def rewrite_chapter_with_suggestions_stream(
         self,

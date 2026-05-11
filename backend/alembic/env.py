@@ -15,6 +15,21 @@ from app.models.material import MaterialAsset, MaterialRequirement, ChapterMater
 from app.models.version import ProjectVersion  # noqa: F401
 from app.models.operation_log import OperationLog  # noqa: F401
 from app.models.export_template import ExportTemplate  # noqa: F401
+from app.models.api_key_config import ApiKeyConfig  # noqa: F401
+from app.models.comment import Comment  # noqa: F401
+from app.models.proofread_result import ProofreadResult  # noqa: F401
+from app.models.consistency_result import ConsistencyResult  # noqa: F401
+from app.models.global_prompt import GlobalPrompt, GlobalPromptVersion  # noqa: F401
+from app.models.knowledge import KnowledgeDoc, ProjectKnowledgeUsage, KnowledgeDocChunk  # noqa: F401
+from app.models.request_log import RequestLog  # noqa: F401
+from app.models.template import Template  # noqa: F401
+from app.models.bid_review_task import BidReviewTask  # noqa: F401
+from app.models.chapter_template import ChapterTemplate  # noqa: F401
+from app.models.scoring import ScoringCriteria  # noqa: F401
+from app.models.disqualification import DisqualificationCheck  # noqa: F401
+from app.models.ingestion import IngestionTask, MaterialCandidate  # noqa: F401
+from app.models.response_matrix import TenderClause, ResponseMatrixItem
+from app.models.evidence import EvidenceRef  # noqa: F401
 
 # Alembic Config 对象
 config = context.config

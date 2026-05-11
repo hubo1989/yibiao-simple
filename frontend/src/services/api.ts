@@ -19,43 +19,6 @@ import type {
 } from '../types/chapter';
 import type { Comment, CommentListResponse, CommentCreateRequest } from '../types/comment';
 import type { ConsistencyCheckResponse } from '../types/consistency';
-
-// ==================== 全文一致性校验新接口类型 ====================
-
-export interface ConsistencyIssue {
-  severity: 'error' | 'warning' | 'info';
-  category: 'data' | 'terminology' | 'timeline' | 'commitment' | 'scope';
-  description: string;
-  chapter_a: string;
-  chapter_b: string;
-  chapter_id_a?: string;
-  chapter_id_b?: string;
-  detail_a: string;
-  detail_b: string;
-  suggestion: string;
-}
-
-export interface ConsistencyCheckResult {
-  status: string;
-  total_chapters_checked: number;
-  issues: ConsistencyIssue[];
-  summary: string;
-  overall_consistency: 'consistent' | 'minor_issues' | 'major_issues';
-  contradiction_count: number;
-  critical_count: number;
-  created_at?: string;
-  check_id?: string;
-}
-
-export interface ConsistencyHistoryItem {
-  id: string;
-  project_id: string;
-  summary: string;
-  overall_consistency: string;
-  contradiction_count: number;
-  critical_count: number;
-  created_at: string;
-}
 import type {
   RatingChecklistResponse,
   ClauseResponseRequest,
@@ -105,6 +68,43 @@ import type {
   MaterialMatchCandidate,
   MaterialRequirement,
 } from '../types/material';
+
+// ==================== 全文一致性校验新接口类型 ====================
+
+export interface ConsistencyIssue {
+  severity: 'error' | 'warning' | 'info';
+  category: 'data' | 'terminology' | 'timeline' | 'commitment' | 'scope';
+  description: string;
+  chapter_a: string;
+  chapter_b: string;
+  chapter_id_a?: string;
+  chapter_id_b?: string;
+  detail_a: string;
+  detail_b: string;
+  suggestion: string;
+}
+
+export interface ConsistencyCheckResult {
+  status: string;
+  total_chapters_checked: number;
+  issues: ConsistencyIssue[];
+  summary: string;
+  overall_consistency: 'consistent' | 'minor_issues' | 'major_issues';
+  contradiction_count: number;
+  critical_count: number;
+  created_at?: string;
+  check_id?: string;
+}
+
+export interface ConsistencyHistoryItem {
+  id: string;
+  project_id: string;
+  summary: string;
+  overall_consistency: string;
+  contradiction_count: number;
+  critical_count: number;
+  created_at: string;
+}
 
 /**
  * 统一提取 API 错误信息，优先使用后端返回的 detail，否则使用兜底中文消息。

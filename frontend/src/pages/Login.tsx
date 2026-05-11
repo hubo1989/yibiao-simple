@@ -1,12 +1,13 @@
 /**
- * 登录页面
+ * 登录页面 — AI Native 暗色主题
  */
 import React, { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { LockOutlined, UserOutlined } from '@ant-design/icons';
-import { Alert, Button, Checkbox, Form, Input, Typography, message } from 'antd';
+import { Alert, Checkbox, Form, Input, message } from 'antd';
 import { useAuth } from '../contexts/AuthContext';
 import AuthShell from '../components/AuthShell';
+import UIButton from '../components/ui/Button';
 import type { ApiError } from '../utils/error';
 
 export default function Login(): React.ReactElement {
@@ -36,11 +37,11 @@ export default function Login(): React.ReactElement {
 
   return (
     <AuthShell
-      eyebrow="投标协作中台"
-      title="让标书编写从堆任务，变成可追踪的生产流程。"
-      subtitle="拉卡拉标书智能体将文档解析、目录编制、正文协作与审核回溯聚合在同一个企业级工作区里，减少重复沟通与版本失控。"
-      formTitle="登录工作区"
-      formDescription="使用你的正式账户进入系统。当前页面不再展示误导性的演示账号占位信息。"
+      eyebrow="AI 标书协作"
+      title="AI 驱动的标书协作平台"
+      subtitle="从文档解析到内容生成，一站式智能写作工作流。"
+      formTitle="登录"
+      formDescription="使用你的账户进入工作区"
       footerPrompt="还没有账户？"
       footerActionLabel="创建新账户"
       footerActionTo="/register"
@@ -54,7 +55,7 @@ export default function Login(): React.ReactElement {
       >
         {error ? (
           <Alert
-            style={{ marginBottom: 20, borderRadius: 14 }}
+            style={{ marginBottom: 20, borderRadius: 10 }}
             message={error}
             type="error"
             showIcon
@@ -62,7 +63,7 @@ export default function Login(): React.ReactElement {
         ) : null}
 
         <Form.Item
-          label="用户名"
+          label={<span style={{ color: 'var(--text-secondary)' }}>用户名</span>}
           name="username"
           rules={[{ required: true, message: '请输入用户名' }]}
         >
@@ -70,7 +71,7 @@ export default function Login(): React.ReactElement {
         </Form.Item>
 
         <Form.Item
-          label="密码"
+          label={<span style={{ color: 'var(--text-secondary)' }}>密码</span>}
           name="password"
           rules={[{ required: true, message: '请输入密码' }]}
         >
@@ -88,29 +89,47 @@ export default function Login(): React.ReactElement {
           }}
         >
           <Form.Item name="autoLogin" valuePropName="checked" noStyle>
-            <Checkbox>自动登录</Checkbox>
+            <Checkbox style={{ color: 'var(--text-secondary)' }}>记住我</Checkbox>
           </Form.Item>
 
-          <Button
-            type="link"
-            style={{ paddingInline: 0 }}
+          <span
+            style={{
+              color: 'var(--accent-light)',
+              cursor: 'pointer',
+              fontSize: 13,
+            }}
             onClick={() => message.info('忘记密码功能开发中，请联系管理员处理。')}
           >
             忘记密码？
-          </Button>
+          </span>
         </div>
 
-        <Button type="primary" htmlType="submit" block loading={isSubmitting} style={{ height: 48, borderRadius: 14 }}>
-          登录
-        </Button>
+        <UIButton
+          variant="primary"
+          size="lg"
+          loading={isSubmitting}
+          glow
+          type="submit"
+          style={{ width: '100%' }}
+        >
+          登 录
+        </UIButton>
 
-        <Typography.Paragraph style={{ marginTop: 16, marginBottom: 0, color: 'rgba(15, 23, 42, 0.58)' }}>
+        <p
+          style={{
+            marginTop: 20,
+            marginBottom: 0,
+            color: 'var(--text-muted)',
+            fontSize: 13,
+            lineHeight: 1.6,
+          }}
+        >
           如需开通测试或正式账号，请联系系统管理员；若你已有邀请链接，也可直接前往
-          <Link to="/register" style={{ marginLeft: 4 }}>
+          <Link to="/register" style={{ marginLeft: 4, color: 'var(--accent-light)' }}>
             注册页
           </Link>
           。
-        </Typography.Paragraph>
+        </p>
       </Form>
     </AuthShell>
   );
