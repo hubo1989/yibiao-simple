@@ -6,13 +6,21 @@ from fastapi import APIRouter, HTTPException, Depends
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ..models.schemas import ContentGenerationRequest, ChapterContentRequest
+from ..models.schemas import (
+    ChapterContentRequest,
+    ChapterGenerationResult,
+    HallucinationIssueResponse,
+    SourceRef,
+)
 from ..models.user import User
 from ..models.disqualification import DisqualificationCheck
+from ..models.response_matrix import TenderClause, ResponseMatrixItem
+from ..models.evidence import EvidenceRef, EvidenceSourceType
 from ..services.openai_service import OpenAIService
 from ..services.knowledge_retrieval_service import KnowledgeRetrievalService
 from ..services.chart_service import ChartService
 from ..services.terminology_service import TerminologyService
+from ..services.anti_hallucination_service import AntiHallucinationService
 from ..db.database import get_db
 from ..utils.sse import sse_response
 from ..auth.dependencies import require_editor
@@ -49,6 +57,160 @@ async def _get_disqualification_redlines(
         )
 
     return "\n".join(lines)
+
+
+async def _get_response_matrix_context(
+    db: AsyncSession,
+    project_id: uuid.UUID,
+    chapter_id: str | None = None,
+    chapter_title: str | None = None,
+) -> str:
+    """Build prompt context from response-matrix clauses bound to this chapter."""
+    conditions = [ResponseMatrixItem.project_id == project_id]
+    if chapter_id:
+        conditions.append(ResponseMatrixItem.chapter_id == str(chapter_id))
+    elif chapter_title:
+        conditions.append(ResponseMatrixItem.chapter_title == chapter_title)
+    else:
+        return ""
+
+    result = await db.execute(
+        select(ResponseMatrixItem, TenderClause)
+        .join(TenderClause, ResponseMatrixItem.clause_id == TenderClause.id)
+        .where(*conditions)
+        .order_by(TenderClause.clause_type, TenderClause.created_at)
+    )
+    rows = result.all()
+    if not rows:
+        return ""
+
+    lines = ["## 本章节必须响应的招标条款（响应矩阵）"]
+    for idx, (item, clause) in enumerate(rows, start=1):
+        score = f"；分值：{float(clause.score_value):g}" if clause.score_value is not None else ""
+        fatal = "；致命条款/废标风险" if clause.is_fatal else ""
+        lines.append(
+            f"{idx}. [{clause.clause_type.value}] {clause.title or clause.content[:60]}"
+            f"{score}{fatal}\n"
+            f"   要求：{clause.content or clause.raw_requirement}\n"
+            f"   当前状态：{item.response_status.value}；风险备注：{item.risk_note or '无'}"
+        )
+    return "\n".join(lines)
+
+
+def _issue_to_response(issue) -> HallucinationIssueResponse:
+    """Convert anti-hallucination dataclass output to API schema."""
+    return HallucinationIssueResponse(
+        severity=issue.severity,
+        category=issue.category,
+        text=issue.text,
+        reason=issue.reason,
+        suggestion=issue.suggestion,
+    )
+
+
+async def _get_response_matrix_source_refs(
+    db: AsyncSession,
+    project_id: uuid.UUID,
+    chapter_id: str | None = None,
+    chapter_title: str | None = None,
+) -> list[dict]:
+    """Build SourceRef-like dicts from tender clauses bound by the response matrix."""
+    conditions = [ResponseMatrixItem.project_id == project_id]
+    if chapter_id:
+        conditions.append(ResponseMatrixItem.chapter_id == str(chapter_id))
+    elif chapter_title:
+        conditions.append(ResponseMatrixItem.chapter_title == chapter_title)
+    else:
+        return []
+
+    result = await db.execute(
+        select(ResponseMatrixItem, TenderClause)
+        .join(TenderClause, ResponseMatrixItem.clause_id == TenderClause.id)
+        .where(*conditions)
+        .order_by(TenderClause.clause_type, TenderClause.created_at)
+    )
+    refs: list[dict] = []
+    for item, clause in result.all():
+        refs.append({
+            "ref_id": str(clause.id),
+            "source_type": EvidenceSourceType.tender_document.value,
+            "source_id": str(clause.id),
+            "source_title": clause.title or clause.clause_type.value,
+            "location": clause.source_location or (f"page {clause.source_page}" if clause.source_page else "响应矩阵"),
+            "quote": clause.content or clause.raw_requirement or item.evidence_summary or "",
+            "relation": "响应矩阵绑定的招标条款",
+        })
+    return refs
+
+
+def _knowledge_results_to_source_refs(results: list[dict]) -> list[dict]:
+    refs: list[dict] = []
+    for r in results or []:
+        source_id = str(r.get("doc_id") or r.get("id") or r.get("material_id") or "")
+        title = str(r.get("title") or r.get("name") or "参考文档")
+        quote = str(r.get("content") or r.get("content_preview") or r.get("text") or "")
+        if not quote and not title:
+            continue
+        refs.append({
+            "ref_id": source_id,
+            "source_type": EvidenceSourceType.knowledge_doc.value,
+            "source_id": source_id,
+            "source_title": title,
+            "location": str(r.get("location") or r.get("source_location") or "知识库检索"),
+            "quote": quote,
+            "relation": "知识库检索命中的参考资料",
+        })
+    return refs
+
+
+async def save_evidence_refs(
+    db: AsyncSession,
+    project_id: uuid.UUID,
+    chapter_id: str | uuid.UUID | None,
+    source_refs: list[dict],
+) -> list[EvidenceRef]:
+    """Persist SourceRef-like dicts as EvidenceRef rows for a generated chapter."""
+    if not source_refs:
+        return []
+    chapter_uuid = None
+    if chapter_id:
+        try:
+            chapter_uuid = chapter_id if isinstance(chapter_id, uuid.UUID) else uuid.UUID(str(chapter_id))
+        except (TypeError, ValueError):
+            chapter_uuid = None
+
+    rows: list[EvidenceRef] = []
+    valid_types = {e.value for e in EvidenceSourceType}
+    for ref in source_refs:
+        source_type = str(ref.get("source_type") or EvidenceSourceType.manual_input.value)
+        if source_type not in valid_types:
+            source_type = EvidenceSourceType.manual_input.value
+        row = EvidenceRef(
+            project_id=project_id,
+            chapter_id=chapter_uuid,
+            source_type=EvidenceSourceType(source_type),
+            source_id=str(ref.get("source_id") or ref.get("ref_id") or ""),
+            source_title=str(ref.get("source_title") or ref.get("title") or ""),
+            source_location=str(ref.get("location") or ref.get("source_location") or ""),
+            quote=str(ref.get("quote") or ""),
+            relation=str(ref.get("relation") or ""),
+            metadata_json={"ref_id": str(ref.get("ref_id") or "")},
+        )
+        db.add(row)
+        rows.append(row)
+    await db.commit()
+    return rows
+
+
+def _source_ref_schema(ref: dict) -> SourceRef:
+    return SourceRef(
+        ref_id=str(ref.get("ref_id") or ref.get("source_id") or ""),
+        source_type=str(ref.get("source_type") or ""),
+        source_id=str(ref.get("source_id")) if ref.get("source_id") is not None else None,
+        location=str(ref.get("location") or ref.get("source_location") or ""),
+        quote=str(ref.get("quote") or ""),
+        relation=str(ref.get("relation") or ""),
+    )
 
 
 async def _get_terminology_guide(
@@ -161,11 +323,19 @@ async def generate_chapter_content(
         # 项目级上下文：废标红线 + 术语库
         disqualification_redlines = ""
         terminology_guide = ""
+        response_matrix_context = ""
         if request.project_id:
             try:
                 project_uuid = uuid.UUID(request.project_id)
             except ValueError:
                 raise HTTPException(status_code=400, detail="无效的项目ID格式")
+            chapter_title = str(request.chapter.get("title") or request.chapter.get("id") or "")
+            response_matrix_context = await _get_response_matrix_context(
+                db,
+                project_uuid,
+                chapter_id=str(request.chapter.get("id") or ""),
+                chapter_title=chapter_title,
+            )
             disqualification_redlines = await _get_disqualification_redlines(db, project_uuid)
             terminology_guide = await _get_terminology_guide(
                 project_title=str(request.chapter.get("title", "")),
@@ -211,7 +381,7 @@ async def generate_chapter_content(
                 project_response_matrix=openai_service._build_project_response_matrix(
                     request.rating_response_checklist
                 ),
-                knowledge_context=knowledge_context,
+                knowledge_context="\n\n".join(part for part in [knowledge_context, response_matrix_context] if part),
                 disqualification_redlines=disqualification_redlines,
                 terminology_guide=terminology_guide,
             ):
@@ -240,6 +410,117 @@ async def generate_chapter_content(
                 content += "\n\n" + charts_block
 
         return {"success": True, "content": content}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"章节内容生成失败: {e}") from e
+
+
+@router.post("/generate-chapter-v2", response_model=ChapterGenerationResult)
+async def generate_chapter_content_v2(
+    request: ChapterContentRequest,
+    current_user: Annotated[User, Depends(require_editor)] = None,
+    db: AsyncSession = Depends(get_db),
+):
+    """生成章节内容，并返回证据链与反幻觉检查结果。"""
+    try:
+        openai_service = OpenAIService(db=db)
+        if request.provider_config_id:
+            configured = await openai_service.use_config_by_id(request.provider_config_id)
+            if not configured:
+                raise HTTPException(status_code=404, detail="所选 Provider 配置不存在")
+        else:
+            await openai_service._ensure_initialized()
+
+        if not openai_service.api_key:
+            raise HTTPException(status_code=400, detail="请先配置OpenAI API密钥")
+        if request.model_name:
+            openai_service.set_model(request.model_name)
+
+        project_uuid: uuid.UUID | None = None
+        chapter_id = str(request.chapter.get("id") or "")
+        chapter_title = str(request.chapter.get("title") or chapter_id or "")
+        response_matrix_context = ""
+        disqualification_redlines = ""
+        terminology_guide = ""
+        source_ref_dicts: list[dict] = []
+
+        if request.project_id:
+            try:
+                project_uuid = uuid.UUID(request.project_id)
+            except ValueError:
+                raise HTTPException(status_code=400, detail="无效的项目ID格式")
+            response_matrix_context = await _get_response_matrix_context(
+                db,
+                project_uuid,
+                chapter_id=chapter_id,
+                chapter_title=chapter_title,
+            )
+            source_ref_dicts.extend(await _get_response_matrix_source_refs(
+                db,
+                project_uuid,
+                chapter_id=chapter_id,
+                chapter_title=chapter_title,
+            ))
+            disqualification_redlines = await _get_disqualification_redlines(db, project_uuid)
+            terminology_guide = await _get_terminology_guide(
+                project_title=chapter_title,
+                project_description=request.project_overview or "",
+            )
+
+        content = ""
+        if request.rewrite_suggestions:
+            content = await openai_service.rewrite_chapter_with_suggestions(
+                chapter_title=chapter_title or "未命名章节",
+                chapter_content=request.source_chapter_content or "",
+                suggestions=request.rewrite_suggestions,
+            )
+        else:
+            knowledge_context = ""
+            if request.use_knowledge and db:
+                try:
+                    retrieval_service = KnowledgeRetrievalService(db)
+                    results = await retrieval_service.retrieve_for_chapter(
+                        chapter_title=chapter_title,
+                        chapter_description=str(request.chapter.get("description", "")),
+                        project_overview=(request.project_overview or "")[:500],
+                        user_id=current_user.id if current_user else None,
+                        top_k=5,
+                    )
+                    source_ref_dicts.extend(_knowledge_results_to_source_refs(results))
+                    if results:
+                        knowledge_context = "\n\n".join(
+                            f"【{r.get('title', '参考文档')}】\n{r.get('content') or r.get('content_preview', '')}"
+                            for r in results
+                            if r.get("content") or r.get("content_preview")
+                        )
+                except Exception:
+                    pass
+
+            async for chunk in openai_service._generate_chapter_content(
+                chapter=request.chapter,
+                parent_chapters=request.parent_chapters,
+                sibling_chapters=request.sibling_chapters,
+                project_overview=request.project_overview,
+                project_response_matrix=openai_service._build_project_response_matrix(
+                    request.rating_response_checklist
+                ),
+                knowledge_context="\n\n".join(part for part in [knowledge_context, response_matrix_context] if part),
+                disqualification_redlines=disqualification_redlines,
+                terminology_guide=terminology_guide,
+            ):
+                content += chunk
+
+        if project_uuid:
+            await save_evidence_refs(db, project_uuid, chapter_id, source_ref_dicts)
+
+        issues = AntiHallucinationService().scan_text(content, source_ref_dicts)
+        return ChapterGenerationResult(
+            content=content,
+            source_refs=[_source_ref_schema(ref) for ref in source_ref_dicts],
+            hallucination_issues=[_issue_to_response(issue) for issue in issues],
+        )
 
     except HTTPException:
         raise
@@ -278,6 +559,7 @@ async def generate_chapter_content_stream(
                 # 项目级上下文：废标红线 + 术语库
                 disqualification_redlines = ""
                 terminology_guide = ""
+                response_matrix_context = ""
                 if request.project_id:
                     try:
                         project_uuid = uuid.UUID(request.project_id)
@@ -285,6 +567,13 @@ async def generate_chapter_content_stream(
                         yield f"data: {json.dumps({'status': 'error', 'message': '无效的项目ID格式'}, ensure_ascii=False)}\n\n"
                         yield "data: [DONE]\n\n"
                         return
+                    chapter_title = str(request.chapter.get("title") or request.chapter.get("id") or "")
+                    response_matrix_context = await _get_response_matrix_context(
+                        db,
+                        project_uuid,
+                        chapter_id=str(request.chapter.get("id") or ""),
+                        chapter_title=chapter_title,
+                    )
                     disqualification_redlines = await _get_disqualification_redlines(db, project_uuid)
                     terminology_guide = await _get_terminology_guide(
                         project_title=str(request.chapter.get("title", "")),
@@ -333,7 +622,7 @@ async def generate_chapter_content_stream(
                         project_response_matrix=openai_service._build_project_response_matrix(
                             request.rating_response_checklist
                         ),
-                        knowledge_context=knowledge_context,
+                        knowledge_context="\n\n".join(part for part in [knowledge_context, response_matrix_context] if part),
                         disqualification_redlines=disqualification_redlines,
                         terminology_guide=terminology_guide,
                     ):

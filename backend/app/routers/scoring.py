@@ -20,6 +20,7 @@ from ..models.user import User
 from ..db.database import get_db
 from ..services.openai_service import OpenAIService
 from ..services.prompt_service import PromptService
+from ..services import response_matrix_service
 from ..auth.dependencies import require_editor
 
 router = APIRouter(prefix="/api/scoring", tags=["评分标准"])
@@ -206,6 +207,7 @@ async def extract_scoring_criteria(
 
     await db.flush()
     await db.commit()
+    matrix_summary = await response_matrix_service.rebuild_from_project(db, project_uuid)
 
     return {
         "success": True,
@@ -215,6 +217,7 @@ async def extract_scoring_criteria(
         "commercial_score": data.get("commercial_score"),
         "other_score": data.get("other_score"),
         "items": [_to_item(sc) for sc in created],
+        "response_matrix_summary": matrix_summary.model_dump(),
     }
 
 

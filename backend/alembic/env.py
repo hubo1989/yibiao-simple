@@ -30,6 +30,7 @@ from app.models.disqualification import DisqualificationCheck  # noqa: F401
 from app.models.ingestion import IngestionTask, MaterialCandidate  # noqa: F401
 from app.models.response_matrix import TenderClause, ResponseMatrixItem
 from app.models.evidence import EvidenceRef  # noqa: F401
+from app.models.bid_agent import BidAgentRun, BidAgentStep  # noqa: F401
 
 # Alembic Config 对象
 config = context.config

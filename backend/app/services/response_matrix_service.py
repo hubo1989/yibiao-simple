@@ -376,3 +376,32 @@ async def rebuild(
 
     # Return summary
     return await summarize(db, project_id)
+
+
+async def rebuild_from_project(
+    db: AsyncSession,
+    project_id: uuid.UUID,
+) -> ResponseMatrixSummary:
+    """Compatibility entrypoint used by project workflows to refresh the matrix."""
+    return await rebuild(db, project_id)
+
+
+async def preflight(
+    db: AsyncSession,
+    project_id: uuid.UUID,
+) -> dict:
+    """Return export readiness summary and human-readable blockers."""
+    summary = await summarize(db, project_id)
+    blockers: list[str] = []
+    if summary.fatal_missing > 0:
+        blockers.append(f"存在 {summary.fatal_missing} 项致命条款未覆盖")
+    if summary.missing > 0:
+        blockers.append(f"存在 {summary.missing} 项条款缺失或未开始响应")
+    if summary.risk > 0:
+        blockers.append(f"存在 {summary.risk} 项风险响应")
+
+    return {
+        "ready": not blockers,
+        "summary": summary,
+        "blockers": blockers,
+    }

@@ -349,3 +349,69 @@ class TestHelpers:
         d = _item_to_dict(item)
         assert d["response_status"] == "covered"
         assert d["chapter_id"] == "ch-1"
+
+
+class TestWorkflowHelpers:
+    @pytest.mark.asyncio
+    async def test_preflight_reports_blockers(self):
+        from app.services.response_matrix_service import preflight
+        from app.schemas.response_matrix import ResponseMatrixSummary
+
+        mock_db = AsyncMock()
+        with patch(
+            "app.services.response_matrix_service.summarize",
+            AsyncMock(return_value=ResponseMatrixSummary(missing=2, risk=1, fatal_missing=1)),
+        ):
+            result = await preflight(mock_db, uuid.uuid4())
+
+        assert result["ready"] is False
+        assert len(result["blockers"]) == 3
+        assert result["summary"].fatal_missing == 1
+
+    @pytest.mark.asyncio
+    async def test_rebuild_from_project_delegates_to_rebuild(self):
+        from app.services.response_matrix_service import rebuild_from_project
+        from app.schemas.response_matrix import ResponseMatrixSummary
+
+        mock_db = AsyncMock()
+        pid = uuid.uuid4()
+        with patch(
+            "app.services.response_matrix_service.rebuild",
+            AsyncMock(return_value=ResponseMatrixSummary(total_clauses=3)),
+        ) as mocked:
+            summary = await rebuild_from_project(mock_db, pid)
+
+        mocked.assert_awaited_once_with(mock_db, pid)
+        assert summary.total_clauses == 3
+
+    @pytest.mark.asyncio
+    async def test_content_response_matrix_context(self):
+        from app.routers.content import _get_response_matrix_context
+        from app.models.response_matrix import TenderClause, ResponseMatrixItem, ClauseType, ResponseStatus
+
+        pid = uuid.uuid4()
+        clause = TenderClause(
+            project_id=pid,
+            clause_type=ClauseType.scoring,
+            title="实施方案",
+            content="详细说明实施计划",
+            score_value=10,
+        )
+        clause.id = uuid.uuid4()
+        item = ResponseMatrixItem(
+            project_id=pid,
+            clause_id=clause.id,
+            chapter_id="ch-1",
+            chapter_title="实施方案",
+            response_status=ResponseStatus.covered,
+        )
+        result = MagicMock()
+        result.all.return_value = [(item, clause)]
+        mock_db = AsyncMock()
+        mock_db.execute = AsyncMock(return_value=result)
+
+        context = await _get_response_matrix_context(mock_db, pid, chapter_id="ch-1")
+
+        assert "响应矩阵" in context
+        assert "实施方案" in context
+        assert "分值：10" in context

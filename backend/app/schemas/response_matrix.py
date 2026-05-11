@@ -59,3 +59,9 @@ class UpdateMatrixItemRequest(BaseModel):
 class RebuildMatrixRequest(BaseModel):
     model_name: str | None = None
     provider_config_id: str | None = None
+
+
+class ResponseMatrixPreflight(BaseModel):
+    ready: bool = False
+    summary: ResponseMatrixSummary = Field(default_factory=ResponseMatrixSummary)
+    blockers: list[str] = Field(default_factory=list)

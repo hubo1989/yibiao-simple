@@ -22,6 +22,7 @@ from ..schemas.response_matrix import (
     BindClauseRequest,
     UpdateMatrixItemRequest,
     RebuildMatrixRequest,
+    ResponseMatrixPreflight,
 )
 from ..services import response_matrix_service as svc
 
@@ -97,6 +98,17 @@ async def get_matrix_summary(
     """获取响应矩阵摘要"""
     await _verify_project_access(project_id, current_user.id, db)
     return await svc.summarize(db, project_id)
+
+
+@router.get("/{project_id}/preflight", response_model=ResponseMatrixPreflight)
+async def get_matrix_preflight(
+    project_id: uuid.UUID,
+    current_user: Annotated[User, Depends(require_editor)] = None,
+    db: AsyncSession = Depends(get_db),
+) -> ResponseMatrixPreflight:
+    """导出前检查响应矩阵：返回摘要和阻塞项。"""
+    await _verify_project_access(project_id, current_user.id, db)
+    return ResponseMatrixPreflight(**await svc.preflight(db, project_id))
 
 
 @router.get("/{project_id}/clauses", response_model=list[TenderClauseResponse])

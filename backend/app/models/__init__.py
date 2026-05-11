@@ -20,3 +20,4 @@ from .disqualification import DisqualificationCheck
 from .ingestion import IngestionTask, MaterialCandidate
 from .response_matrix import TenderClause, ResponseMatrixItem, ClauseType, ResponseStatus
 from .evidence import EvidenceRef, EvidenceSourceType
+from .bid_agent import BidAgentRun, BidAgentStep, BidAgentRunStatus, BidAgentStepStatus

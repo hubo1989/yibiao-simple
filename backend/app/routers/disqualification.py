@@ -17,6 +17,7 @@ from ..auth.dependencies import require_editor
 from ..db.database import get_db
 from ..services.openai_service import OpenAIService
 from ..services.prompt_service import PromptService
+from ..services import response_matrix_service
 from ..models.disqualification import DisqualificationCheck
 from ..models.project import Project, project_members
 from ..models.user import User
@@ -213,6 +214,7 @@ async def extract_disqualification_items(
     await db.commit()
     for item in new_items:
         await db.refresh(item)
+    await response_matrix_service.rebuild_from_project(db, project_uuid)
 
     return [_item_to_response(item) for item in new_items]
 
