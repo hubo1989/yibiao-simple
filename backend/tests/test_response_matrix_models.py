@@ -360,7 +360,7 @@ class TestWorkflowHelpers:
         mock_db = AsyncMock()
         with patch(
             "app.services.response_matrix_service.summarize",
-            AsyncMock(return_value=ResponseMatrixSummary(missing=2, risk=1, fatal_missing=1)),
+            AsyncMock(return_value=ResponseMatrixSummary(total_clauses=4, missing=2, risk=1, fatal_missing=1)),
         ):
             result = await preflight(mock_db, uuid.uuid4())
 

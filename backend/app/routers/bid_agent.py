@@ -92,7 +92,7 @@ async def generate_draft(
     db: AsyncSession = Depends(get_db),
 ) -> BidAgentRunResponse:
     """Create and synchronously execute a deterministic draft-generation MVP run."""
-    await _verify_project_access(project_id, current_user.id, db)
+    await _verify_project_access(project_id, current_user.id, db, require_write=True)
     run = await bid_agent_service.create_run(db, project_id, current_user.id, goal="generate_draft")
     run = await bid_agent_service.execute_generate_draft(db, run.id)
     return _run_response(run)
@@ -105,7 +105,7 @@ async def fix_risks(
     db: AsyncSession = Depends(get_db),
 ) -> BidAgentRunResponse:
     """Create and synchronously execute quality checks for risk-fix workflow."""
-    await _verify_project_access(project_id, current_user.id, db)
+    await _verify_project_access(project_id, current_user.id, db, require_write=True)
     run = await bid_agent_service.create_run(db, project_id, current_user.id, goal="fix_risks")
     run = await bid_agent_service.execute_generate_draft(db, run.id)
     return _run_response(run)

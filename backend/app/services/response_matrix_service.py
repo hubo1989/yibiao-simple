@@ -17,6 +17,7 @@ from ..models.response_matrix import (
 from ..models.scoring import ScoringCriteria
 from ..models.disqualification import DisqualificationCheck
 from ..models.chapter import Chapter
+from ..models.project import Project
 from ..schemas.response_matrix import ResponseMatrixSummary
 
 logger = logging.getLogger(__name__)
@@ -120,6 +121,26 @@ async def extract_clauses_from_analysis(
         db.add(tc)
         created.append(tc)
 
+    if not created:
+        project_result = await db.execute(select(Project).where(Project.id == project_id))
+        project = project_result.scalar_one_or_none()
+        requirements = (project.tech_requirements or project.file_content or "") if project else ""
+        lines = [line.strip(" -•\t") for line in requirements.splitlines() if line.strip()]
+        candidate_lines = [line for line in lines if any(key in line for key in ("评分", "要求", "必须", "需", "应", "不得", "否决", "废标"))]
+        for index, line in enumerate((candidate_lines or lines)[:20], start=1):
+            clause_type = ClauseType.disqualification if any(key in line for key in ("废标", "否决", "不得")) else ClauseType.technical
+            tc = TenderClause(
+                project_id=project_id,
+                clause_type=clause_type,
+                title=line[:120],
+                content=line,
+                raw_requirement=line,
+                is_fatal=clause_type == ClauseType.disqualification,
+                metadata_json={"source": "project_tech_requirements_fallback", "index": index},
+            )
+            db.add(tc)
+            created.append(tc)
+
     await db.flush()
     return created
 
@@ -205,7 +226,9 @@ async def auto_bind_to_chapters(
                 clause_id=tc.id,
                 chapter_id=str(best_chapter.id),
                 chapter_title=best_chapter.title,
-                response_status=ResponseStatus.covered if tc.clause_type == ClauseType.scoring else ResponseStatus.not_started,
+                # Auto-binding only identifies the likely chapter. Actual coverage is
+                # upgraded after generated content is checked against the clause.
+                response_status=ResponseStatus.partial if tc.clause_type == ClauseType.scoring else ResponseStatus.not_started,
                 confidence="high" if best_score >= 6 else "medium" if best_score >= 4 else "low",
             )
             db.add(item)
@@ -393,12 +416,15 @@ async def preflight(
     """Return export readiness summary and human-readable blockers."""
     summary = await summarize(db, project_id)
     blockers: list[str] = []
-    if summary.fatal_missing > 0:
-        blockers.append(f"存在 {summary.fatal_missing} 项致命条款未覆盖")
-    if summary.missing > 0:
-        blockers.append(f"存在 {summary.missing} 项条款缺失或未开始响应")
-    if summary.risk > 0:
-        blockers.append(f"存在 {summary.risk} 项风险响应")
+    if summary.total_clauses == 0:
+        blockers.append("未提取到任何招标响应条款，请先完成评分项/废标项/技术要求提取")
+    else:
+        if summary.fatal_missing > 0:
+            blockers.append(f"存在 {summary.fatal_missing} 项致命条款未覆盖")
+        if summary.missing > 0:
+            blockers.append(f"存在 {summary.missing} 项条款缺失或未开始响应")
+        if summary.risk > 0:
+            blockers.append(f"存在 {summary.risk} 项风险响应")
 
     return {
         "ready": not blockers,

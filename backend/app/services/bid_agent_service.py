@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..models.bid_agent import BidAgentRun, BidAgentRunStatus, BidAgentStep, BidAgentStepStatus
 from ..models.chapter import Chapter, ChapterStatus
 from ..models.project import Project
+from ..models.response_matrix import ResponseMatrixItem, ResponseStatus, TenderClause
 from . import response_matrix_service
 from .anti_hallucination_service import AntiHallucinationService
 from .openai_service import OpenAIService
@@ -199,6 +200,62 @@ async def get_leaf_chapters(db: AsyncSession, project_id: uuid.UUID) -> list[Cha
     return [c for c in chapters if c.id not in parent_ids]
 
 
+async def update_response_matrix_after_chapter_generation(
+    db: AsyncSession,
+    project_id: uuid.UUID,
+    chapter: Chapter,
+    content: str,
+    source_refs: list[dict[str, Any]],
+    hallucination_issues: list[Any],
+) -> dict[str, int]:
+    """Upgrade/downgrade matrix item status based on generated content and evidence.
+
+    Auto-bind only establishes likely ownership. This pass records whether the
+    generated chapter actually mentions/supports each bound clause.
+    """
+    result = await db.execute(
+        select(ResponseMatrixItem, TenderClause)
+        .join(TenderClause, ResponseMatrixItem.clause_id == TenderClause.id)
+        .where(
+            ResponseMatrixItem.project_id == project_id,
+            ResponseMatrixItem.chapter_id == str(chapter.id),
+            TenderClause.project_id == project_id,
+        )
+    )
+    content_lower = (content or "").lower()
+    evidence_text = " ".join(
+        str(ref.get("quote") or "") + " " + str(ref.get("source_title") or "")
+        for ref in source_refs
+    ).lower()
+    critical_count = sum(1 for issue in hallucination_issues if getattr(issue, "severity", "") == "critical")
+    updated = covered = risk = missing = 0
+    for item, clause in result.all():
+        clause_text = " ".join(part for part in [clause.title, clause.content, clause.raw_requirement] if part)
+        keywords = []
+        if clause.metadata_json:
+            keywords = [str(k).lower() for k in clause.metadata_json.get("keywords", []) if str(k).strip()]
+        candidates = [w.lower() for w in clause_text.replace("，", " ").replace("。", " ").split() if len(w) >= 2][:12]
+        hit = any(kw and kw in content_lower for kw in keywords) or any(w in content_lower for w in candidates)
+        evidence_hit = bool(evidence_text and any(w in evidence_text for w in candidates[:8]))
+        if critical_count:
+            item.response_status = ResponseStatus.risk
+            item.risk_note = f"章节生成后仍存在 {critical_count} 项无证据关键表述"
+            risk += 1
+        elif hit or evidence_hit:
+            item.response_status = ResponseStatus.covered
+            item.response_summary = f"已在章节《{chapter.title}》生成内容中响应该条款"
+            item.evidence_summary = "已关联证据引用" if source_refs else "基于章节正文匹配"
+            item.risk_note = ""
+            covered += 1
+        else:
+            item.response_status = ResponseStatus.missing if clause.is_fatal else ResponseStatus.partial
+            item.risk_note = "章节已生成，但未在正文中明显覆盖该条款"
+            missing += 1
+        updated += 1
+    await db.flush()
+    return {"updated": updated, "covered": covered, "risk": risk, "missing": missing}
+
+
 async def generate_chapter_with_evidence(
     db: AsyncSession,
     project_id: uuid.UUID,
@@ -236,6 +293,9 @@ async def generate_chapter_with_evidence(
     chapter.status = ChapterStatus.GENERATED
     await save_evidence_refs(db, project_id, chapter.id, source_refs)
     issues = AntiHallucinationService().scan_text(content, source_refs)
+    matrix_update = await update_response_matrix_after_chapter_generation(
+        db, project_id, chapter, content, source_refs, issues
+    )
     await db.flush()
     return {
         "chapter_id": str(chapter.id),
@@ -243,6 +303,7 @@ async def generate_chapter_with_evidence(
         "content_length": len(content),
         "evidence_ref_count": len(source_refs),
         "hallucination_issue_count": len(issues),
+        "response_matrix_update": matrix_update,
     }
 
 
