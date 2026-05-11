@@ -14,6 +14,7 @@ from ..models.schemas import (
 )
 from ..models.user import User
 from ..models.disqualification import DisqualificationCheck
+from ..models.project import project_members
 from ..models.response_matrix import TenderClause, ResponseMatrixItem
 from ..models.evidence import EvidenceRef, EvidenceSourceType
 from ..services.openai_service import OpenAIService
@@ -28,6 +29,17 @@ from ..auth.dependencies import require_editor
 import json
 
 router = APIRouter(prefix="/api/content", tags=["内容管理"])
+
+
+async def _verify_project_access(project_id: uuid.UUID, user_id: uuid.UUID, db: AsyncSession) -> None:
+    result = await db.execute(
+        select(project_members.c.role).where(
+            (project_members.c.project_id == project_id) &
+            (project_members.c.user_id == user_id)
+        )
+    )
+    if result.scalar_one_or_none() is None:
+        raise HTTPException(status_code=404, detail="项目不存在或您没有访问权限")
 
 
 async def _get_disqualification_redlines(
@@ -81,6 +93,14 @@ async def _get_response_matrix_context(
         .order_by(TenderClause.clause_type, TenderClause.created_at)
     )
     rows = result.all()
+    if not rows and chapter_id and chapter_title:
+        fallback = await db.execute(
+            select(ResponseMatrixItem, TenderClause)
+            .join(TenderClause, ResponseMatrixItem.clause_id == TenderClause.id)
+            .where(ResponseMatrixItem.project_id == project_id, ResponseMatrixItem.chapter_title == chapter_title)
+            .order_by(TenderClause.clause_type, TenderClause.created_at)
+        )
+        rows = fallback.all()
     if not rows:
         return ""
 
@@ -129,8 +149,18 @@ async def _get_response_matrix_source_refs(
         .where(*conditions)
         .order_by(TenderClause.clause_type, TenderClause.created_at)
     )
+    rows = result.all()
+    if not rows and chapter_id and chapter_title:
+        fallback = await db.execute(
+            select(ResponseMatrixItem, TenderClause)
+            .join(TenderClause, ResponseMatrixItem.clause_id == TenderClause.id)
+            .where(ResponseMatrixItem.project_id == project_id, ResponseMatrixItem.chapter_title == chapter_title)
+            .order_by(TenderClause.clause_type, TenderClause.created_at)
+        )
+        rows = fallback.all()
+
     refs: list[dict] = []
-    for item, clause in result.all():
+    for item, clause in rows:
         refs.append({
             "ref_id": str(clause.id),
             "source_type": EvidenceSourceType.tender_document.value,
@@ -179,21 +209,38 @@ async def save_evidence_refs(
         except (TypeError, ValueError):
             chapter_uuid = None
 
+    # Regeneration replaces chapter-scoped generated refs to avoid stale/duplicated evidence.
+    if chapter_uuid:
+        from sqlalchemy import delete
+        await db.execute(
+            delete(EvidenceRef).where(
+                EvidenceRef.project_id == project_id,
+                EvidenceRef.chapter_id == chapter_uuid,
+            )
+        )
+
     rows: list[EvidenceRef] = []
+    seen: set[tuple[str, str, str]] = set()
     valid_types = {e.value for e in EvidenceSourceType}
     for ref in source_refs:
         source_type = str(ref.get("source_type") or EvidenceSourceType.manual_input.value)
         if source_type not in valid_types:
             source_type = EvidenceSourceType.manual_input.value
+        source_id = str(ref.get("source_id") or ref.get("ref_id") or "")
+        quote = str(ref.get("quote") or "")[:4000]
+        dedup_key = (source_type, source_id, quote)
+        if dedup_key in seen:
+            continue
+        seen.add(dedup_key)
         row = EvidenceRef(
             project_id=project_id,
             chapter_id=chapter_uuid,
             source_type=EvidenceSourceType(source_type),
-            source_id=str(ref.get("source_id") or ref.get("ref_id") or ""),
-            source_title=str(ref.get("source_title") or ref.get("title") or ""),
-            source_location=str(ref.get("location") or ref.get("source_location") or ""),
-            quote=str(ref.get("quote") or ""),
-            relation=str(ref.get("relation") or ""),
+            source_id=source_id[:255],
+            source_title=str(ref.get("source_title") or ref.get("title") or "")[:500],
+            source_location=str(ref.get("location") or ref.get("source_location") or "")[:255],
+            quote=quote,
+            relation=str(ref.get("relation") or "")[:4000],
             metadata_json={"ref_id": str(ref.get("ref_id") or "")},
         )
         db.add(row)
@@ -329,6 +376,7 @@ async def generate_chapter_content(
                 project_uuid = uuid.UUID(request.project_id)
             except ValueError:
                 raise HTTPException(status_code=400, detail="无效的项目ID格式")
+            await _verify_project_access(project_uuid, current_user.id, db)
             chapter_title = str(request.chapter.get("title") or request.chapter.get("id") or "")
             response_matrix_context = await _get_response_matrix_context(
                 db,
@@ -451,6 +499,7 @@ async def generate_chapter_content_v2(
                 project_uuid = uuid.UUID(request.project_id)
             except ValueError:
                 raise HTTPException(status_code=400, detail="无效的项目ID格式")
+            await _verify_project_access(project_uuid, current_user.id, db)
             response_matrix_context = await _get_response_matrix_context(
                 db,
                 project_uuid,
@@ -565,6 +614,12 @@ async def generate_chapter_content_stream(
                         project_uuid = uuid.UUID(request.project_id)
                     except ValueError:
                         yield f"data: {json.dumps({'status': 'error', 'message': '无效的项目ID格式'}, ensure_ascii=False)}\n\n"
+                        yield "data: [DONE]\n\n"
+                        return
+                    try:
+                        await _verify_project_access(project_uuid, current_user.id, db)
+                    except HTTPException as exc:
+                        yield f"data: {json.dumps({'status': 'error', 'message': exc.detail}, ensure_ascii=False)}\n\n"
                         yield "data: [DONE]\n\n"
                         return
                     chapter_title = str(request.chapter.get("title") or request.chapter.get("id") or "")

@@ -12,13 +12,26 @@ from ..auth.dependencies import require_editor
 from ..db.database import get_db
 from ..models.chapter import Chapter
 from ..models.evidence import EvidenceRef
+from ..models.project import project_members
 from ..models.user import User
 from ..services.anti_hallucination_service import AntiHallucinationService
 from ..services.word_export_service import WordExportService, WordFormatConfig
 
 import io
+import uuid
 
 router = APIRouter(prefix="/api/export", tags=["增强导出"])
+
+
+async def _verify_project_access(project_id: uuid.UUID, user_id: uuid.UUID, db: AsyncSession) -> None:
+    result = await db.execute(
+        select(project_members.c.role).where(
+            (project_members.c.project_id == project_id) &
+            (project_members.c.user_id == user_id)
+        )
+    )
+    if result.scalar_one_or_none() is None:
+        raise HTTPException(status_code=404, detail="项目不存在或您没有访问权限")
 
 
 class ExportChapterItem(BaseModel):
@@ -48,7 +61,6 @@ def _issue_payload(issue) -> dict:
 async def build_export_preflight_payload(db: AsyncSession, project_id: str) -> dict:
     """Scan project chapters against EvidenceRef rows before export."""
     try:
-        import uuid
         project_uuid = uuid.UUID(project_id)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail="无效的项目ID格式") from exc
@@ -58,24 +70,29 @@ async def build_export_preflight_payload(db: AsyncSession, project_id: str) -> d
     )
     chapters = chapter_result.scalars().all()
     evidence_result = await db.execute(select(EvidenceRef).where(EvidenceRef.project_id == project_uuid))
-    evidence_refs = [
-        {
+    evidence_by_chapter: dict[str, list[dict]] = {}
+    project_wide_evidence: list[dict] = []
+    for ref in evidence_result.scalars().all():
+        payload = {
             "source_type": ref.source_type.value if hasattr(ref.source_type, "value") else str(ref.source_type),
             "source_title": ref.source_title,
             "quote": ref.quote,
             "source_id": ref.source_id,
             "location": ref.source_location,
         }
-        for ref in evidence_result.scalars().all()
-    ]
+        if ref.chapter_id:
+            evidence_by_chapter.setdefault(str(ref.chapter_id), []).append(payload)
+        else:
+            project_wide_evidence.append(payload)
 
     scanner = AntiHallucinationService()
     blockers: list[dict] = []
     for chapter in chapters:
         if not chapter.content:
             continue
+        chapter_evidence_refs = evidence_by_chapter.get(str(chapter.id), []) + project_wide_evidence
         critical = [
-            issue for issue in scanner.scan_text(chapter.content, evidence_refs)
+            issue for issue in scanner.scan_text(chapter.content, chapter_evidence_refs)
             if issue.severity == "critical"
         ]
         if critical:
@@ -92,7 +109,7 @@ async def build_export_preflight_payload(db: AsyncSession, project_id: str) -> d
         "blockers": blockers,
         "summary": {
             "chapter_count": len(chapters),
-            "evidence_ref_count": len(evidence_refs),
+            "evidence_ref_count": sum(len(v) for v in evidence_by_chapter.values()) + len(project_wide_evidence),
             "blocker_count": sum(len(item["issues"]) for item in blockers),
         },
     }
@@ -105,6 +122,11 @@ async def export_preflight(
     db: Annotated[AsyncSession, Depends(get_db)] = None,
 ):
     """Non-breaking export quality gate: report anti-hallucination blockers."""
+    try:
+        project_uuid = uuid.UUID(project_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="无效的项目ID格式") from exc
+    await _verify_project_access(project_uuid, current_user.id, db)
     return await build_export_preflight_payload(db, project_id)
 
 

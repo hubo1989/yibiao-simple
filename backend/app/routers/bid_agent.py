@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..auth.dependencies import require_editor
 from ..db.database import get_db
 from ..models.bid_agent import BidAgentRun, BidAgentStep
-from ..models.project import Project, project_members
+from ..models.project import Project, ProjectMemberRole, project_members
 from ..models.user import User
 from ..schemas.bid_agent import BidAgentQualityReport, BidAgentRunResponse, BidAgentStepResponse
 from ..services import bid_agent_service
@@ -19,14 +19,24 @@ from ..services import bid_agent_service
 router = APIRouter(prefix="/api/bid-agent", tags=["Bid Agent"])
 
 
-async def _verify_project_access(project_id: uuid.UUID, user_id: uuid.UUID, db: AsyncSession) -> Project:
+async def _verify_project_access(
+    project_id: uuid.UUID,
+    user_id: uuid.UUID,
+    db: AsyncSession,
+    *,
+    require_write: bool = False,
+) -> Project:
     result = await db.execute(
         select(project_members.c.role).where(
             and_(project_members.c.project_id == project_id, project_members.c.user_id == user_id)
         )
     )
-    if result.scalar_one_or_none() is None:
+    role = result.scalar_one_or_none()
+    if role is None:
         raise HTTPException(status_code=404, detail="项目不存在或您没有访问权限")
+    role_value = role.value if hasattr(role, "value") else str(role)
+    if require_write and role_value not in {ProjectMemberRole.OWNER.value, ProjectMemberRole.EDITOR.value}:
+        raise HTTPException(status_code=403, detail="当前项目角色无权执行该操作")
     project_result = await db.execute(select(Project).where(Project.id == project_id))
     project = project_result.scalar_one_or_none()
     if not project:
