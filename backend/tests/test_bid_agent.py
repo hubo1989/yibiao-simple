@@ -117,7 +117,7 @@ class TestBidAgentService:
         assert "第一章" in report["blockers"][1]
 
     @pytest.mark.asyncio
-    async def test_execute_generate_draft_does_not_call_llm_and_completes(self, monkeypatch):
+    async def test_execute_fix_risks_checks_only_and_completes(self, monkeypatch):
         from app.models.bid_agent import BidAgentRun, BidAgentRunStatus, BidAgentStep
         from app.services import bid_agent_service
 
@@ -152,4 +152,61 @@ class TestBidAgentService:
         assert completed.status == BidAgentRunStatus.completed
         assert completed.progress == 100
         assert completed.result_json["quality_report"]["ready"] is True
+        assert completed.summary == "风险检查完成"
         assert all(step.progress == 100 for step in steps)
+
+    @pytest.mark.asyncio
+    async def test_execute_generate_draft_full_step_flow_with_monkeypatched_helpers(self, monkeypatch):
+        from app.models.bid_agent import BidAgentRun, BidAgentRunStatus, BidAgentStep
+        from app.services import bid_agent_service
+
+        project_id = uuid.uuid4()
+        run = BidAgentRun(id=uuid.uuid4(), project_id=project_id, created_by=uuid.uuid4(), goal="generate_draft")
+        steps = [
+            BidAgentStep(id=uuid.uuid4(), run_id=run.id, step_key=key, step_name=name, order_index=i)
+            for i, (key, name) in enumerate(bid_agent_service.GENERATE_DRAFT_STEPS, start=1)
+        ]
+        db = AsyncMock()
+
+        async def fake_get_run(db_arg, run_id):
+            return run
+
+        async def fake_list_steps(db_arg, run_id):
+            return steps
+
+        async def fake_analysis(db_arg, project_id_arg):
+            return {"skipped": False, "project_overview_length": 10, "tech_requirements_length": 20}
+
+        async def fake_outline(db_arg, project_id_arg):
+            return {"skipped": False, "created_count": 2}
+
+        async def fake_rebuild(db_arg, project_id_arg):
+            return {"total_clauses": 3}
+
+        async def fake_generate_contents(db_arg, project_id_arg, created_by_arg=None):
+            return {"generated_count": 2, "skipped_count": 1, "hallucination_issue_count": 0, "per_chapter": []}
+
+        async def fake_matrix_preflight(db_arg, project_id_arg):
+            return {"ready": True, "summary": {}, "blockers": []}
+
+        async def fake_export_preflight(db_arg, project_id_arg):
+            return {"project_id": str(project_id_arg), "block_export": False, "blockers": [], "summary": {}}
+
+        monkeypatch.setattr(bid_agent_service, "get_run", fake_get_run)
+        monkeypatch.setattr(bid_agent_service, "list_steps", fake_list_steps)
+        monkeypatch.setattr(bid_agent_service, "ensure_project_analysis", fake_analysis)
+        monkeypatch.setattr(bid_agent_service, "ensure_outline", fake_outline)
+        monkeypatch.setattr(bid_agent_service.response_matrix_service, "rebuild_from_project", fake_rebuild)
+        monkeypatch.setattr(bid_agent_service, "generate_chapter_contents", fake_generate_contents)
+        monkeypatch.setattr(bid_agent_service.response_matrix_service, "preflight", fake_matrix_preflight)
+        monkeypatch.setattr(bid_agent_service, "build_export_preflight_payload", fake_export_preflight)
+
+        completed = await bid_agent_service.execute_generate_draft(db, run.id)
+
+        assert completed.status == BidAgentRunStatus.completed
+        assert completed.progress == 100
+        assert completed.summary == "一键草稿编排完成"
+        assert completed.result_json["quality_report"]["generated_count"] == 2
+        assert [step.step_key for step in steps] == [key for key, _ in bid_agent_service.GENERATE_DRAFT_STEPS]
+        assert all(step.progress == 100 for step in steps)
+        assert steps[3].result_json["generated_count"] == 2
