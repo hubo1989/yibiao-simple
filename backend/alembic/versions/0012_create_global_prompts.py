@@ -29,11 +29,10 @@ def upgrade() -> None:
         conn.execute(text(
             "CREATE TYPE prompt_category AS ENUM ('analysis', 'generation', 'check')"
         ))
-        conn.commit()
 
     # 创建 global_prompts 表
     conn.execute(text("""
-        CREATE TABLE global_prompts (
+        CREATE TABLE IF NOT EXISTS global_prompts (
             id UUID PRIMARY KEY,
             scene_key VARCHAR(64) NOT NULL UNIQUE,
             scene_name VARCHAR(128) NOT NULL,
@@ -45,20 +44,18 @@ def upgrade() -> None:
             updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
         )
     """))
-    conn.commit()
 
     # 创建索引
     conn.execute(text("""
-        CREATE INDEX ix_global_prompts_scene_key ON global_prompts (scene_key)
+        CREATE INDEX IF NOT EXISTS ix_global_prompts_scene_key ON global_prompts (scene_key)
     """))
     conn.execute(text("""
-        CREATE INDEX ix_global_prompts_category ON global_prompts (category)
+        CREATE INDEX IF NOT EXISTS ix_global_prompts_category ON global_prompts (category)
     """))
-    conn.commit()
 
     # 创建 global_prompt_versions 表
     conn.execute(text("""
-        CREATE TABLE global_prompt_versions (
+        CREATE TABLE IF NOT EXISTS global_prompt_versions (
             id UUID PRIMARY KEY,
             global_prompt_id UUID NOT NULL REFERENCES global_prompts(id) ON DELETE CASCADE,
             version INTEGER NOT NULL,
@@ -67,16 +64,14 @@ def upgrade() -> None:
             created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
         )
     """))
-    conn.commit()
 
     # 创建索引
     conn.execute(text("""
-        CREATE INDEX ix_global_prompt_versions_global_prompt_id ON global_prompt_versions (global_prompt_id)
+        CREATE INDEX IF NOT EXISTS ix_global_prompt_versions_global_prompt_id ON global_prompt_versions (global_prompt_id)
     """))
     conn.execute(text("""
-        CREATE INDEX ix_global_prompt_versions_created_by ON global_prompt_versions (created_by)
+        CREATE INDEX IF NOT EXISTS ix_global_prompt_versions_created_by ON global_prompt_versions (created_by)
     """))
-    conn.commit()
 
     # 为 projects 表添加 custom_prompts 字段（如果不存在）
     result = conn.execute(text("""
@@ -87,7 +82,6 @@ def upgrade() -> None:
         conn.execute(text("""
             ALTER TABLE projects ADD COLUMN custom_prompts JSONB
         """))
-        conn.commit()
 
 
 def downgrade() -> None:
@@ -108,4 +102,3 @@ def downgrade() -> None:
 
     # 删除枚举类型
     conn.execute(text("DROP TYPE IF EXISTS prompt_category"))
-    conn.commit()

@@ -15,7 +15,6 @@ import {
   Tooltip,
   Typography,
   Space,
-  Divider,
   Alert,
 } from 'antd';
 import {
@@ -24,13 +23,12 @@ import {
   WarningOutlined,
   ReloadOutlined,
   CheckCircleOutlined,
-  ThunderboltOutlined,
 } from '@ant-design/icons';
 import { scoringApi, outlineApi } from '../services/api';
 import type { ScoringCriteriaItem, ScoringCoverageResponse } from '../services/api';
 import type { ProjectChapterListResponse } from '../types/chapter';
 
-const { Text, Title } = Typography;
+const { Text } = Typography;
 const { Panel } = Collapse;
 
 export interface ScoringPanelProps {

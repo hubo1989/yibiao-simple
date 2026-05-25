@@ -1,17 +1,14 @@
-version: '3.8'
-
 services:
   # PostgreSQL 数据库
   db:
-    image: postgres:15-alpine
-    container_name: yibiao-db
+    image: pgvector/pgvector:pg15
     restart: unless-stopped
     environment:
       POSTGRES_USER: ${DB_USER:-postgres}
       POSTGRES_PASSWORD: ${DB_PASSWORD:-postgres}
       POSTGRES_DB: ${DB_NAME:-yibiao}
     ports:
-      - "5432:5432"
+      - "${DB_PORT:-5432}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
@@ -27,8 +24,9 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: yibiao-app
     restart: unless-stopped
+    ports:
+      - "${PORT:-8000}:8000"
     environment:
       - DATABASE_URL=postgresql+asyncpg://${DB_USER:-postgres}:${DB_PASSWORD:-postgres}@db:5432/${DB_NAME:-yibiao}
       - SECRET_KEY=${SECRET_KEY}
@@ -36,6 +34,17 @@ services:
       - DEBUG=${DEBUG:-false}
       - CORS_ORIGINS=${CORS_ORIGINS:-http://localhost,http://localhost:80}
       - DEFAULT_MODEL=${DEFAULT_MODEL:-gpt-3.5-turbo}
+      - LLM_PROVIDER=${LLM_PROVIDER:-openai-compatible}
+      - LLM_BASE_URL=${LLM_BASE_URL:-}
+      - LLM_API_KEY=${LLM_API_KEY:-}
+      - LLM_MODEL=${LLM_MODEL:-${DEFAULT_MODEL:-gpt-3.5-turbo}}
+      - LLM_MODELS=${LLM_MODELS:-}
+      - EMBEDDING_PROVIDER=${EMBEDDING_PROVIDER:-ollama}
+      - EMBEDDING_BASE_URL=${EMBEDDING_BASE_URL:-http://localhost:11434}
+      - EMBEDDING_API_KEY=${EMBEDDING_API_KEY:-}
+      - EMBEDDING_MODEL=${EMBEDDING_MODEL:-qwen3-embedding:4b}
+      - EMBEDDING_MODELS=${EMBEDDING_MODELS:-}
+      - EMBEDDING_DIMENSION=${EMBEDDING_DIMENSION:-2560}
       - ACCESS_TOKEN_EXPIRE_MINUTES=${ACCESS_TOKEN_EXPIRE_MINUTES:-30}
       - REFRESH_TOKEN_EXPIRE_DAYS=${REFRESH_TOKEN_EXPIRE_DAYS:-7}
     volumes:
@@ -49,10 +58,11 @@ services:
   # Nginx 反向代理
   nginx:
     image: nginx:alpine
-    container_name: yibiao-nginx
+    profiles:
+      - reverse-proxy
     restart: unless-stopped
     ports:
-      - "${PORT:-80}:80"
+      - "${NGINX_PORT:-80}:80"
     volumes:
       - ./nginx.conf:/etc/nginx/nginx.conf:ro
     depends_on:

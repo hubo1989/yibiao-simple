@@ -29,6 +29,7 @@ class SourceRef(BaseModel):
 
 class ResponsivenessItem(BaseModel):
     """响应性审查项"""
+    id: str = Field("", description="稳定问题ID")
     rating_item: str = Field(..., description="评分项名称")
     score: int = Field(0, description="实际得分")
     max_score: int = Field(0, description="满分")
@@ -46,6 +47,7 @@ class ResponsivenessItem(BaseModel):
 
 class ComplianceItem(BaseModel):
     """合规性审查项"""
+    id: str = Field("", description="稳定问题ID")
     compliance_category: str = Field(..., description="合规类别")
     clause_text: str = Field("", description="招标条款原文")
     check_result: Literal["pass", "warning", "fail"] = Field("warning", description="检查结果")
@@ -59,6 +61,7 @@ class ComplianceItem(BaseModel):
 
 class ConsistencyItem(BaseModel):
     """一致性审查项"""
+    id: str = Field("", description="稳定问题ID")
     severity: Severity = Field("warning", description="严重程度")
     category: str = Field("", description="矛盾类别")
     description: str = Field("", description="矛盾描述")

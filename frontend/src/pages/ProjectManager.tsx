@@ -1,6 +1,6 @@
 import React, { useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { PageContainer, ProTable, ActionType, ProColumns } from '@ant-design/pro-components';
+import { PageContainer, ProTable, ActionType, ProColumns } from '../components/ProCompat';
 import { Button, Tag, Typography, message, Modal, Form, Input } from 'antd';
 import { PlusOutlined } from '@ant-design/icons';
 import { projectApi } from '../services/api';
@@ -87,7 +87,7 @@ const ProjectManager: React.FC = () => {
       valueType: 'dateRange',
       hideInTable: true,
       search: {
-        transform: (value) => {
+        transform: (value: string[]) => {
           return {
             start_time: value[0],
             end_time: value[1],

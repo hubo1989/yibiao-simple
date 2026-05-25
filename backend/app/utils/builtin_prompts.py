@@ -164,6 +164,101 @@ JSON 格式要求:
         "available_vars": {"file_content": "技术方案文本内容"},
     },
     # ===== 生成类场景 =====
+    "chapter_content_scoring": {
+        "scene_name": "章节内容生成-评分精准响应",
+        "category": "generation",
+        "prompt": """# 系统指令
+
+你是专业的投标文件撰写专家,负责生成技术标章节正文。你的首要目标是确保每一个评分点都被显式、精准地响应,让评审一眼看出得分依据。
+
+## 核心写作原则
+1. 以招标文件要求、评分标准和当前章节职责为最高依据
+2. 紧扣当前章节标题、章节描述、章节职责和所属层级,不跑题
+3. 面向"评审得分"写作:优先写清方案思路、响应内容、实施方法、保障机制
+4. 语言专业、克制、自然,避免宣传腔、口号式表述
+5. 尽量写实、具体、可执行,但不得编造未提供的项目事实
+6. 直接输出正文,不要输出章节标题,不要输出说明文字,不要使用代码块
+
+## 评分点标注规则【重要】
+每响应一个评分点，必须在对应实质段落后标注:
+
+**✅ 已响应第X条评分项**
+
+具体规则：
+1. 一段内容可以响应多个评分点，一一标注
+2. 标注放在被响应的实质性段落的末尾
+3. 标注使用 Markdown 加粗格式
+4. 每个评分点至少有一处标注
+5. 标注后紧接着可以简要说明响应方式
+
+示例:
+> ...本方案采用分布式架构设计,支持横向弹性扩展...
+> **✅ 已响应第1条评分项(系统架构设计)**
+
+## 内容结构要求
+请优先围绕以下维度组织内容:
+- 对招标需求和本章评分点的理解与响应
+- 本章节对应的总体思路与目标
+- 具体方案、方法、流程、机制、措施
+- 关键控制点、风险点及保障措施
+- 可交付成果、服务输出或实施结果
+
+## 质量目标
+最终内容应做到:
+- 评审一眼能看出"这一节是在正面响应招标要求和评分点"
+- 每个评分点都能找到对应的标注和实质内容
+- 即使没有额外润色,也具备正式投标文本的专业度
+
+---
+
+# 用户输入
+
+请为以下标书章节生成具体内容:
+
+{{#if project_overview}}项目概述信息:
+{{project_overview}}
+
+{{/if}}{{#if chapter_rating_focus}}本章对应评分点(必须优先响应):
+{{chapter_rating_focus}}
+
+{{/if}}{{#if chapter_rating_clauses}}本章评分条款清单(必须逐条标注响应):
+{{chapter_rating_clauses}}
+
+{{/if}}{{#if chapter_role}}本章职责定位:
+{{chapter_role}}
+
+{{/if}}{{#if adjacent_boundary}}本章与相邻章节边界(必须避免重复):
+{{adjacent_boundary}}
+
+{{/if}}{{#if knowledge_context}}参考资料(来自企业知识库):
+{{knowledge_context}}
+
+{{/if}}{{#if disqualification_redlines}}⛔ 废标红线条款(本章内容严禁违反):
+{{disqualification_redlines}}
+
+{{/if}}{{#if terminology_guide}}术语规范要求:
+{{terminology_guide}}
+
+{{/if}}当前章节信息:
+章节ID: {{chapter_id}}
+章节标题: {{chapter_title}}
+章节描述: {{chapter_description}}
+
+请根据以上信息生成本章节正文。务必围绕本章节应承担的响应任务展开,显式回应本章评分点并在每个响应处标注【✅ 已响应】。""",
+        "available_vars": {
+            "project_overview": "项目概述信息",
+            "chapter_rating_focus": "本章对应评分点",
+            "chapter_rating_clauses": "本章评分条款清单",
+            "chapter_role": "本章职责定位",
+            "adjacent_boundary": "本章与相邻章节边界说明",
+            "knowledge_context": "知识库检索结果",
+            "disqualification_redlines": "废标红线条款文本",
+            "terminology_guide": "术语使用规范指南",
+            "chapter_id": "当前章节ID",
+            "chapter_title": "当前章节标题",
+            "chapter_description": "当前章节描述",
+        },
+    },
     "chapter_content": {
         "scene_name": "章节内容生成",
         "category": "generation",
@@ -187,6 +282,18 @@ JSON 格式要求:
 3. 写作时要让评审能一眼看出:本章在回答什么评分问题、采用什么方案、凭什么可信
 4. 若存在"响应清单"或"补强建议",优先吸收其中与本章直接相关的部分
 
+## 评分点标注规则【重要】
+每响应一个评分点,必须在对应实质段落后标注:
+
+**✅ 已响应第X条评分项(评分项名称)**
+
+具体规则：
+1. 一段内容可以响应多个评分点,一一标注
+2. 标注放在被响应的实质性段落的末尾
+3. 标注使用 Markdown 加粗格式,emoji + 粗体
+4. 每个评分点至少有一处标注
+5. 若提供了"本章评分条款清单",按清单编号标注
+
 ## 内容结构要求
 请优先围绕以下维度组织内容,并按章节实际需要取舍:
 - 对招标需求和本章评分点的理解与响应
@@ -209,6 +316,11 @@ JSON 格式要求:
 - 不要虚构"完全满足所有要求"这类绝对化表述,除非招标文件和资料已明确支撑
 - 如果知识库资料可复用,只能抽取与当前章节直接相关的经验、能力、方法,自然融入,不要整段照搬
 - 历史标书风格只用于学习结构、语气、表达颗粒度,不得照抄原文,不得把历史项目写成当前项目事实
+
+## 章节间一致性要求
+1. 若提供了"前章摘要",本章术语、数据、承诺必须与前述保持一致
+2. 前章已覆盖的内容不得重复展开,只可简要衔接
+3. 若与前章存在数据关联(如工期、规模),必须使用相同的数值和表达
 
 ## 篇幅要求
 - 每个章节正文不少于 500 字,不超过 2000 字
@@ -237,11 +349,17 @@ JSON 格式要求:
 {{/if}}{{#if chapter_rating_focus}}本章对应评分点(必须优先响应):
 {{chapter_rating_focus}}
 
+{{/if}}{{#if chapter_rating_clauses}}本章评分条款清单(必须逐条标注响应编号):
+{{chapter_rating_clauses}}
+
 {{/if}}{{#if chapter_role}}本章职责定位:
 {{chapter_role}}
 
 {{/if}}{{#if adjacent_boundary}}本章与相邻章节边界(必须避免重复):
 {{adjacent_boundary}}
+
+{{/if}}{{#if previous_chapters_summary}}前几章已覆盖内容(本章不得重复,术语、数据、承诺必须保持一致):
+{{previous_chapters_summary}}
 
 {{/if}}{{#if parent_chapters}}上级章节信息:
 {{#each parent_chapters}}
@@ -254,6 +372,12 @@ JSON 格式要求:
 - {{this.id}} {{this.title}}
   {{this.description}}
 {{/each}}
+
+{{/if}}{{#if disqualification_redlines}}⛔ 以下为废标红线条款,本章内容严禁违反:
+{{disqualification_redlines}}
+
+{{/if}}{{#if terminology_guide}}术语规范要求:
+{{terminology_guide}}
 
 {{/if}}{{#if knowledge_context}}参考资料(来自企业知识库,已按类型筛选):
 {{knowledge_context}}
@@ -270,8 +394,12 @@ JSON 格式要求:
             "project_overview": "项目概述信息",
             "tech_requirements": "技术评分要求全文或摘要",
             "chapter_rating_focus": "本章对应评分点",
+            "chapter_rating_clauses": "本章评分条款清单(编号+原文)",
             "chapter_role": "本章职责定位",
             "adjacent_boundary": "本章与相邻章节边界说明",
+            "previous_chapters_summary": "前几章已覆盖内容摘要",
+            "disqualification_redlines": "废标红线条款(严禁违反)",
+            "terminology_guide": "术语使用规范指南",
             "knowledge_context": "知识库检索结果",
             "parent_chapters": "上级章节列表(数组,每项含 id/title/description)",
             "sibling_chapters": "同级章节列表(数组,每项含 id/title/description)",

@@ -375,8 +375,8 @@ async def generate_project_outline_l1_stream(
                 collected_result.append(chunk)
                 yield f"data: {json.dumps({'chunk': chunk}, ensure_ascii=False)}\n\n"
 
-            # 发送结束信号
-            yield "data: [DONE]\n\n"
+            # 发送结束信号（在DB操作之前先发送数据）
+            # yield "data: [DONE]\n\n"  moved to after DB commit
 
             # 解析并保存到数据库
             try:
@@ -404,6 +404,7 @@ async def generate_project_outline_l1_stream(
                     except json.JSONDecodeError as parse_err:
                         logger.error(f"L1 目录 JSON 解析失败: {parse_err}\n原文: {full_content[:500]}")
                         yield f"data: {json.dumps({'type': 'error', 'error': True, 'message': f'目录数据格式异常，请重试（{parse_err}）'}, ensure_ascii=False)}\n\n"
+                        yield "data: [DONE]\n\n"
                         return
 
                 # AI 可能返回 {"outline": [...]} 或直接返回 [...]
@@ -414,6 +415,7 @@ async def generate_project_outline_l1_stream(
                 else:
                     logger.error(f"L1 目录返回了非预期类型: {type(outline_data)}")
                     yield f"data: {json.dumps({'type': 'error', 'error': True, 'message': '目录数据格式异常（非预期类型），请重试'}, ensure_ascii=False)}\n\n"
+                    yield "data: [DONE]\n\n"
                     return
 
                 # 过滤掉非 dict 元素，只保留有效的章节项
@@ -459,10 +461,17 @@ async def generate_project_outline_l1_stream(
                     await db.flush()
                     await db.commit()
 
+                # 数据保存成功后才发送结束信号
+                yield "data: [DONE]\n\n"
+
             except Exception as e:
                 logger.error(f"保存一级目录到数据库失败: {e}")
                 await db.rollback()
-                yield f"data: {json.dumps({'type': 'error', 'error': True, 'message': f'保存一级目录到数据库失败: {e}'}, ensure_ascii=False)}\n\n"
+                try:
+                    yield f"data: {json.dumps({'type': 'error', 'error': True, 'message': f'保存一级目录到数据库失败: {e}'}, ensure_ascii=False)}\n\n"
+                    yield "data: [DONE]\n\n"
+                except (BrokenPipeError, ConnectionResetError, RuntimeError):
+                    logger.warning("客户端已断开连接，错误SSE事件未能送达")
 
         return sse_response(generate())
 
@@ -563,8 +572,9 @@ async def generate_project_outline_l2l3_stream(
                     }
                     for chapter in l1_chapters
                 ]
-            
+
             # 使用 generate_outline_v2 的逻辑生成二三级目录
+            db_saved = False
             try:
                 from ..services.openai_service import calculate_nodes_distribution, get_random_indexes
                 
@@ -589,12 +599,12 @@ async def generate_project_outline_l2l3_stream(
                     chapter_json = json.dumps(result, ensure_ascii=False)
                     yield f"data: {json.dumps({'type': 'chapter', 'index': i, 'total': len(level_l1), 'data': result}, ensure_ascii=False)}\n\n"
 
-                # 发送完成信号
+                # 发送完成信号（在DB操作之前先发送数据）
                 outline_result = {"outline": outline}
                 yield f"data: {json.dumps({'type': 'complete', 'data': outline_result}, ensure_ascii=False)}\n\n"
-                yield "data: [DONE]\n\n"
 
-                # 保存到数据库
+                # ── 关键修复：先保存到数据库，再发送 [DONE] ──
+                # 这样客户端收到 [DONE] 时数据已经持久化
                 outline_items = outline_result.get("outline", [])
                 if outline_items:
                     # 先删除项目现有的所有章节
@@ -625,13 +635,21 @@ async def generate_project_outline_l2l3_stream(
                     db.add(version)
                     await db.flush()
                     await db.commit()
+                    db_saved = True
+
+                # 数据保存成功后才发送结束信号
+                yield "data: [DONE]\n\n"
 
             except Exception as e:
                 await db.rollback()
                 error_msg = f"生成二三级目录失败: {str(e)}"
                 logger.error(error_msg)
-                yield f"data: {json.dumps({'type': 'error', 'error': True, 'message': error_msg}, ensure_ascii=False)}\n\n"
-                yield "data: [DONE]\n\n"
+                try:
+                    yield f"data: {json.dumps({'type': 'error', 'error': True, 'message': error_msg}, ensure_ascii=False)}\n\n"
+                    yield "data: [DONE]\n\n"
+                except (BrokenPipeError, ConnectionResetError, RuntimeError):
+                    # 客户端已断开连接，无法再写入SSE流 —— 这是非致命的
+                    logger.warning("客户端已断开连接，错误SSE事件未能送达（数据可能已在客户端侧失败）")
 
         return sse_response(generate())
 
@@ -693,62 +711,85 @@ async def generate_project_outline_stream(
             openai_service.set_model(request.model_name)
 
         async def generate():
-            # 使用 generate_outline_v2 生成完整的三级目录结构
+            """流式生成项目完整目录：先生成+落库，再流式返回结果。"""
+            outline_result = None
+            db_ok = False
+            error_msg = ""
+
+            # ── Phase 1: 调用 LLM 生成目录（带进度心跳）──
             try:
+                yield f"data: {json.dumps({'type': 'status', 'message': '正在调用 AI 生成目录结构...'}, ensure_ascii=False)}\n\n"
+
                 outline_result = await openai_service.generate_outline_v2(
                     overview=project.project_overview,
                     requirements=project.tech_requirements
                 )
-                
-                # 流式返回完整的目录结构
-                outline_json = json.dumps(outline_result, ensure_ascii=False)
-                chunk_size = 128
-                for i in range(0, len(outline_json), chunk_size):
-                    piece = outline_json[i : i + chunk_size]
-                    yield f"data: {json.dumps({'chunk': piece}, ensure_ascii=False)}\n\n"
-                    await asyncio.sleep(0.01)
-                
-                # 发送结束信号
+            except Exception as e:
+                error_msg = f"AI 目录生成失败: {e}"
+                logger.error(f"[generate-project-stream] {error_msg}")
+                yield f"data: {json.dumps({'type': 'error', 'error': True, 'message': error_msg}, ensure_ascii=False)}\n\n"
                 yield "data: [DONE]\n\n"
-                
-                # 保存到数据库
-                outline_items = outline_result.get("outline", [])
+                return
+
+            # ── Phase 2: 解析并保存到数据库（在发送最终 [DONE] 之前）──
+            try:
+                outline_items = outline_result.get("outline", []) if isinstance(outline_result, dict) else []
+                if isinstance(outline_result, list):
+                    outline_items = outline_result
+
+                # 过滤非 dict 元素
+                outline_items = [item for item in outline_items if isinstance(item, dict)]
 
                 if outline_items:
-                    # 先删除项目现有的所有章节
-                    await db.execute(
-                        delete(Chapter).where(Chapter.project_id == project_uuid)
-                    )
+                    # 删除现有章节
+                    await db.execute(delete(Chapter).where(Chapter.project_id == project_uuid))
 
                     # 创建新章节
                     created_chapters = await _create_chapters_from_outline(
                         db, project_uuid, outline_items
                     )
 
-                    # 创建版本快照
+                    # 版本快照
                     version_number = await _get_next_version_number(db, project_uuid)
-                    snapshot_data = {
-                        "outline": outline_items,
-                        "total_chapters": len(created_chapters),
-                    }
                     version = ProjectVersion(
                         project_id=project_uuid,
-                        chapter_id=None,  # 全量快照
+                        chapter_id=None,
                         version_number=version_number,
-                        snapshot_data=snapshot_data,
+                        snapshot_data={"outline": outline_items, "total_chapters": len(created_chapters)},
                         change_type=ChangeType.AI_GENERATE,
-                        change_summary="AI 生成目录结构",
+                        change_summary=f"AI 生成目录结构（{len(created_chapters)} 章）",
                         created_by=current_user.id,
                     )
                     db.add(version)
-
                     await db.flush()
                     await db.commit()
+                    db_ok = True
+
+                    yield f"data: {json.dumps({'type': 'status', 'message': f'已保存 {len(created_chapters)} 个章节到数据库'}, ensure_ascii=False)}\n\n"
+                else:
+                    yield f"data: {json.dumps({'type': 'warning', 'message': 'AI 返回的目录为空，未保存'}, ensure_ascii=False)}\n\n"
 
             except Exception as e:
                 await db.rollback()
-                logger.error(f"保存目录到数据库失败: {e}")
-                yield f"data: {json.dumps({'type': 'error', 'error': True, 'message': f'保存目录到数据库失败: {e}'}, ensure_ascii=False)}\n\n"
+                error_msg = f"保存目录到数据库失败: {e}"
+                logger.error(f"[generate-project-stream] {error_msg}", exc_info=True)
+                yield f"data: {json.dumps({'type': 'db_error', 'error': True, 'message': error_msg}, ensure_ascii=False)}\n\n"
+
+            # ── Phase 3: 流式返回完整的目录结构给前端渲染 ──
+            if outline_result:
+                outline_json = json.dumps(outline_result, ensure_ascii=False)
+                chunk_size = 256
+                for i in range(0, len(outline_json), chunk_size):
+                    piece = outline_json[i:i + chunk_size]
+                    yield f"data: {json.dumps({'chunk': piece}, ensure_ascii=False)}\n\n"
+                    await asyncio.sleep(0.005)
+
+            # 发送结束信号（包含数据库保存状态）
+            done_payload = {"db_saved": db_ok}
+            if error_msg and not db_ok:
+                done_payload["warning"] = error_msg
+            yield f"data: {json.dumps(done_payload, ensure_ascii=False)}\n\n"
+            yield "data: [DONE]\n\n"
 
         return sse_response(generate())
 
@@ -1068,9 +1109,7 @@ async def generate_project_content_stream(
                 collected_result.append(chunk)
                 yield f"data: {json.dumps({'chunk': chunk}, ensure_ascii=False)}\n\n"
 
-            # 发送结束信号
-            yield "data: [DONE]\n\n"
-
+            # ── 关键修复：先保存到数据库，再发送 [DONE] ──
             # 保存内容到章节
             full_content = "".join(collected_result)
             chapter.content = full_content
@@ -1097,6 +1136,9 @@ async def generate_project_content_stream(
 
             await db.flush()
             await db.commit()
+
+            # 数据保存成功后才发送结束信号
+            yield "data: [DONE]\n\n"
 
         return sse_response(generate())
 

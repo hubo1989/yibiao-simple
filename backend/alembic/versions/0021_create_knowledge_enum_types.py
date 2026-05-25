@@ -39,7 +39,17 @@ def upgrade() -> None:
     # Create enum types
     for enum_name, values in ENUM_DEFS.items():
         values_str = ", ".join(f"'{v}'" for v in values)
-        op.execute(f"CREATE TYPE {enum_name} AS ENUM ({values_str})")
+        op.execute(
+            f"""
+            DO $$
+            BEGIN
+                IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = '{enum_name}') THEN
+                    CREATE TYPE {enum_name} AS ENUM ({values_str});
+                END IF;
+            END
+            $$;
+            """
+        )
 
     # Alter columns from varchar to enum
     for col_name, enum_name in COLUMN_ALTERS:
@@ -59,4 +69,4 @@ def downgrade() -> None:
 
     # Drop enum types
     for enum_name in ENUM_DEFS:
-        op.execute(f"DROP TYPE {enum_name}")
+        op.execute(f"DROP TYPE IF EXISTS {enum_name}")

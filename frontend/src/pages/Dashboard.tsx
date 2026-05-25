@@ -24,7 +24,6 @@ import {
 import { useNavigate } from 'react-router-dom';
 import { dashboardApi } from '../services/api';
 import type { DashboardResponse, DashboardProjectItem } from '../services/api';
-import type { ProjectStatus } from '../types/project';
 
 const { Text } = Typography;
 

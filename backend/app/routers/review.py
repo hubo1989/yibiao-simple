@@ -544,7 +544,30 @@ async def apply_review_fix_stream(
             ):
                 full_content += chunk
                 yield f"data: {json.dumps({'status': 'streaming', 'content': chunk, 'full_content': full_content}, ensure_ascii=False)}\n\n"
-            yield f"data: {json.dumps({'status': 'completed', 'content': full_content}, ensure_ascii=False)}\n\n"
+
+            from ..models.version import ChangeType
+            from ..services.version_service import VersionService
+
+            version = await VersionService(db).create_version(
+                project_id=task.project_id,
+                chapter_id=None,
+                user_id=current_user.id,
+                change_type=ChangeType.PROOFREAD,
+                snapshot_data={
+                    "source": "bid_review_apply_fix",
+                    "task_id": str(task.id),
+                    "bid_filename": task.bid_filename,
+                    "chapter_ref": chapter_title,
+                    "selected_issue_ids": request.issue_ids,
+                    "issues": all_issues,
+                    "before": request.current_content,
+                    "after": full_content,
+                },
+                change_summary=f"标书审查 AI 修改：{task.bid_filename}",
+            )
+            await db.commit()
+
+            yield f"data: {json.dumps({'status': 'completed', 'content': full_content, 'version_id': str(version.id), 'version_number': version.version_number}, ensure_ascii=False)}\n\n"
         except Exception as e:
             yield f"data: {json.dumps({'status': 'error', 'message': str(e)}, ensure_ascii=False)}\n\n"
         yield "data: [DONE]\n\n"

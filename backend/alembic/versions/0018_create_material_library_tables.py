@@ -16,8 +16,8 @@ branch_labels = None
 depends_on = None
 
 
-scope_enum = sa.Enum("global", "enterprise", "user", name="scope")
-material_category_enum = sa.Enum(
+scope_enum = postgresql.ENUM("global", "enterprise", "user", name="scope", create_type=False)
+material_category_enum = postgresql.ENUM(
     "business_license",
     "legal_person_id",
     "qualification_cert",
@@ -32,26 +32,35 @@ material_category_enum = sa.Enum(
     "social_security",
     "other",
     name="materialcategory",
+    create_type=False,
 )
-material_review_status_enum = sa.Enum("pending", "confirmed", "rejected", name="materialreviewstatus")
-material_requirement_status_enum = sa.Enum(
-    "pending", "matched", "missing", "ignored", "confirmed", name="materialrequirementstatus"
+material_review_status_enum = postgresql.ENUM(
+    "pending", "confirmed", "rejected", name="materialreviewstatus", create_type=False
 )
-material_extracted_by_enum = sa.Enum("ai", "user", name="materialextractedby")
-binding_anchor_type_enum = sa.Enum(
-    "section_end", "paragraph_after", "paragraph_before", "appendix_block", name="bindinganchortype"
+material_requirement_status_enum = postgresql.ENUM(
+    "pending",
+    "matched",
+    "missing",
+    "ignored",
+    "confirmed",
+    name="materialrequirementstatus",
+    create_type=False,
 )
-binding_display_mode_enum = sa.Enum("image", "attachment_note", name="bindingdisplaymode")
+material_extracted_by_enum = postgresql.ENUM("ai", "user", name="materialextractedby", create_type=False)
+binding_anchor_type_enum = postgresql.ENUM(
+    "section_end", "paragraph_after", "paragraph_before", "appendix_block", name="bindinganchortype", create_type=False
+)
+binding_display_mode_enum = postgresql.ENUM(
+    "image", "attachment_note", name="bindingdisplaymode", create_type=False
+)
 
 
 def upgrade() -> None:
     bind = op.get_bind()
 
     # 检查并创建 enum 类型（避免重复创建）
-    conn = bind.connect()
-    existing_types = conn.execute(sa.text("SELECT typname FROM pg_type WHERE typcategory = 'E'")).fetchall()
+    existing_types = bind.execute(sa.text("SELECT typname FROM pg_type WHERE typcategory = 'E'")).fetchall()
     existing_type_names = {t[0] for t in existing_types}
-    conn.close()
 
     enums_to_create = [
         (scope_enum, "scope"),

@@ -15,11 +15,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..auth.dependencies import require_editor
 from ..db.database import get_db
+from ..services.openai_service import OpenAIService
+from ..services.prompt_service import PromptService
+from ..services import response_matrix_service
 from ..models.disqualification import DisqualificationCheck
 from ..models.project import Project, project_members
 from ..models.user import User
-from ..services.openai_service import OpenAIService
-from ..services.prompt_service import PromptService
 
 router = APIRouter(prefix="/api/disqualification", tags=["废标检查"])
 
@@ -213,6 +214,7 @@ async def extract_disqualification_items(
     await db.commit()
     for item in new_items:
         await db.refresh(item)
+    await response_matrix_service.rebuild_from_project(db, project_uuid)
 
     return [_item_to_response(item) for item in new_items]
 
@@ -385,3 +387,85 @@ async def validate_before_export(
         fatal_unresolved_items=[_item_to_response(i) for i in risk_items],
         message=message,
     )
+
+
+async def ensure_disqualification_extracted(
+    db: AsyncSession,
+    project_id: uuid.UUID,
+    file_content: str,
+    openai_service: OpenAIService | None = None,
+) -> bool:
+    """
+    确保项目的否决性条款已被提取。
+
+    如果项目已有废标检查项则跳过；
+    如果没有且提供了 file_content 和 openai_service，则自动提取。
+
+    Returns:
+        True 表示已有或已提取，False 表示未能提取
+    """
+    # 检查是否已有废标检查项
+    result = await db.execute(
+        select(DisqualificationCheck.id).where(
+            DisqualificationCheck.project_id == project_id
+        ).limit(1)
+    )
+    existing = result.scalar_one_or_none()
+    if existing:
+        return True
+
+    # 没有现有数据，需要自动提取
+    if not file_content or not openai_service:
+        return False
+
+    prompt_service = PromptService(db)
+    prompt, _ = await prompt_service.get_prompt(
+        "extract_disqualification_items", project_id
+    )
+    system_prompt, user_template = PromptService.split_prompt(prompt)
+    user_prompt = prompt_service.render_prompt(
+        user_template, {"file_content": file_content}
+    )
+
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_prompt},
+    ]
+
+    try:
+        full_response = await openai_service._collect_stream_text(
+            messages, temperature=0.1
+        )
+
+        raw_text = full_response.strip()
+        if raw_text.startswith("```"):
+            raw_text = raw_text.split("```")[1]
+            if raw_text.startswith("json"):
+                raw_text = raw_text[4:]
+        raw_text = raw_text.strip()
+
+        parsed = json.loads(raw_text)
+        items_data = parsed.get("disqualification_items", [])
+
+        if not items_data:
+            return False
+
+        for item_data in items_data:
+            check = DisqualificationCheck(
+                id=uuid.uuid4(),
+                project_id=project_id,
+                item_id=item_data.get("id", "DQ000"),
+                category=item_data.get("category", "其他"),
+                requirement=item_data.get("requirement", ""),
+                check_type=item_data.get("check_type", "other"),
+                severity=item_data.get("severity", "warning"),
+                source_text=item_data.get("source_text"),
+                status="unchecked",
+            )
+            db.add(check)
+
+        await db.commit()
+        return True
+
+    except Exception:
+        return False

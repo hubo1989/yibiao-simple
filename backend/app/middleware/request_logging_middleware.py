@@ -185,9 +185,11 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
             # 计算耗时
             duration_ms = int((time.time() - start_time) * 1000)
             
-            # 获取响应体
+            # 获取响应体。SSE 必须保持真实流式返回，不能消费 body_iterator 后再重建响应。
             response_body = None
-            if not isinstance(response, StreamingResponse):
+            content_type = response.headers.get("content-type", "")
+            is_sse = content_type.startswith("text/event-stream")
+            if not is_sse and not isinstance(response, StreamingResponse):
                 try:
                     # 尝试读取响应体
                     response_body_bytes = b""

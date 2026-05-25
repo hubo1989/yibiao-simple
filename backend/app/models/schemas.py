@@ -35,6 +35,10 @@ class ProviderModelOption(BaseModel):
     models: List[str]
     default_model: str
     is_default: bool = False
+    source: str = "database"
+    index_model: Optional[str] = None
+    embedding_base_url: Optional[str] = None
+    embedding_provider: Optional[str] = None
 
 
 class FileUploadResponse(BaseModel):
@@ -100,6 +104,7 @@ class ChapterContentRequest(BaseModel):
     parent_chapters: Optional[List[Dict[str, Any]]] = Field(None, description="上级章节列表")
     sibling_chapters: Optional[List[Dict[str, Any]]] = Field(None, description="同级章节列表")
     project_overview: str = Field("", description="项目概述")
+    project_id: Optional[str] = Field(None, description="项目ID,用于获取废标条款和术语库")
     model_name: Optional[str] = Field(None, description="可选的模型名称，覆盖默认配置")
     provider_config_id: Optional[str] = Field(None, description="可选的 Provider 配置 ID，覆盖默认配置")
     use_knowledge: bool = Field(True, description="是否检索知识库注入上下文")
@@ -308,3 +313,51 @@ class ExtractFormatRequest(BaseModel):
     file_content: Optional[str] = Field(None, description="直接传入文档文本（优先级高于 project_id）")
     model_name: Optional[str] = Field(None, description="可选的模型名称")
     provider_config_id: Optional[str] = Field(None, description="可选的 Provider 配置 ID")
+
+
+class MaterialImageInfo(BaseModel):
+    """素材解析提取的图片信息"""
+    filename: str
+    format: str
+    size: int
+    width: Optional[int] = None
+    height: Optional[int] = None
+
+
+class MaterialParseResponse(BaseModel):
+    """素材解析响应"""
+    success: bool
+    message: str
+    material_id: str
+    source_filename: str
+    text: str
+    images: List[MaterialImageInfo]
+    image_count: int
+
+
+# ── 证据链与反幻觉 Schema ──────────────────────────────────
+
+class SourceRef(BaseModel):
+    """来源引用"""
+    ref_id: str = ""
+    source_type: str = ""
+    source_id: Optional[str] = None
+    location: str = ""
+    quote: str = ""
+    relation: str = ""
+
+
+class HallucinationIssueResponse(BaseModel):
+    """反幻觉检查结果"""
+    severity: str
+    category: str
+    text: str
+    reason: str
+    suggestion: str
+
+
+class ChapterGenerationResult(BaseModel):
+    """章节生成结果（含证据链和反幻觉检查）"""
+    content: str
+    source_refs: List[SourceRef] = []
+    hallucination_issues: List[HallucinationIssueResponse] = []

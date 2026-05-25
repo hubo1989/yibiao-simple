@@ -1,0 +1,207 @@
+"""Bid Agent Orchestrator API routes."""
+from __future__ import annotations
+
+import asyncio
+import json
+import uuid
+from typing import Annotated
+
+from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import StreamingResponse
+from sqlalchemy import and_, select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from ..auth.dependencies import require_editor
+from ..db.database import async_session_factory, get_db
+from ..models.bid_agent import BidAgentRun, BidAgentStep
+from ..models.project import Project, ProjectMemberRole, project_members
+from ..models.user import User
+from ..schemas.bid_agent import BidAgentQualityReport, BidAgentRunResponse, BidAgentStepResponse
+from ..services import bid_agent_service
+
+router = APIRouter(prefix="/api/bid-agent", tags=["Bid Agent"])
+
+
+async def _verify_project_access(
+    project_id: uuid.UUID,
+    user_id: uuid.UUID,
+    db: AsyncSession,
+    *,
+    require_write: bool = False,
+) -> Project:
+    result = await db.execute(
+        select(project_members.c.role).where(
+            and_(project_members.c.project_id == project_id, project_members.c.user_id == user_id)
+        )
+    )
+    role = result.scalar_one_or_none()
+    if role is None:
+        raise HTTPException(status_code=404, detail="项目不存在或您没有访问权限")
+    role_value = role.value if hasattr(role, "value") else str(role)
+    if require_write and role_value not in {ProjectMemberRole.OWNER.value, ProjectMemberRole.EDITOR.value}:
+        raise HTTPException(status_code=403, detail="当前项目角色无权执行该操作")
+    project_result = await db.execute(select(Project).where(Project.id == project_id))
+    project = project_result.scalar_one_or_none()
+    if not project:
+        raise HTTPException(status_code=404, detail="项目不存在")
+    return project
+
+
+def _run_response(run: BidAgentRun) -> BidAgentRunResponse:
+    return BidAgentRunResponse(
+        id=str(run.id),
+        project_id=str(run.project_id),
+        created_by=str(run.created_by) if run.created_by else None,
+        goal=run.goal,
+        status=run.status.value if hasattr(run.status, "value") else str(run.status),
+        progress=run.progress,
+        summary=run.summary,
+        error_message=run.error_message,
+        result_json=run.result_json or {},
+        created_at=run.created_at,
+        updated_at=run.updated_at,
+    )
+
+
+def _step_response(step: BidAgentStep) -> BidAgentStepResponse:
+    return BidAgentStepResponse(
+        id=str(step.id),
+        run_id=str(step.run_id),
+        step_key=step.step_key,
+        step_name=step.step_name,
+        status=step.status.value if hasattr(step.status, "value") else str(step.status),
+        order_index=step.order_index,
+        progress=step.progress,
+        summary=step.summary,
+        error_message=step.error_message,
+        result_json=step.result_json or {},
+        started_at=step.started_at,
+        completed_at=step.completed_at,
+    )
+
+
+async def _verify_run_access(run_id: uuid.UUID, user_id: uuid.UUID, db: AsyncSession) -> BidAgentRun:
+    run = await bid_agent_service.get_run(db, run_id)
+    if not run:
+        raise HTTPException(status_code=404, detail="Bid Agent 运行记录不存在")
+    await _verify_project_access(run.project_id, user_id, db)
+    return run
+
+
+@router.post("/{project_id}/generate-draft", response_model=BidAgentRunResponse)
+async def generate_draft(
+    project_id: uuid.UUID,
+    current_user: Annotated[User, Depends(require_editor)] = None,
+    db: AsyncSession = Depends(get_db),
+) -> BidAgentRunResponse:
+    """Create and synchronously execute a deterministic draft-generation MVP run."""
+    await _verify_project_access(project_id, current_user.id, db, require_write=True)
+    run = await bid_agent_service.create_run(db, project_id, current_user.id, goal="generate_draft")
+    run = await bid_agent_service.execute_generate_draft(db, run.id)
+    return _run_response(run)
+
+
+@router.post("/{project_id}/generate-draft-stream")
+async def generate_draft_stream(
+    project_id: uuid.UUID,
+    current_user: Annotated[User, Depends(require_editor)] = None,
+    db: AsyncSession = Depends(get_db),
+) -> StreamingResponse:
+    """Create a draft-generation run and stream step-level progress as SSE."""
+    await _verify_project_access(project_id, current_user.id, db, require_write=True)
+    run = await bid_agent_service.create_run(db, project_id, current_user.id, goal="generate_draft")
+    await db.commit()
+    await db.refresh(run)
+    initial_run_payload = bid_agent_service.run_payload(run)
+
+    async def event_stream():
+        queue: asyncio.Queue[dict | None] = asyncio.Queue()
+
+        async def emit(event: dict) -> None:
+            await queue.put(event)
+
+        async def execute() -> None:
+            try:
+                async with async_session_factory() as stream_db:
+                    await bid_agent_service.execute_generate_draft(stream_db, run.id, on_event=emit)
+            except Exception as exc:  # pragma: no cover - defensive streaming path
+                await queue.put({"type": "error", "message": str(exc)})
+            finally:
+                await queue.put(None)
+
+        task = asyncio.create_task(execute())
+        initial = {"type": "created", "run": initial_run_payload}
+        yield f"data: {json.dumps(initial, ensure_ascii=False)}\n\n"
+        try:
+            while True:
+                event = await queue.get()
+                if event is None:
+                    break
+                yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+        finally:
+            await task
+        yield "data: [DONE]\n\n"
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+@router.post("/{project_id}/fix-risks", response_model=BidAgentRunResponse)
+async def fix_risks(
+    project_id: uuid.UUID,
+    current_user: Annotated[User, Depends(require_editor)] = None,
+    db: AsyncSession = Depends(get_db),
+) -> BidAgentRunResponse:
+    """Create and synchronously execute quality checks for risk-fix workflow."""
+    await _verify_project_access(project_id, current_user.id, db, require_write=True)
+    run = await bid_agent_service.create_run(db, project_id, current_user.id, goal="fix_risks")
+    run = await bid_agent_service.execute_generate_draft(db, run.id)
+    return _run_response(run)
+
+
+@router.get("/runs/{run_id}", response_model=BidAgentRunResponse)
+async def get_run(
+    run_id: uuid.UUID,
+    current_user: Annotated[User, Depends(require_editor)] = None,
+    db: AsyncSession = Depends(get_db),
+) -> BidAgentRunResponse:
+    run = await _verify_run_access(run_id, current_user.id, db)
+    return _run_response(run)
+
+
+@router.get("/{project_id}/runs/latest", response_model=BidAgentRunResponse | None)
+async def get_latest_project_run(
+    project_id: uuid.UUID,
+    current_user: Annotated[User, Depends(require_editor)] = None,
+    db: AsyncSession = Depends(get_db),
+) -> BidAgentRunResponse | None:
+    await _verify_project_access(project_id, current_user.id, db)
+    run = await bid_agent_service.get_latest_run(db, project_id)
+    return _run_response(run) if run else None
+
+
+@router.get("/runs/{run_id}/steps", response_model=list[BidAgentStepResponse])
+async def get_run_steps(
+    run_id: uuid.UUID,
+    current_user: Annotated[User, Depends(require_editor)] = None,
+    db: AsyncSession = Depends(get_db),
+) -> list[BidAgentStepResponse]:
+    await _verify_run_access(run_id, current_user.id, db)
+    steps = await bid_agent_service.list_steps(db, run_id)
+    return [_step_response(step) for step in steps]
+
+
+@router.get("/{project_id}/quality-report", response_model=BidAgentQualityReport)
+async def quality_report(
+    project_id: uuid.UUID,
+    current_user: Annotated[User, Depends(require_editor)] = None,
+    db: AsyncSession = Depends(get_db),
+) -> BidAgentQualityReport:
+    await _verify_project_access(project_id, current_user.id, db)
+    return BidAgentQualityReport(**await bid_agent_service.build_quality_report(db, project_id))

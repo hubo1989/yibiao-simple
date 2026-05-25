@@ -14,7 +14,6 @@ import ReviewHistoryDrawer from '../components/review/ReviewHistoryDrawer';
 import type { Project } from '../types/project';
 import type {
   ReviewDimension,
-  ReviewSummary,
   ReviewResultResponse,
   ReviewHistoryItem,
 } from '../types/review';
@@ -82,6 +81,7 @@ const BidReview: React.FC = () => {
   const [selectedIssueIds, setSelectedIssueIds] = useState<string[]>([]);
   const [applyFixDrawerOpen, setApplyFixDrawerOpen] = useState(false);
   const [applyFixContent, setApplyFixContent] = useState('');
+  const [applyFixVersion, setApplyFixVersion] = useState<{ id: string; number: number } | null>(null);
   const [applyFixStreaming, setApplyFixStreaming] = useState(false);
 
   const fetchProject = useCallback(async () => {
@@ -114,8 +114,11 @@ const BidReview: React.FC = () => {
   const loadResult = useCallback(async (tid: string) => {
     try {
       const data = await reviewApi.getResult(tid);
+      setTaskId(tid);
       setResult(data);
+      setDimensions(data.config.dimensions);
       setStep('report');
+      setSelectedIssueIds([]);
     } catch {
       message.error('加载审查结果失败');
     }
@@ -219,6 +222,7 @@ const BidReview: React.FC = () => {
   const handleApplyFix = async () => {
     if (!taskId) return;
     setApplyFixContent('');
+    setApplyFixVersion(null);
     setApplyFixStreaming(true);
     setApplyFixDrawerOpen(true);
     try {
@@ -253,6 +257,15 @@ const BidReview: React.FC = () => {
             if (parsed.status === 'streaming' && parsed.full_content) {
               full = parsed.full_content;
               setApplyFixContent(full);
+            } else if (parsed.status === 'completed') {
+              if (parsed.content) {
+                full = parsed.content;
+                setApplyFixContent(full);
+              }
+              if (parsed.version_id && parsed.version_number) {
+                setApplyFixVersion({ id: parsed.version_id, number: Number(parsed.version_number) });
+                message.success(`AI 修改已保存为版本 V${parsed.version_number}`);
+              }
             }
           } catch { /* ignore */ }
         }
@@ -325,17 +338,17 @@ const BidReview: React.FC = () => {
   const allIssues: Array<{ dimension: string; item: any; key: string }> = [];
   if (result?.responsiveness?.items) {
     result.responsiveness.items.forEach((item, i) => {
-      allIssues.push({ dimension: 'responsiveness', item, key: `resp-${i}` });
+      allIssues.push({ dimension: 'responsiveness', item, key: item.id || `resp-${i}` });
     });
   }
   if (result?.compliance?.items) {
     result.compliance.items.forEach((item, i) => {
-      allIssues.push({ dimension: 'compliance', item, key: `comp-${i}` });
+      allIssues.push({ dimension: 'compliance', item, key: item.id || `comp-${i}` });
     });
   }
   if (result?.consistency?.contradictions) {
     result.consistency.contradictions.forEach((item, i) => {
-      allIssues.push({ dimension: 'consistency', item, key: `cons-${i}` });
+      allIssues.push({ dimension: 'consistency', item, key: item.id || `cons-${i}` });
     });
   }
 
@@ -343,7 +356,7 @@ const BidReview: React.FC = () => {
     <div className="min-h-full bg-gray-50">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-6">
         <ContentPageHeader
-          onBack={() => navigate(`/project/${projectId}/workspace`)}
+          onBack={() => navigate(`/project/${projectId}`)}
           eyebrow={project.name}
           title="标书审查"
           description="AI 智能审查投标文件的响应性、合规性和一致性"
@@ -382,7 +395,7 @@ const BidReview: React.FC = () => {
             }
             showIcon
             action={
-              <Button onClick={() => navigate(`/project/${projectId}/workspace`)}>
+              <Button onClick={() => navigate(`/project/${projectId}`)}>
                 前往工作台
               </Button>
             }
@@ -464,6 +477,8 @@ const BidReview: React.FC = () => {
               severityFilter={severityFilter}
               onSeverityFilterChange={setSeverityFilter}
               onCopy={copyText}
+              selectedIssueIds={selectedIssueIds}
+              onSelectedIssueIdsChange={setSelectedIssueIds}
             />
 
             {/* AI 修复操作栏 */}
@@ -517,9 +532,20 @@ const BidReview: React.FC = () => {
                 </div>
               )}
               {applyFixContent && (
-                <div style={{ whiteSpace: 'pre-wrap', lineHeight: 1.8, fontSize: 14 }}>
-                  {applyFixContent}
-                </div>
+                <>
+                  {applyFixVersion && (
+                    <Alert
+                      type="success"
+                      showIcon
+                      message={`已保存版本 V${applyFixVersion.number}`}
+                      description="本次 AI 修改已写入项目版本历史，可在项目工作区的版本历史中追溯和对比。"
+                      style={{ marginBottom: 16 }}
+                    />
+                  )}
+                  <div style={{ whiteSpace: 'pre-wrap', lineHeight: 1.8, fontSize: 14 }}>
+                    {applyFixContent}
+                  </div>
+                </>
               )}
             </Drawer>
 
