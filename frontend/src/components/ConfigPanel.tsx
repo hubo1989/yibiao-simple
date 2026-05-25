@@ -156,10 +156,10 @@ const ConfigPanel: React.FC = () => {
   };
 
   return (
-    <section className="bg-white shadow rounded-lg">
-      <div className="px-6 py-4 border-b border-gray-200">
-        <h2 className="text-lg font-medium text-gray-900">拉卡拉标书智能体配置</h2>
-        <p className="mt-1 text-sm text-gray-500">
+    <section className="rounded-xl border border-[#2a2640] bg-[#1a1825] shadow-lg">
+      <div className="border-b border-[#2e2a3e] px-6 py-4">
+        <h2 className="text-lg font-semibold text-white">拉卡拉标书智能体配置</h2>
+        <p className="mt-1 text-sm text-[#9b95ad]">
           Provider 与模型选择会缓存到当前浏览器，供标书解析、目录生成与正文扩写流程复用。
         </p>
       </div>
@@ -167,9 +167,9 @@ const ConfigPanel: React.FC = () => {
       <div className="px-6 py-5 space-y-6">
         <div>
           <div className="flex items-center justify-between gap-3 mb-3">
-            <h3 className="text-base font-medium text-gray-900">模型信息</h3>
+            <h3 className="text-base font-medium text-white">模型信息</h3>
             {providers.length > 0 && (
-              <span className="inline-flex items-center rounded-full bg-blue-50 px-2.5 py-1 text-xs font-medium text-blue-700">
+              <span className="inline-flex items-center rounded-full bg-indigo-500/15 px-2.5 py-1 text-xs font-medium text-indigo-300">
                 已缓存 {providers.length} 个 Provider
               </span>
             )}
@@ -178,7 +178,7 @@ const ConfigPanel: React.FC = () => {
           <button
             onClick={handleGetModels}
             disabled={loading}
-            className="w-full inline-flex justify-center items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-primary-500 disabled:bg-gray-100"
+            className="w-full inline-flex justify-center items-center px-4 py-2 border border-[#3d3854] text-sm font-medium rounded-lg text-[#e1deea] bg-[#23202f] hover:bg-[#2e2a3e] focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-[#1a1825] focus:ring-indigo-500 disabled:bg-[#1a1825] disabled:text-[#5a5568] transition-colors"
           >
             {loading ? '获取中...' : '重新获取模型列表'}
           </button>
@@ -186,67 +186,69 @@ const ConfigPanel: React.FC = () => {
           {activeProvider ? (
             <div className="mt-4 space-y-4">
               <div>
-                <label htmlFor="provider-select" className="block text-sm font-medium text-gray-700 mb-1">
+                <label htmlFor="provider-select" className="block text-sm font-medium text-[#c8c4d4] mb-1">
                   当前 Provider
                 </label>
                 <select
                   id="provider-select"
                   value={currentProviderId}
                   onChange={(e) => handleProviderChange(e.target.value)}
-                  className="w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm"
+                  className="w-full rounded-lg border-[#3d3854] bg-[#23202f] px-3 py-2 text-sm text-white shadow-sm focus:border-indigo-500 focus:ring-indigo-500"
+                  style={{ colorScheme: 'dark' }}
                 >
                   {providers.map((provider) => (
-                    <option key={provider.configId} value={provider.configId}>
+                    <option key={provider.configId} value={provider.configId} style={{ backgroundColor: '#23202f', color: '#fff' }}>
                       {provider.provider}{provider.isDefault ? '（默认）' : ''}
                     </option>
                   ))}
                 </select>
-                <p className="mt-2 text-xs text-gray-500">
+                <p className="mt-2 text-xs text-[#7a7590]">
                   当管理员配置了多个 Provider 时，可在这里切换当前编写流程使用的服务源。
                 </p>
               </div>
 
               <div>
-                <label htmlFor="model-select" className="block text-sm font-medium text-gray-700 mb-1">
+                <label htmlFor="model-select" className="block text-sm font-medium text-[#c8c4d4] mb-1">
                   当前默认模型
                 </label>
                 <select
                   id="model-select"
                   value={currentModel}
                   onChange={(e) => setCurrentModel(e.target.value)}
-                  className="w-full rounded-md border-gray-300 shadow-sm focus:border-primary-500 focus:ring-primary-500 sm:text-sm"
+                  className="w-full rounded-lg border-[#3d3854] bg-[#23202f] px-3 py-2 text-sm text-white shadow-sm focus:border-indigo-500 focus:ring-indigo-500"
+                  style={{ colorScheme: 'dark' }}
                 >
                   {activeProvider.models.map((model) => (
-                    <option key={model} value={model}>
+                    <option key={model} value={model} style={{ backgroundColor: '#23202f', color: '#fff' }}>
                       {model}
                     </option>
                   ))}
                 </select>
-                <p className="mt-2 text-xs text-gray-500">
+                <p className="mt-2 text-xs text-[#7a7590]">
                   {activeProvider.provider} 下的模型列表已缓存。若后台配置有更新，请重新获取。
                 </p>
               </div>
             </div>
           ) : (
-            <p className="mt-4 text-sm text-gray-500">
+            <p className="mt-4 text-sm text-[#7a7590]">
               暂未读取 Provider 与模型列表。点击上方按钮后，可切换当前浏览器默认使用的 Provider 与模型。
             </p>
           )}
         </div>
 
         {message && (
-          <div className={`p-3 rounded-md text-sm ${
+          <div className={`p-3 rounded-lg text-sm ${
             message.type === 'success'
-              ? 'bg-green-100 text-green-700 border border-green-200'
-              : 'bg-red-100 text-red-700 border border-red-200'
+              ? 'bg-emerald-500/15 text-emerald-300 border border-emerald-500/25'
+              : 'bg-red-500/15 text-red-300 border border-red-500/25'
           }`}>
             {message.text}
           </div>
         )}
 
-        <div className="border-t border-gray-200 pt-4">
-          <h3 className="text-sm font-medium text-gray-900 mb-2">使用说明</h3>
-          <div className="text-sm text-gray-600 space-y-2">
+        <div className="border-t border-[#2e2a3e] pt-4">
+          <h3 className="text-sm font-medium text-[#c8c4d4] mb-2">使用说明</h3>
+          <div className="text-sm text-[#9b95ad] space-y-2">
             <p>1. 管理员在系统设置中维护 API Key、Provider 和模型供给。</p>
             <p>2. 这里选中的 Provider 和模型会应用到当前浏览器的编写流程，不区分具体项目文件。</p>
             <p>3. 若解析或生成前需要切换 Provider，先到项目设置刷新并选择后再继续。</p>

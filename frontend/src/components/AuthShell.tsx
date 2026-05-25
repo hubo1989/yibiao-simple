@@ -5,6 +5,7 @@
 import React from 'react';
 import { Link } from 'react-router-dom';
 import { SparkleIcon } from './ui/AIElements';
+import { ThemeToggle } from '../contexts/ThemeContext';
 
 interface AuthShellProps {
   eyebrow: string;
@@ -159,8 +160,12 @@ const AuthShell: React.FC<AuthShellProps> = ({
           padding: '48px clamp(32px, 5vw, 60px)',
           background: 'var(--bg-surface)',
           borderLeft: '1px solid var(--border)',
+          position: 'relative',
         }}
       >
+        <div style={{ position: 'absolute', top: 24, right: 24 }}>
+          <ThemeToggle />
+        </div>
         {/* 表单头部 */}
         <div style={{ marginBottom: 32 }}>
           <h2

@@ -5,7 +5,7 @@ import { materialApi } from '../services/api';
 import type { MaterialAsset, MaterialCategory } from '../types/material';
 import { useLayoutHeader } from '../layouts/layoutHeader';
 import IngestionWizard from '../components/IngestionWizard';
-import { getFileUrl, getErrorMessage, ApiError } from '../utils/error';
+import { getFileUrl, getErrorMessage } from '../utils/error';
 
 // 计算距今天数（正数=未来，负数=已过期）
 function daysUntil(dateStr: string | null | undefined): number | null {

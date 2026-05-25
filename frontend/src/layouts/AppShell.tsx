@@ -2,7 +2,7 @@
  * AppShell — AI Native 全局布局
  * 替代 ProLayout，提供极简导航 + 暗色主题
  */
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { Dropdown } from 'antd';
 import {
@@ -19,8 +19,10 @@ import {
   SearchOutlined,
   MenuFoldOutlined,
   MenuUnfoldOutlined,
+  ExperimentOutlined,
 } from '@ant-design/icons';
 import { useAuth } from '../contexts/AuthContext';
+import { ThemeToggle } from '../contexts/ThemeContext';
 import { SparkleIcon } from '../components/ui/AIElements';
 import type { LayoutHeaderConfig, LayoutHeaderOutletContext } from './layoutHeader';
 
@@ -40,6 +42,7 @@ const menuItems: MenuItem[] = [
   { path: '/materials', name: '素材库', icon: <PictureOutlined /> },
   { path: '/templates', name: '导出模板', icon: <FileTextOutlined /> },
   { path: '/knowledge-library', name: '章节模板', icon: <DatabaseOutlined /> },
+  { path: '/ai-native-prototype', name: 'AI 原型', icon: <ExperimentOutlined /> },
   { path: '/admin', name: '系统设置', icon: <SettingOutlined />, adminOnly: true },
 ];
 
@@ -272,58 +275,61 @@ const AppShell: React.FC = () => {
           </div>
 
           {/* 右侧：用户 */}
-          <Dropdown
-            menu={{
-              items: [
-                { key: 'profile', icon: <UserOutlined />, label: '个人设置' },
-                { type: 'divider' as const },
-                {
-                  key: 'logout',
-                  icon: <LogoutOutlined />,
-                  label: '退出登录',
-                  onClick: handleLogout,
-                },
-              ],
-            }}
-            placement="bottomRight"
-          >
-            <div
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: 8,
-                cursor: 'pointer',
-                padding: '4px 8px',
-                borderRadius: 'var(--radius-sm)',
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+            <ThemeToggle variant="icon" />
+            <Dropdown
+              menu={{
+                items: [
+                  { key: 'profile', icon: <UserOutlined />, label: '个人设置' },
+                  { type: 'divider' as const },
+                  {
+                    key: 'logout',
+                    icon: <LogoutOutlined />,
+                    label: '退出登录',
+                    onClick: handleLogout,
+                  },
+                ],
               }}
+              placement="bottomRight"
             >
               <div
                 style={{
-                  width: 32,
-                  height: 32,
-                  borderRadius: '50%',
-                  background: 'var(--accent-grad)',
                   display: 'flex',
                   alignItems: 'center',
-                  justifyContent: 'center',
-                  color: '#fff',
-                  fontSize: 13,
-                  fontWeight: 600,
+                  gap: 8,
+                  cursor: 'pointer',
+                  padding: '4px 8px',
+                  borderRadius: 'var(--radius-sm)',
                 }}
               >
-                {user?.username?.charAt(0).toUpperCase() || 'U'}
+                <div
+                  style={{
+                    width: 32,
+                    height: 32,
+                    borderRadius: '50%',
+                    background: 'var(--accent-grad)',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    color: '#fff',
+                    fontSize: 13,
+                    fontWeight: 600,
+                  }}
+                >
+                  {user?.username?.charAt(0).toUpperCase() || 'U'}
+                </div>
+                <span
+                  style={{
+                    color: 'var(--text-secondary)',
+                    fontSize: 13,
+                    fontWeight: 500,
+                  }}
+                >
+                  {user?.username || 'User'}
+                </span>
               </div>
-              <span
-                style={{
-                  color: 'var(--text-secondary)',
-                  fontSize: 13,
-                  fontWeight: 500,
-                }}
-              >
-                {user?.username || 'User'}
-              </span>
-            </div>
-          </Dropdown>
+            </Dropdown>
+          </div>
         </header>
 
         {/* subContent 区域 */}

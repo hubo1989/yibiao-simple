@@ -34,6 +34,23 @@ def parse_cors_origins(value: Union[str, List[str], None]) -> List[str]:
     return []
 
 
+def parse_env_list(value: Union[str, List[str], None]) -> List[str]:
+    """解析环境变量列表，支持 JSON 数组或逗号分隔字符串。"""
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return [str(item).strip() for item in value if str(item).strip()]
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+            if isinstance(parsed, list):
+                return [str(item).strip() for item in parsed if str(item).strip()]
+        except json.JSONDecodeError:
+            pass
+        return [item.strip() for item in value.split(",") if item.strip()]
+    return []
+
+
 class Settings(BaseSettings):
     """应用设置"""
 
@@ -48,7 +65,7 @@ class Settings(BaseSettings):
     env: str = "development"  # development | production
 
     # CORS设置 - 支持环境变量注入
-    cors_origins: List[str] = [
+    cors_origins: Union[str, List[str]] = [
         "http://localhost:3000",
         "http://127.0.0.1:3000",
         "http://localhost:3001",
@@ -61,6 +78,8 @@ class Settings(BaseSettings):
         "http://127.0.0.1:3004",
         "http://localhost:3033",
         "http://127.0.0.1:3033",
+        "http://localhost:3057",
+        "http://127.0.0.1:3057",
         "http://localhost:3088",
         "http://127.0.0.1:3088",
         "http://localhost",
@@ -74,8 +93,19 @@ class Settings(BaseSettings):
     # 数据库设置 - 支持环境变量注入
     database_url: str = "postgresql+asyncpg://postgres:postgres@localhost:5432/yibiao"
 
-    # LlamaIndex 知识库设置
+    # LLM 设置：支持通过环境变量直接配置自托管 OpenAI-compatible 服务
+    llm_provider: str = "env"
+    llm_api_key: Optional[str] = None
+    llm_base_url: Optional[str] = None
+    llm_model: Optional[str] = None
+    llm_models: Union[str, List[str], None] = None
+
+    # LlamaIndex 知识库/Embedding 设置
     knowledge_vector_backend: str = "llamaindex"
+    embedding_provider: str = "ollama"  # ollama | openai-compatible
+    embedding_api_key: Optional[str] = None
+    embedding_base_url: Optional[str] = None
+    embedding_models: Union[str, List[str], None] = None
     embedding_model: str = "qwen3-embedding:4b"
     embedding_dimension: int = 2560
     ollama_base_url: str = "http://localhost:11434"
@@ -86,6 +116,10 @@ class Settings(BaseSettings):
 
     # OpenAI默认设置
     default_model: str = "gpt-3.5-turbo"
+
+    # Bid Agent 设置：默认使用确定性章节生成，保证自托管一键流程可快速完成。
+    bid_agent_use_llm_chapters: bool = False
+    bid_agent_chapter_timeout_seconds: int = 15
 
     # JWT 认证设置 - 支持环境变量注入
     secret_key: Optional[str] = None
@@ -117,6 +151,39 @@ class Settings(BaseSettings):
         cors_env = os.getenv("CORS_ORIGINS")
         if cors_env:
             self.cors_origins = parse_cors_origins(cors_env)
+        else:
+            self.cors_origins = parse_cors_origins(self.cors_origins)
+
+    @property
+    def generation_model(self) -> str:
+        """当前环境变量配置的默认生成模型。"""
+        return self.llm_model or self.default_model
+
+    @property
+    def generation_models(self) -> List[str]:
+        """当前环境变量配置的可用生成模型列表。"""
+        models = parse_env_list(self.llm_models)
+        if self.generation_model not in models:
+            models.insert(0, self.generation_model)
+        return models
+
+    @property
+    def effective_embedding_base_url(self) -> str:
+        """Embedding 服务地址；未单独配置时兼容旧的 Ollama 地址。"""
+        return self.embedding_base_url or self.ollama_base_url
+
+    @property
+    def effective_embedding_api_key(self) -> Optional[str]:
+        """Embedding API Key；未单独配置时复用 LLM API Key。"""
+        return self.embedding_api_key or self.llm_api_key
+
+    @property
+    def index_models(self) -> List[str]:
+        """当前环境变量配置的可用索引/Embedding 模型列表。"""
+        models = parse_env_list(self.embedding_models)
+        if self.embedding_model not in models:
+            models.insert(0, self.embedding_model)
+        return models
 
 # 全局设置实例
 settings = Settings()

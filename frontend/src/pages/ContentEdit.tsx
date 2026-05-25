@@ -14,10 +14,10 @@ import {
   ChapterContentRequest,
 } from '../services/api';
 import type { ChapterTemplate } from '../services/api';
-import type { SmartMatchResult, SmartMatchRecommendation } from '../services/api';
+import type { SmartMatchRecommendation } from '../services/api';
 import type { ScoringCriteriaItem } from '../services/api';
 import ExportDialog from '../components/ExportDialog';
-import { getErrorMessage, ApiError } from '../utils/error';
+import { getErrorMessage } from '../utils/error';
 
 import { draftStorage } from '../utils/draftStorage';
 import { getCurrentModel, getCurrentProviderConfigId } from '../utils/modelCache';
@@ -33,7 +33,7 @@ import type { ChapterMaterialBinding } from '../types/material';
 import type { ProofreadResult, ProofreadIssue } from '../types/proofread';
 import type { ChapterReverseEnhanceResponse, ClauseResponseResult } from '../types/bid';
 import type { ConsistencyCheckResult } from '../services/api';
-import { ProCard } from '@ant-design/pro-components';
+import { ProCard } from '../components/ProCompat';
 import { 
   Button, 
   Space, 
@@ -45,7 +45,6 @@ import {
   FloatButton,
   message,
   Modal,
-  Alert,
   Input,
   Spin,
   Form,
@@ -154,8 +153,6 @@ const ContentEdit: React.FC<ContentEditProps> = ({
   const [chapterScoringMap, setChapterScoringMap] = useState<Record<string, ScoringCriteriaItem[]>>({});
 
   // 素材智能匹配面板
-  const [smartMatchResults, setSmartMatchResults] = useState<SmartMatchResult[]>([]);
-  const [smartMatchLoading, setSmartMatchLoading] = useState(false);
   const [autoBindLoading, setAutoBindLoading] = useState(false);
   // 章节ID -> 推荐素材列表（展开时懒查询）
   const [chapterMatchMap, setChapterMatchMap] = useState<Record<string, SmartMatchRecommendation[]>>({});

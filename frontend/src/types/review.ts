@@ -19,6 +19,7 @@ export interface SourceRef {
 }
 
 export interface ResponsivenessItem {
+  id?: string;
   rating_item: string;
   score: number;
   max_score: number;
@@ -35,6 +36,7 @@ export interface ResponsivenessItem {
 // === 合规性审查 ===
 
 export interface ComplianceItem {
+  id?: string;
   compliance_category: string;
   clause_text: string;
   check_result: 'pass' | 'warning' | 'fail';
@@ -47,6 +49,7 @@ export interface ComplianceItem {
 // === 一致性审查 ===
 
 export interface ConsistencyItem {
+  id?: string;
   severity: Severity;
   category: string;
   description: string;

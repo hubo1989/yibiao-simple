@@ -22,7 +22,7 @@ def upgrade() -> None:
         'disqualification_checks',
         sa.Column('id', postgresql.UUID(as_uuid=True), primary_key=True),
         sa.Column('project_id', postgresql.UUID(as_uuid=True),
-                  sa.ForeignKey('projects.id', ondelete='CASCADE'), nullable=False, index=True),
+                  sa.ForeignKey('projects.id', ondelete='CASCADE'), nullable=False),
         sa.Column('item_id', sa.String(20), nullable=False),
         sa.Column('category', sa.String(50), nullable=False),
         sa.Column('requirement', sa.Text(), nullable=False),

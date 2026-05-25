@@ -12,6 +12,28 @@ from ..models.knowledge import KnowledgeDoc
 logger = logging.getLogger(__name__)
 
 
+def build_embed_model():
+    """构建环境变量驱动的 Embedding 模型。"""
+    if settings.embedding_provider == "openai-compatible":
+        try:
+            from llama_index.embeddings.openai import OpenAIEmbedding
+        except ImportError as exc:
+            raise RuntimeError(
+                "EMBEDDING_PROVIDER=openai-compatible 需要安装 llama-index-embeddings-openai"
+            ) from exc
+        return OpenAIEmbedding(
+            model=settings.embedding_model,
+            api_key=settings.effective_embedding_api_key or "not-needed",
+            api_base=settings.effective_embedding_base_url,
+        )
+
+    from llama_index.embeddings.ollama import OllamaEmbedding
+    return OllamaEmbedding(
+        model_name=settings.embedding_model,
+        base_url=settings.effective_embedding_base_url,
+    )
+
+
 def build_document_metadata(
     doc_id: uuid.UUID,
     title: str,
@@ -162,14 +184,10 @@ class LlamaIndexKnowledgeService:
         """
         try:
             from llama_index.core import VectorStoreIndex, StorageContext, Document
-            from llama_index.embeddings.ollama import OllamaEmbedding
             from llama_index.vector_stores.postgres import PGVectorStore
 
             # 创建嵌入模型
-            embed_model = OllamaEmbedding(
-                model_name=settings.embedding_model,
-                base_url=settings.ollama_base_url,
-            )
+            embed_model = build_embed_model()
 
             # 创建 PostgreSQL 向量存储
             conn_params = self._get_connection_params()
@@ -222,14 +240,10 @@ class LlamaIndexKnowledgeService:
         """
         try:
             from llama_index.core import VectorStoreIndex
-            from llama_index.embeddings.ollama import OllamaEmbedding
             from llama_index.vector_stores.postgres import PGVectorStore
 
             # 创建嵌入模型
-            embed_model = OllamaEmbedding(
-                model_name=settings.embedding_model,
-                base_url=settings.ollama_base_url,
-            )
+            embed_model = build_embed_model()
 
             # 创建向量存储并加载已有索引
             conn_params = self._get_connection_params()

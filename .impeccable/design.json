@@ -1,0 +1,218 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-05-22T00:00:00+08:00",
+  "title": "Design System: 易标 AI",
+  "extensions": {
+    "colorMeta": {
+      "clear-tech-blue": {
+        "role": "primary",
+        "displayName": "清澈科技蓝",
+        "canonical": "#09A4FA",
+        "tonalRamp": ["#062638", "#084765", "#086a92", "#098ec6", "#09a4fa", "#4abefb", "#8bd6fd", "#d8f2ff"]
+      },
+      "deep-ink-workbench": {
+        "role": "neutral",
+        "displayName": "深墨工作台",
+        "canonical": "#0f0d1a",
+        "tonalRamp": ["#0f0d1a", "#1a1825", "#231f35", "#37314d", "#514b68", "#79738f", "#b5b0c4", "#f1eff7"]
+      },
+      "cold-paper": {
+        "role": "neutral",
+        "displayName": "冷白纸面",
+        "canonical": "#ffffff",
+        "tonalRamp": ["#1f2937", "#4b5563", "#6b7280", "#9ca3af", "#d1d5db", "#e5e7eb", "#f8fafc", "#ffffff"]
+      },
+      "evidence-green": {
+        "role": "success",
+        "displayName": "证据绿",
+        "canonical": "#10b981",
+        "tonalRamp": ["#052e22", "#064e3b", "#047857", "#059669", "#10b981", "#34d399", "#a7f3d0", "#ecfdf5"]
+      },
+      "gate-amber": {
+        "role": "warning",
+        "displayName": "门禁琥珀",
+        "canonical": "#f59e0b",
+        "tonalRamp": ["#451a03", "#78350f", "#b45309", "#d97706", "#f59e0b", "#fbbf24", "#fde68a", "#fffbeb"]
+      },
+      "risk-red": {
+        "role": "error",
+        "displayName": "风险红",
+        "canonical": "#ef4444",
+        "tonalRamp": ["#450a0a", "#7f1d1d", "#b91c1c", "#dc2626", "#ef4444", "#f87171", "#fecaca", "#fef2f2"]
+      }
+    },
+    "typographyMeta": {
+      "display": {
+        "displayName": "Display",
+        "purpose": "原型首页或关键项目标题。"
+      },
+      "headline": {
+        "displayName": "Headline",
+        "purpose": "页面级标题和项目流程页主标题。"
+      },
+      "title": {
+        "displayName": "Title",
+        "purpose": "面板标题、步骤组标题和重要对象名。"
+      },
+      "body": {
+        "displayName": "Body",
+        "purpose": "正文说明、步骤摘要和审查解释。"
+      },
+      "label": {
+        "displayName": "Label",
+        "purpose": "状态标签、字段名、分组提示和短辅助信息。"
+      }
+    },
+    "shadows": [
+      {
+        "name": "surface-low",
+        "value": "0 1px 3px rgba(15, 23, 42, 0.08)",
+        "purpose": "浅色主题中的轻量浮层和 toolbar。"
+      },
+      {
+        "name": "surface-medium",
+        "value": "0 4px 12px rgba(15, 23, 42, 0.10)",
+        "purpose": "下拉菜单、popover、小型确认区域。"
+      },
+      {
+        "name": "surface-high",
+        "value": "0 8px 30px rgba(15, 23, 42, 0.12)",
+        "purpose": "侧栏、抽屉、重要详情面板。"
+      },
+      {
+        "name": "ai-focus-glow",
+        "value": "0 0 24px rgba(9, 164, 250, 0.16)",
+        "purpose": "AI 指令输入、生成中状态和当前步骤焦点。"
+      }
+    ],
+    "motion": [
+      {
+        "name": "ease-out",
+        "value": "cubic-bezier(0.16, 1, 0.3, 1)",
+        "purpose": "默认状态变化、hover、面板出现。"
+      },
+      {
+        "name": "duration-fast",
+        "value": "150ms",
+        "purpose": "按钮和输入焦点反馈。"
+      },
+      {
+        "name": "duration-base",
+        "value": "200ms",
+        "purpose": "卡片、面板和导航状态变化。"
+      },
+      {
+        "name": "duration-slow",
+        "value": "300ms",
+        "purpose": "上下文区域进入或切换。"
+      }
+    ],
+    "breakpoints": [
+      {
+        "name": "mobile",
+        "value": "620px"
+      },
+      {
+        "name": "tablet",
+        "value": "960px"
+      }
+    ]
+  },
+  "components": [
+    {
+      "name": "Primary Button",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "页面唯一主动作，用于执行、确认、继续生成。",
+      "html": "<button class=\"ds-btn-primary\">执行</button>",
+      "css": ".ds-btn-primary { height: 40px; padding: 0 20px; border: 1px solid #09A4FA; border-radius: 12px; background: #09A4FA; color: #ffffff; font: 650 14px/1 Inter, -apple-system, BlinkMacSystemFont, 'PingFang SC', sans-serif; cursor: pointer; transition: transform 150ms cubic-bezier(0.16, 1, 0.3, 1), box-shadow 150ms cubic-bezier(0.16, 1, 0.3, 1), background 150ms cubic-bezier(0.16, 1, 0.3, 1); } .ds-btn-primary:hover { background: #0ea5e9; box-shadow: 0 0 24px rgba(9, 164, 250, 0.16); } .ds-btn-primary:focus-visible { outline: 3px solid rgba(9, 164, 250, 0.28); outline-offset: 2px; } .ds-btn-primary:active { transform: translateY(1px); }"
+    },
+    {
+      "name": "Ghost Button",
+      "kind": "button",
+      "refersTo": "button-ghost",
+      "description": "低风险动作，用于返回、搜索、重新生成、查看详情。",
+      "html": "<button class=\"ds-btn-ghost\">搜索项目</button>",
+      "css": ".ds-btn-ghost { height: 40px; padding: 0 16px; border: 1px solid #d6dbe4; border-radius: 12px; background: #ffffff; color: #4b5563; font: 600 14px/1 Inter, -apple-system, BlinkMacSystemFont, 'PingFang SC', sans-serif; cursor: pointer; transition: border-color 150ms cubic-bezier(0.16, 1, 0.3, 1), color 150ms cubic-bezier(0.16, 1, 0.3, 1), background 150ms cubic-bezier(0.16, 1, 0.3, 1); } .ds-btn-ghost:hover { border-color: rgba(9, 164, 250, 0.5); color: #0284c7; background: #f8fafc; } .ds-btn-ghost:focus-visible { outline: 3px solid rgba(9, 164, 250, 0.22); outline-offset: 2px; }"
+    },
+    {
+      "name": "Command Input",
+      "kind": "input",
+      "refersTo": "input-command",
+      "description": "全局和项目内 AI 指令入口，是易标最重要的交互组件。",
+      "html": "<label class=\"ds-command\"><span>AI 指令</span><input placeholder=\"上传招标文件生成项目，或打开已有项目\" /></label>",
+      "css": ".ds-command { display: grid; gap: 8px; color: #4b5563; font: 600 12px/1.2 Inter, -apple-system, BlinkMacSystemFont, 'PingFang SC', sans-serif; } .ds-command input { height: 44px; padding: 0 16px; border: 1px solid #d6dbe4; border-radius: 10px; background: #ffffff; color: #1f2937; font: 400 14px/1.6 Inter, -apple-system, BlinkMacSystemFont, 'PingFang SC', sans-serif; outline: none; transition: border-color 150ms cubic-bezier(0.16, 1, 0.3, 1), box-shadow 150ms cubic-bezier(0.16, 1, 0.3, 1); } .ds-command input::placeholder { color: #6b7280; } .ds-command input:focus { border-color: #09A4FA; box-shadow: 0 0 0 3px rgba(9, 164, 250, 0.18); }"
+    },
+    {
+      "name": "Status Chip",
+      "kind": "chip",
+      "refersTo": "status-chip",
+      "description": "表达步骤、证据和风险状态，必须配合文字使用。",
+      "html": "<span class=\"ds-chip ds-chip-warning\">需处理</span>",
+      "css": ".ds-chip { display: inline-flex; align-items: center; gap: 6px; min-height: 24px; padding: 4px 12px; border-radius: 9999px; background: #f8fafc; color: #4b5563; font: 650 12px/1 Inter, -apple-system, BlinkMacSystemFont, 'PingFang SC', sans-serif; white-space: nowrap; } .ds-chip::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: currentColor; } .ds-chip-warning { background: rgba(245, 158, 11, 0.10); color: #d97706; } .ds-chip-success { background: rgba(16, 185, 129, 0.10); color: #059669; } .ds-chip-risk { background: rgba(239, 68, 68, 0.10); color: #dc2626; }"
+    },
+    {
+      "name": "Project Surface",
+      "kind": "card",
+      "refersTo": "card-container",
+      "description": "承载真实对象或状态的面板，不用于装饰性堆叠。",
+      "html": "<article class=\"ds-project-surface\"><p>当前步骤</p><h3>内容生成</h3><span>需确认 2 小时响应承诺</span></article>",
+      "css": ".ds-project-surface { display: grid; gap: 8px; padding: 20px; border: 1px solid #d6dbe4; border-radius: 16px; background: #ffffff; color: #1f2937; box-shadow: 0 1px 3px rgba(15, 23, 42, 0.08); } .ds-project-surface p { margin: 0; color: #6b7280; font: 650 12px/1.2 Inter, -apple-system, BlinkMacSystemFont, 'PingFang SC', sans-serif; } .ds-project-surface h3 { margin: 0; color: #1f2937; font: 700 20px/1.3 Inter, -apple-system, BlinkMacSystemFont, 'PingFang SC', sans-serif; } .ds-project-surface span { color: #4b5563; font: 400 14px/1.6 Inter, -apple-system, BlinkMacSystemFont, 'PingFang SC', sans-serif; }"
+    },
+    {
+      "name": "Light Navigation Item",
+      "kind": "nav",
+      "refersTo": "navigation-item",
+      "description": "轻导航项，避免厚重菜单感。",
+      "html": "<button class=\"ds-nav-item ds-nav-item-active\">项目流程</button>",
+      "css": ".ds-nav-item { height: 36px; padding: 0 12px; border: 0; border-radius: 10px; background: transparent; color: #4b5563; font: 600 14px/1 Inter, -apple-system, BlinkMacSystemFont, 'PingFang SC', sans-serif; cursor: pointer; transition: background 150ms cubic-bezier(0.16, 1, 0.3, 1), color 150ms cubic-bezier(0.16, 1, 0.3, 1); } .ds-nav-item:hover { background: #f8fafc; color: #1f2937; } .ds-nav-item-active { background: rgba(9, 164, 250, 0.08); color: #0284c7; } .ds-nav-item:focus-visible { outline: 3px solid rgba(9, 164, 250, 0.22); outline-offset: 2px; }"
+    }
+  ],
+  "narrative": {
+    "northStar": "清澈控制台",
+    "overview": "易标的界面是一张清澈的项目控制台。它应该让投标负责人一眼看见项目当前步骤、风险位置、AI 建议和下一步动作，而不是让用户在菜单树里寻找功能。科技感来自信息组织、状态反馈和证据链，不来自炫光、装饰和复杂动效。",
+    "keyCharacteristics": [
+      "单入口优先，用户从指令入口上传、搜索、继续和管理项目。",
+      "串行流程清晰，步骤、门禁、风险和可跳转状态必须同时可见。",
+      "证据默认可见，AI 结论必须带来源、置信度、待确认状态或下一动作。",
+      "组件克制一致，按钮、输入、徽章和容器遵循同一套状态语言。",
+      "清新但不轻浮，科技感体现在秩序、速度和可信反馈上。"
+    ],
+    "rules": [
+      {
+        "name": "The Blue Rarity Rule",
+        "body": "清澈科技蓝不能铺满界面。它只用于主动作、当前选择、AI 焦点和可执行状态。",
+        "section": "colors"
+      },
+      {
+        "name": "The Status Means Work Rule",
+        "body": "绿、琥珀、红必须对应真实工作状态。禁止用语义色做装饰色。",
+        "section": "colors"
+      },
+      {
+        "name": "The Work Surface Type Rule",
+        "body": "产品界面使用固定字号尺度，禁止按视口宽度流式缩放字体。",
+        "section": "typography"
+      },
+      {
+        "name": "The Grounded Surface Rule",
+        "body": "页面主结构必须落在背景上。只有浮层、当前状态和交互反馈可以获得阴影。",
+        "section": "elevation"
+      }
+    ],
+    "dos": [
+      "Do 使用清澈科技蓝作为主动作和 AI 焦点，保持稀少和明确。",
+      "Do 让项目流程串行可见，同时标出已完成、当前、可执行、风险和门禁状态。",
+      "Do 为 AI 建议展示来源、引用位置、置信度、待确认状态或下一动作。",
+      "Do 用浅色冷白纸面承载长时间审查和编辑，用深墨工作台承载专注状态和复杂流程。",
+      "Do 为所有可交互组件提供 hover、focus、disabled 和 loading 状态。"
+    ],
+    "donts": [
+      "Don't 做厚重菜单感，不要传统后台管理系统式的复杂导航堆叠。",
+      "Don't 做花哨营销页，不要大面积宣传 hero、装饰性卡片堆叠或空泛 AI 能力展示。",
+      "Don't 做暗黑霓虹 AI 工具感，不要过度玻璃拟态、炫光、渐变文字或装饰性动效。",
+      "Don't 使用粗侧边彩条表达状态。状态要通过完整边框、背景弱色、图标、文字和步骤结构表达。",
+      "Don't 让一个页面出现多个同等强度的主按钮。用户必须知道下一步是什么。"
+    ]
+  }
+}

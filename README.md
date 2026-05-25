@@ -117,7 +117,55 @@ SECRET_KEY=your-secret-key-here
 
 # CORS 配置
 CORS_ORIGINS=http://localhost:3000,http://127.0.0.1:3000
+
+# LLM 配置：支持 OpenAI-compatible 接口
+LLM_PROVIDER=openai-compatible
+LLM_BASE_URL=https://api.deepseek.com
+LLM_API_KEY=sk-your-api-key
+LLM_MODEL=deepseek-chat
+LLM_MODELS=deepseek-chat,deepseek-reasoner
+
+# Embedding 配置：默认 Ollama，也可切换为 openai-compatible
+EMBEDDING_PROVIDER=ollama
+EMBEDDING_BASE_URL=http://localhost:11434
+EMBEDDING_API_KEY=
+EMBEDDING_MODEL=qwen3-embedding:4b
+EMBEDDING_MODELS=qwen3-embedding:4b
+EMBEDDING_DIMENSION=2560
+
+# Bid Agent 默认不逐章节调用 LLM，保证一键流程稳定快速；需要时可打开
+BID_AGENT_USE_LLM_CHAPTERS=false
+BID_AGENT_CHAPTER_TIMEOUT_SECONDS=15
 ```
+
+### Docker 自托管启动
+
+建议宿主机为 Docker/Colima 分配至少 2 CPU、4GB 内存和 20GB 可用磁盘空间；前端生产构建会在镜像构建阶段执行，2GB 内存环境可能被系统 OOM 终止。
+
+```bash
+cp .env.docker.example .env
+# 修改 .env 中的 SECRET_KEY、ENCRYPTION_KEY、数据库密码、LLM 与 Embedding 配置
+docker compose up -d --build
+```
+
+启动后访问 `http://localhost:8000`（或 `.env` 中配置的 `PORT`）。本地自托管默认由 FastAPI 直接托管前端静态文件和 API，不需要 Nginx；这样可以减少 SSE/AI 流式接口的代理缓冲和首包延迟。Docker 镜像会在构建阶段自动执行前端 `npm ci && npm run build`，并在启动时执行 `alembic upgrade head`；PostgreSQL 使用带 pgvector 扩展的镜像。若本机 5432 已被占用，可在 `.env` 中设置 `DB_PORT=15432` 等宿主机端口。
+
+如果生产环境确实需要 Nginx 作为反向代理，可显式启用：
+
+```bash
+NGINX_PORT=80 docker compose --profile reverse-proxy up -d --build
+```
+
+### 模型配置说明
+
+系统支持两种模型供给方式：
+
+1. 环境变量配置：适合自托管部署，服务启动后无需先进入后台写入 API Key。`LLM_BASE_URL`、`LLM_API_KEY`、`LLM_MODEL` 控制生成模型，`EMBEDDING_BASE_URL`、`EMBEDDING_API_KEY`、`EMBEDDING_MODEL` 控制知识库索引模型。
+2. 后台配置：管理员可以在系统设置中维护多个 Provider、API Key、生成模型和索引模型。数据库配置存在时，系统仍会保留环境变量 Provider 作为可选项。
+
+`EMBEDDING_PROVIDER=ollama` 使用本地 Ollama embedding 服务；`EMBEDDING_PROVIDER=openai-compatible` 使用兼容 OpenAI embeddings 的服务，需要服务支持 `/embeddings` 能力。
+
+Bid Agent 的章节正文默认基于已完成的招标分析、目录和响应矩阵进行确定性生成，避免自托管环境因逐章节模型调用变慢或挂起；需要更强生成效果时可设置 `BID_AGENT_USE_LLM_CHAPTERS=true`。
 
 ---
 
@@ -217,12 +265,13 @@ python build.py
 
 ## 📝 使用流程
 
-1. **📌 配置AI**：支持所有 OpenAI 兼容的大模型，推荐 DeepSeek
-2. **📄 文档上传**：上传招标文件（支持 Word 和 PDF 格式）
-3. **🔍 文档分析**：AI自动解析招标文件，提取项目概述和技术要求
-4. **📋 生成目录**：基于分析结果智能生成标书目录结构
-5. **✍️ 生成正文**：为各章节生成内容，多线程并发，极速体验
-6. **📤 导出标书**：一键导出完整的标书文档
+1. **📌 配置AI**：通过环境变量或后台配置 OpenAI-compatible LLM 与 Embedding 服务
+2. **📄 上传招标文件**：从首页单一入口上传招标文件，自动创建项目并进入工作区
+3. **🔍 文档分析**：AI 自动解析项目概述、技术要求、评分项、废标条款和材料需求
+4. **📋 生成目录与响应矩阵**：基于招标要求生成目录，绑定评分项和响应条款
+5. **✍️ 生成正文**：按章节生成正文，引用素材库证据，并支持版本历史
+6. **🧪 质量审查**：对现有投标文件执行响应性、合规性、一致性审查，输出问题和修改建议
+7. **📤 导出交付**：导出 Word、批注版和质量报告
 
 ---
 

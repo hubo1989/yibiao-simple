@@ -115,7 +115,7 @@ function handleApiError(error: unknown, fallback: string): never {
   throw new Error(detail || fallback, { cause: error });
 }
 
-const API_BASE_URL = process.env.REACT_APP_API_URL || 'http://localhost:8000';
+const API_BASE_URL = process.env.REACT_APP_API_URL || '';
 
 /** 构建文件 URL（用于图片/PDF 预览等） */
 export function getFileUrl(path: string | undefined | null): string {
@@ -1496,6 +1496,92 @@ export const disqualificationApi = {
       const response = await api.post<ValidateBeforeExportResponse>(`/api/disqualification/${projectId}/validate-before-export`);
       return response.data;
     } catch (error) { handleApiError(error, '导出前废标校验失败'); }
+  },
+};
+
+// ==================== 一键标书智能体 API ====================
+
+export interface BidAgentRun {
+  id: string;
+  project_id: string;
+  created_by?: string | null;
+  goal: string;
+  status: string;
+  progress: number;
+  summary: string;
+  error_message?: string;
+  result_json: Record<string, any>;
+  created_at?: string | null;
+  updated_at?: string | null;
+}
+
+export interface BidAgentStep {
+  id: string;
+  run_id: string;
+  step_key: string;
+  step_name: string;
+  status: string;
+  order_index: number;
+  progress: number;
+  summary: string;
+  error_message?: string;
+  result_json: Record<string, any>;
+  started_at?: string | null;
+  completed_at?: string | null;
+}
+
+export interface BidAgentQualityReport {
+  project_id: string;
+  response_matrix_preflight: Record<string, any>;
+  export_preflight: Record<string, any>;
+  ready: boolean;
+  blockers: string[];
+}
+
+export const bidAgentApi = {
+  generateDraft: async (projectId: string): Promise<BidAgentRun> => {
+    try {
+      const response = await api.post<BidAgentRun>(`/api/bid-agent/${projectId}/generate-draft`);
+      return response.data;
+    } catch (error) { handleApiError(error, '一键生成标书失败'); }
+  },
+
+  generateDraftStream: async (projectId: string, token?: string): Promise<Response> => {
+    const authToken = token || getStoredToken();
+    return fetch(`${API_BASE_URL}/api/bid-agent/${projectId}/generate-draft-stream`, {
+      method: 'POST',
+      headers: {
+        ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}),
+      },
+    });
+  },
+
+  fixRisks: async (projectId: string): Promise<BidAgentRun> => {
+    try {
+      const response = await api.post<BidAgentRun>(`/api/bid-agent/${projectId}/fix-risks`);
+      return response.data;
+    } catch (error) { handleApiError(error, '风险检查失败'); }
+  },
+
+  getRunSteps: async (runId: string): Promise<BidAgentStep[]> => {
+    try {
+      const response = await api.get<BidAgentStep[]>(`/api/bid-agent/runs/${runId}/steps`);
+      return response.data;
+    } catch (error) { handleApiError(error, '获取智能体步骤失败'); }
+  },
+
+  getLatestRun: async (projectId: string): Promise<BidAgentRun | null> => {
+    try {
+      const response = await api.get<BidAgentRun | null>(`/api/bid-agent/${projectId}/runs/latest`);
+      return response.data;
+    } catch (error) { handleApiError(error, '获取最近智能体运行失败'); }
+  },
+
+  getQualityReport: async (projectId: string): Promise<BidAgentQualityReport> => {
+    try {
+      const response = await api.get<BidAgentQualityReport>(`/api/bid-agent/${projectId}/quality-report`);
+      return response.data;
+    } catch (error) { handleApiError(error, '获取质量报告失败'); }
   },
 };
 

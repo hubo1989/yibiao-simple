@@ -66,6 +66,18 @@ class TestBidAgentSchemas:
         assert report.ready is False
         assert report.blockers == []
 
+    def test_fallback_project_analysis_extracts_requirements(self):
+        from app.services.bid_agent_service import _fallback_project_analysis
+
+        result = _fallback_project_analysis(
+            "项目名称：智慧园区建设\n技术要求：支持统一认证\n评分标准：响应矩阵完整性 20 分",
+            "",
+        )
+
+        assert result["project_overview"]
+        assert "技术要求" in result["tech_requirements"]
+        assert "评分标准" in result["tech_requirements"]
+
 
 class TestBidAgentService:
     @pytest.mark.asyncio
@@ -107,7 +119,7 @@ class TestBidAgentService:
             }
 
         monkeypatch.setattr(bid_agent_service.response_matrix_service, "preflight", fake_matrix_preflight)
-        monkeypatch.setattr(bid_agent_service, "build_export_preflight_payload", fake_export_preflight)
+        monkeypatch.setattr(bid_agent_service, "_get_export_preflight_fn", lambda: fake_export_preflight)
 
         report = await bid_agent_service.build_quality_report(AsyncMock(), uuid.uuid4())
 
@@ -145,7 +157,7 @@ class TestBidAgentService:
         monkeypatch.setattr(bid_agent_service, "get_run", fake_get_run)
         monkeypatch.setattr(bid_agent_service, "list_steps", fake_list_steps)
         monkeypatch.setattr(bid_agent_service.response_matrix_service, "preflight", fake_matrix_preflight)
-        monkeypatch.setattr(bid_agent_service, "build_export_preflight_payload", fake_export_preflight)
+        monkeypatch.setattr(bid_agent_service, "_get_export_preflight_fn", lambda: fake_export_preflight)
 
         completed = await bid_agent_service.execute_generate_draft(db, run.id)
 
@@ -199,7 +211,7 @@ class TestBidAgentService:
         monkeypatch.setattr(bid_agent_service.response_matrix_service, "rebuild_from_project", fake_rebuild)
         monkeypatch.setattr(bid_agent_service, "generate_chapter_contents", fake_generate_contents)
         monkeypatch.setattr(bid_agent_service.response_matrix_service, "preflight", fake_matrix_preflight)
-        monkeypatch.setattr(bid_agent_service, "build_export_preflight_payload", fake_export_preflight)
+        monkeypatch.setattr(bid_agent_service, "_get_export_preflight_fn", lambda: fake_export_preflight)
 
         completed = await bid_agent_service.execute_generate_draft(db, run.id)
 
@@ -210,3 +222,89 @@ class TestBidAgentService:
         assert [step.step_key for step in steps] == [key for key, _ in bid_agent_service.GENERATE_DRAFT_STEPS]
         assert all(step.progress == 100 for step in steps)
         assert steps[3].result_json["generated_count"] == 2
+
+    @pytest.mark.asyncio
+    async def test_execute_generate_draft_emits_step_progress_events(self, monkeypatch):
+        from app.models.bid_agent import BidAgentRun, BidAgentRunStatus, BidAgentStep
+        from app.services import bid_agent_service
+
+        project_id = uuid.uuid4()
+        run = BidAgentRun(id=uuid.uuid4(), project_id=project_id, created_by=uuid.uuid4(), goal="fix_risks")
+        steps = [
+            BidAgentStep(id=uuid.uuid4(), run_id=run.id, step_key="response_matrix_preflight", step_name="rm", order_index=1),
+            BidAgentStep(id=uuid.uuid4(), run_id=run.id, step_key="export_preflight", step_name="export", order_index=2),
+            BidAgentStep(id=uuid.uuid4(), run_id=run.id, step_key="assemble_quality_report", step_name="report", order_index=3),
+        ]
+        db = AsyncMock()
+        events = []
+
+        async def fake_get_run(db_arg, run_id):
+            return run
+
+        async def fake_list_steps(db_arg, run_id):
+            return steps
+
+        async def fake_matrix_preflight(db_arg, project_id_arg):
+            return {"ready": True, "summary": {}, "blockers": []}
+
+        async def fake_export_preflight(db_arg, project_id_arg):
+            return {"project_id": str(project_id_arg), "block_export": False, "blockers": [], "summary": {}}
+
+        async def collect(event):
+            events.append(event)
+
+        monkeypatch.setattr(bid_agent_service, "get_run", fake_get_run)
+        monkeypatch.setattr(bid_agent_service, "list_steps", fake_list_steps)
+        monkeypatch.setattr(bid_agent_service.response_matrix_service, "preflight", fake_matrix_preflight)
+        monkeypatch.setattr(bid_agent_service, "_get_export_preflight_fn", lambda: fake_export_preflight)
+
+        completed = await bid_agent_service.execute_generate_draft(db, run.id, on_event=collect)
+
+        assert completed.status == BidAgentRunStatus.completed
+        assert any(event["type"] == "run" for event in events)
+        assert any(event["type"] == "step" and event["step"]["status"] == "running" for event in events)
+        assert any(event["type"] == "step" and event["step"]["status"] == "completed" for event in events)
+        assert events[-1]["type"] == "completed"
+        assert events[-1]["run"]["progress"] == 100
+
+    @pytest.mark.asyncio
+    async def test_execute_generate_draft_marks_run_failed_when_any_step_fails(self, monkeypatch):
+        from app.models.bid_agent import BidAgentRun, BidAgentRunStatus, BidAgentStep
+        from app.services import bid_agent_service
+
+        project_id = uuid.uuid4()
+        run = BidAgentRun(id=uuid.uuid4(), project_id=project_id, created_by=uuid.uuid4(), goal="generate_draft")
+        steps = [
+            BidAgentStep(id=uuid.uuid4(), run_id=run.id, step_key="ensure_project_analysis", step_name="analysis", order_index=1),
+            BidAgentStep(id=uuid.uuid4(), run_id=run.id, step_key="assemble_quality_report", step_name="report", order_index=2),
+        ]
+        db = AsyncMock()
+        events = []
+
+        async def fake_get_run(db_arg, run_id):
+            return run
+
+        async def fake_list_steps(db_arg, run_id):
+            return steps
+
+        async def failing_analysis(db_arg, project_id_arg):
+            raise RuntimeError("model rejected request")
+
+        async def fake_report(db_arg, project_id_arg, pipeline_stats=None):
+            return {"ready": False, "blockers": ["analysis failed"], "pipeline_stats": pipeline_stats or {}}
+
+        async def collect(event):
+            events.append(event)
+
+        monkeypatch.setattr(bid_agent_service, "get_run", fake_get_run)
+        monkeypatch.setattr(bid_agent_service, "list_steps", fake_list_steps)
+        monkeypatch.setattr(bid_agent_service, "ensure_project_analysis", failing_analysis)
+        monkeypatch.setattr(bid_agent_service, "build_quality_report", fake_report)
+
+        completed = await bid_agent_service.execute_generate_draft(db, run.id, on_event=collect)
+
+        assert completed.status == BidAgentRunStatus.failed
+        assert completed.progress == 100
+        assert "ensure_project_analysis" in completed.error_message
+        assert events[-1]["type"] == "failed"
+        assert events[-1]["run"]["status"] == "failed"

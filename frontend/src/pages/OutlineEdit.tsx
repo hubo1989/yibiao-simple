@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState, useCallback } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { OutlineData, OutlineItem } from '../types';
 import { outlineApi, expandApi, consistencyApi, scoringApi } from '../services/api';
 import type { ScoringCoverageResponse } from '../services/api';
@@ -10,8 +10,8 @@ import OutlineEditModal from '../components/outline-edit/OutlineEditModal';
 import type { ChapterStatus } from '../types/chapter';
 import type { RatingChecklistResponse } from '../types/bid';
 import { getCurrentModel, getCurrentProviderConfigId } from '../utils/modelCache';
-import { ProCard } from '@ant-design/pro-components';
-import { Button, Space, Upload, Alert, message, Typography, Tree, Spin, Tag, Modal } from 'antd';
+import { ProCard } from '../components/ProCompat';
+import { Button, Space, Upload, Alert, message, Typography, Tree } from 'antd';
 import {
   PlusOutlined,
   UploadOutlined,

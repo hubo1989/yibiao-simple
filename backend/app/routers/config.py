@@ -11,8 +11,27 @@ from ..models.api_key_config import ApiKeyConfig
 from ..services.openai_service import OpenAIService
 from ..db.database import get_db
 from ..auth.dependencies import require_editor
+from ..config import settings
 
 router = APIRouter(prefix="/api/config", tags=["配置管理"])
+
+
+def build_env_provider_option(is_default: bool = False) -> ProviderModelOption | None:
+    """从环境变量构建自托管 provider 选项。"""
+    if not (settings.llm_base_url or settings.llm_api_key or settings.llm_model):
+        return None
+
+    return ProviderModelOption(
+        config_id="env",
+        provider=settings.llm_provider or "env",
+        models=settings.generation_models,
+        default_model=settings.generation_model,
+        is_default=is_default,
+        source="environment",
+        index_model=settings.embedding_model,
+        embedding_base_url=settings.effective_embedding_base_url,
+        embedding_provider=settings.embedding_provider,
+    )
 
 
 @router.post("/models", response_model=ModelListResponse)
@@ -27,16 +46,22 @@ async def get_available_models(
         )
         configs = result.scalars().all()
 
-        if not configs:
+        env_provider = build_env_provider_option(is_default=True)
+
+        if not configs and env_provider is None:
             return ModelListResponse(
                 models=[],
                 providers=[],
                 success=False,
-                message="未配置 API Key，请管理员先添加配置"
+                message="未配置 API Key。请通过环境变量 LLM_BASE_URL/LLM_API_KEY/LLM_MODEL 配置，或由管理员在后台添加配置。"
             )
 
         provider_items: list[ProviderModelOption] = []
         default_provider_config_id: str | None = None
+
+        if env_provider is not None:
+            provider_items.append(env_provider)
+            default_provider_config_id = env_provider.config_id
 
         for config in configs:
             configured_models = [item.get("model_id", "") for item in config.get_model_configs()]
@@ -61,6 +86,8 @@ async def get_available_models(
                     models=deduped_models or [default_model],
                     default_model=default_model,
                     is_default=config.is_default,
+                    source="database",
+                    index_model=config.get_index_model_name(),
                 )
             )
 

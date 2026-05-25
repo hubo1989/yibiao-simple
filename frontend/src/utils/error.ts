@@ -44,6 +44,6 @@ export const statusColors: Record<string, string> = {
  */
 export function getFileUrl(path: string | undefined | null): string {
   if (!path) return '';
-  const baseUrl = process.env.REACT_APP_API_URL || 'http://localhost:8000';
+  const baseUrl = process.env.REACT_APP_API_URL || '';
   return `${baseUrl}/${path.replace(/^\/+/, '')}`;
 }

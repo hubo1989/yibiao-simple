@@ -3,7 +3,7 @@
  */
 import React, { useState, useEffect, useCallback } from 'react';
 import { Modal, Select, Radio, Button, Space, Typography, Spin, Image, message, Divider, Alert, List } from 'antd';
-import { DownloadOutlined, EyeOutlined, PlusOutlined, ThunderboltOutlined, SafetyCertificateOutlined } from '@ant-design/icons';
+import { DownloadOutlined, EyeOutlined, PlusOutlined, ThunderboltOutlined } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
 import { saveAs } from 'file-saver';
 import { documentApi, exportTemplateApi, disqualificationApi, ExportTemplate, DisqualificationItem } from '../services/api';

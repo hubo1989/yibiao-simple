@@ -1253,56 +1253,66 @@ async def analyze_project_document_stream(
                 detail="项目尚未上传文档，请先上传招标文件",
             )
 
-        # 创建OpenAI服务实例，从数据库加载配置
-        openai_service = OpenAIService(db=db, project_id=project_uuid)
-        if request.provider_config_id:
-            configured = await openai_service.use_config_by_id(request.provider_config_id)
-            if not configured:
-                raise HTTPException(status_code=404, detail="所选 Provider 配置不存在")
-        else:
-            await openai_service._ensure_initialized()
-
-        if not openai_service.api_key:
-            raise HTTPException(status_code=400, detail="请先配置OpenAI API密钥")
-
-        # 如果前端传了模型名称，覆盖默认模型
-        if request.model_name:
-            openai_service.set_model(request.model_name)
-
         # 用于收集分析结果的变量
         collected_result = []
 
         # 保存分析结果的变量
         analysis_type = request.analysis_type
         project_id = project_uuid
+        file_content = project.file_content
+        model_name = request.model_name
+        provider_config_id = request.provider_config_id
 
         async def generate():
             nonlocal collected_result
 
-            # 使用 PromptService 获取提示词
-            prompt_service = PromptService(db)
-            scene_key = {
-                AnalysisType.OVERVIEW: "doc_analysis_overview",
-                AnalysisType.REQUIREMENTS: "doc_analysis_requirements",
-                AnalysisType.MATERIAL_REQUIREMENTS: "doc_analysis_requirements",
-            }[analysis_type]
-            prompt, _ = await prompt_service.get_prompt(scene_key, project_id)
-            system_prompt, user_template = PromptService.split_prompt(prompt)
-            user_prompt = prompt_service.render_prompt(
-                user_template, {"file_content": project.file_content}
-            )
+            yield f"data: {json.dumps({'type': 'started', 'analysis_type': analysis_type.value}, ensure_ascii=False)}\n\n"
 
-            messages = [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
-            ]
+            async with async_session_factory() as stream_db:
+                # 创建OpenAI服务实例，从独立 session 加载配置，避免请求级 session 贯穿 SSE 生命周期
+                openai_service = OpenAIService(db=stream_db, project_id=project_id)
+                if provider_config_id:
+                    configured = await openai_service.use_config_by_id(provider_config_id)
+                    if not configured:
+                        yield f"data: {json.dumps({'type': 'error', 'message': '所选 Provider 配置不存在'}, ensure_ascii=False)}\n\n"
+                        yield "data: [DONE]\n\n"
+                        return
+                else:
+                    await openai_service._ensure_initialized()
 
-            # 流式返回分析结果，同时收集完整结果
-            async for chunk in openai_service.stream_chat_completion(
-                messages, temperature=0.3
-            ):
-                collected_result.append(chunk)
-                yield f"data: {json.dumps({'chunk': chunk}, ensure_ascii=False)}\n\n"
+                if not openai_service.api_key:
+                    yield f"data: {json.dumps({'type': 'error', 'message': '请先配置OpenAI API密钥'}, ensure_ascii=False)}\n\n"
+                    yield "data: [DONE]\n\n"
+                    return
+
+                # 如果前端传了模型名称，覆盖默认模型
+                if model_name:
+                    openai_service.set_model(model_name)
+
+                # 使用 PromptService 获取提示词
+                prompt_service = PromptService(stream_db)
+                scene_key = {
+                    AnalysisType.OVERVIEW: "doc_analysis_overview",
+                    AnalysisType.REQUIREMENTS: "doc_analysis_requirements",
+                    AnalysisType.MATERIAL_REQUIREMENTS: "doc_analysis_requirements",
+                }[analysis_type]
+                prompt, _ = await prompt_service.get_prompt(scene_key, project_id)
+                system_prompt, user_template = PromptService.split_prompt(prompt)
+                user_prompt = prompt_service.render_prompt(
+                    user_template, {"file_content": file_content}
+                )
+
+                messages = [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt},
+                ]
+
+                # 流式返回分析结果，同时收集完整结果
+                async for chunk in openai_service.stream_chat_completion(
+                    messages, temperature=0.3
+                ):
+                    collected_result.append(chunk)
+                    yield f"data: {json.dumps({'chunk': chunk}, ensure_ascii=False)}\n\n"
 
             # 在生成器内部创建新的数据库会话保存结果
             full_result = "".join(collected_result)

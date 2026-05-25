@@ -62,7 +62,7 @@ const IngestionWizard: React.FC<Props> = ({ visible, onClose, onSuccess }) => {
   const [documents, setDocuments] = useState<KnowledgeDoc[]>([]);
   const [selectedDocId, setSelectedDocId] = useState<string | null>(null);
   const [taskId, setTaskId] = useState<string | null>(null);
-  const [task, setTask] = useState<IngestionTask | null>(null);
+  const [, setTask] = useState<IngestionTask | null>(null);
   const [candidates, setCandidates] = useState<MaterialCandidate[]>([]);
   const [selectedCandidateIds, setSelectedCandidateIds] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(false);

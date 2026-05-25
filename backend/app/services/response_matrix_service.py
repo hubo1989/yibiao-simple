@@ -395,7 +395,7 @@ async def rebuild(
     # Auto-bind
     await auto_bind_to_chapters(db, project_id)
 
-    await db.commit()
+    await db.flush()
 
     # Return summary
     return await summarize(db, project_id)

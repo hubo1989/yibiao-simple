@@ -1,15 +1,18 @@
 """Bid Agent Orchestrator API routes."""
 from __future__ import annotations
 
+import asyncio
+import json
 import uuid
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import StreamingResponse
 from sqlalchemy import and_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..auth.dependencies import require_editor
-from ..db.database import get_db
+from ..db.database import async_session_factory, get_db
 from ..models.bid_agent import BidAgentRun, BidAgentStep
 from ..models.project import Project, ProjectMemberRole, project_members
 from ..models.user import User
@@ -98,6 +101,57 @@ async def generate_draft(
     return _run_response(run)
 
 
+@router.post("/{project_id}/generate-draft-stream")
+async def generate_draft_stream(
+    project_id: uuid.UUID,
+    current_user: Annotated[User, Depends(require_editor)] = None,
+    db: AsyncSession = Depends(get_db),
+) -> StreamingResponse:
+    """Create a draft-generation run and stream step-level progress as SSE."""
+    await _verify_project_access(project_id, current_user.id, db, require_write=True)
+    run = await bid_agent_service.create_run(db, project_id, current_user.id, goal="generate_draft")
+    await db.commit()
+    await db.refresh(run)
+    initial_run_payload = bid_agent_service.run_payload(run)
+
+    async def event_stream():
+        queue: asyncio.Queue[dict | None] = asyncio.Queue()
+
+        async def emit(event: dict) -> None:
+            await queue.put(event)
+
+        async def execute() -> None:
+            try:
+                async with async_session_factory() as stream_db:
+                    await bid_agent_service.execute_generate_draft(stream_db, run.id, on_event=emit)
+            except Exception as exc:  # pragma: no cover - defensive streaming path
+                await queue.put({"type": "error", "message": str(exc)})
+            finally:
+                await queue.put(None)
+
+        task = asyncio.create_task(execute())
+        initial = {"type": "created", "run": initial_run_payload}
+        yield f"data: {json.dumps(initial, ensure_ascii=False)}\n\n"
+        try:
+            while True:
+                event = await queue.get()
+                if event is None:
+                    break
+                yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+        finally:
+            await task
+        yield "data: [DONE]\n\n"
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
 @router.post("/{project_id}/fix-risks", response_model=BidAgentRunResponse)
 async def fix_risks(
     project_id: uuid.UUID,
@@ -119,6 +173,17 @@ async def get_run(
 ) -> BidAgentRunResponse:
     run = await _verify_run_access(run_id, current_user.id, db)
     return _run_response(run)
+
+
+@router.get("/{project_id}/runs/latest", response_model=BidAgentRunResponse | None)
+async def get_latest_project_run(
+    project_id: uuid.UUID,
+    current_user: Annotated[User, Depends(require_editor)] = None,
+    db: AsyncSession = Depends(get_db),
+) -> BidAgentRunResponse | None:
+    await _verify_project_access(project_id, current_user.id, db)
+    run = await bid_agent_service.get_latest_run(db, project_id)
+    return _run_response(run) if run else None
 
 
 @router.get("/runs/{run_id}/steps", response_model=list[BidAgentStepResponse])

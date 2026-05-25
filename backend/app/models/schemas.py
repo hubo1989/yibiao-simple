@@ -35,6 +35,10 @@ class ProviderModelOption(BaseModel):
     models: List[str]
     default_model: str
     is_default: bool = False
+    source: str = "database"
+    index_model: Optional[str] = None
+    embedding_base_url: Optional[str] = None
+    embedding_provider: Optional[str] = None
 
 
 class FileUploadResponse(BaseModel):

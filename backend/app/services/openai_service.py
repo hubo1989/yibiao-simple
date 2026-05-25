@@ -12,6 +12,7 @@ from ..utils.outline_util import get_random_indexes, calculate_nodes_distributio
 from ..utils.json_util import check_json, repair_truncated_json
 from ..utils.config_manager import config_manager
 from ..utils.encryption import encryption_service
+from ..config import settings
 from ..models.api_key_config import ApiKeyConfig
 from ..db.database import async_session_factory
 from ..services.prompt_service import PromptService
@@ -197,6 +198,22 @@ class OpenAIService:
         self._set_prompt_service()
         return bool(self.api_key)
 
+    def use_env_config(self) -> bool:
+        """应用环境变量中的 OpenAI-compatible LLM 配置。"""
+        has_env_provider = bool(settings.llm_base_url or settings.llm_api_key or settings.llm_model)
+        if not has_env_provider:
+            return False
+
+        self.api_key = settings.llm_api_key or "not-needed"
+        self.base_url = settings.llm_base_url or ''
+        self.model_name = settings.generation_model
+        self._client = openai.AsyncOpenAI(
+            api_key=self.api_key,
+            base_url=self.base_url if self.base_url else None,
+        )
+        self._set_prompt_service()
+        return True
+
     async def _load_config_from_db(self) -> bool:
         """从数据库加载默认 API Key 配置"""
         if self._db is None:
@@ -243,14 +260,18 @@ class OpenAIService:
             # 先尝试从数据库加载配置
             loaded = await self._load_config_from_db()
 
-            # 如果数据库中没有配置，回退到本地配置文件
+            # 如果数据库中没有配置，优先回退到环境变量，便于自托管部署零初始化启动
+            if not loaded:
+                loaded = self.use_env_config()
+
+            # 如果环境变量也未配置，回退到本地配置文件
             if not loaded:
                 config = config_manager.load_config()
                 self.api_key = config.get('api_key', '')
                 self.base_url = config.get('base_url', '')
-                self.model_name = config.get('model_name', 'gpt-3.5-turbo')
+                self.model_name = config.get('model_name', settings.generation_model)
                 self._client = openai.AsyncOpenAI(
-                    api_key=self.api_key,
+                    api_key=self.api_key or "not-needed",
                     base_url=self.base_url if self.base_url else None
                 )
 

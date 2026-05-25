@@ -17,8 +17,24 @@ branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
 
-run_status = sa.Enum('pending', 'running', 'completed', 'failed', 'cancelled', name='bidagentrunstatus')
-step_status = sa.Enum('pending', 'running', 'completed', 'failed', 'skipped', name='bidagentstepstatus')
+run_status = postgresql.ENUM(
+    'pending',
+    'running',
+    'completed',
+    'failed',
+    'cancelled',
+    name='bidagentrunstatus',
+    create_type=False,
+)
+step_status = postgresql.ENUM(
+    'pending',
+    'running',
+    'completed',
+    'failed',
+    'skipped',
+    name='bidagentstepstatus',
+    create_type=False,
+)
 
 
 def upgrade() -> None:

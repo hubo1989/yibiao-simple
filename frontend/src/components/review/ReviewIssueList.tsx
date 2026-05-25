@@ -1,5 +1,5 @@
 import React from 'react';
-import { Card, Tabs, Select, List, Empty } from 'antd';
+import { Card, Tabs, Select, List, Empty, Checkbox } from 'antd';
 import { REVIEW_DIMENSION_LABELS } from '../../types/review';
 import type { ReviewDimension, ResponsivenessItem, ComplianceItem, ConsistencyItem } from '../../types/review';
 import ReviewIssueItem from './ReviewIssueItem';
@@ -18,6 +18,8 @@ interface ReviewIssueListProps {
   severityFilter: string;
   onSeverityFilterChange: (value: string) => void;
   onCopy?: (text: string) => void;
+  selectedIssueIds?: string[];
+  onSelectedIssueIdsChange?: (ids: string[]) => void;
 }
 
 const ReviewIssueList: React.FC<ReviewIssueListProps> = ({
@@ -28,6 +30,8 @@ const ReviewIssueList: React.FC<ReviewIssueListProps> = ({
   severityFilter,
   onSeverityFilterChange,
   onCopy,
+  selectedIssueIds = [],
+  onSelectedIssueIdsChange,
 }) => {
   const filteredIssues = allIssues.filter((entry) => {
     if (dimensionTab !== 'all' && entry.dimension !== dimensionTab) return false;
@@ -35,6 +39,9 @@ const ReviewIssueList: React.FC<ReviewIssueListProps> = ({
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const sev = (entry.item as any).severity || (entry.item as any).coverage_status;
       const sevMap: Record<string, string> = {
+        critical: 'critical',
+        warning: 'warning',
+        info: 'info',
         covered: 'info',
         partial: 'warning',
         missing: 'critical',
@@ -79,13 +86,32 @@ const ReviewIssueList: React.FC<ReviewIssueListProps> = ({
         <List
           dataSource={filteredIssues}
           rowKey="key"
-          renderItem={(entry) => (
-            <ReviewIssueItem
-              dimension={entry.dimension}
-              item={entry.item}
-              onCopy={onCopy}
-            />
-          )}
+          renderItem={(entry) => {
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            const issueId = String((entry.item as any).id || entry.key);
+            const checked = selectedIssueIds.includes(issueId);
+            return (
+              <div style={{ display: 'grid', gridTemplateColumns: onSelectedIssueIdsChange ? '32px minmax(0, 1fr)' : '1fr', gap: 8, alignItems: 'start' }}>
+                {onSelectedIssueIdsChange && (
+                  <Checkbox
+                    checked={checked}
+                    style={{ marginTop: 18 }}
+                    onChange={(event) => {
+                      const next = event.target.checked
+                        ? Array.from(new Set([...selectedIssueIds, issueId]))
+                        : selectedIssueIds.filter((id) => id !== issueId);
+                      onSelectedIssueIdsChange(next);
+                    }}
+                  />
+                )}
+                <ReviewIssueItem
+                  dimension={entry.dimension}
+                  item={entry.item}
+                  onCopy={onCopy}
+                />
+              </div>
+            );
+          }}
         />
       )}
     </Card>

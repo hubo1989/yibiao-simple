@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { ProTable, ActionType, ProColumns } from '@ant-design/pro-components';
+import { ProTable, ActionType, ProColumns } from '../components/ProCompat';
 import { Button, Tag, Space, Modal, Form, Input, Select, Upload, message, Typography, Popconfirm } from 'antd';
 import { PlusOutlined, UploadOutlined, CloudUploadOutlined } from '@ant-design/icons';
 import api from '../services/api';
@@ -173,7 +173,7 @@ const KnowledgeBase: React.FC = () => {
           <Typography.Text strong>{dom}</Typography.Text>
           {entity.tags && entity.tags.length > 0 && (
             <div style={{ marginTop: 4 }}>
-              {entity.tags.map(tag => <Tag key={tag} color="blue">{tag}</Tag>)}
+              {entity.tags.map((tag: string) => <Tag key={tag} color="blue">{tag}</Tag>)}
             </div>
           )}
         </div>

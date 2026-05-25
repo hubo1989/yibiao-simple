@@ -328,6 +328,14 @@
 .ant-typography.ant-typography-secondary {
   color: var(--text-secondary) !important;
 }
+/* 白/浅色容器内的 secondary 文字加深，保证可读性 */
+[class*="bg-white"] .ant-typography.ant-typography-secondary,
+[class*="bg-slate-50"] .ant-typography.ant-typography-secondary,
+[class*="bg-gray-50"] .ant-typography.ant-typography-secondary,
+.bg-white .ant-typography.ant-typography-secondary,
+.bg-slate-50 .ant-typography.ant-typography-secondary {
+  color: #5a6270 !important;
+}
 h1.ant-typography,
 h2.ant-typography,
 h3.ant-typography,

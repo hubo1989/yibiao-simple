@@ -145,12 +145,70 @@ class ReviewService:
             if not full_content:
                 return None
 
-            parsed = json.loads(full_content)
-            return parsed
+            try:
+                parsed = json.loads(full_content)
+                return parsed
+            except Exception:
+                return self._fallback_dimension_result(scene_key, full_content)
 
         except Exception as e:
             print(f"[Review:{scene_key}] 审查失败: {e}")
             return None
+
+    @staticmethod
+    def _fallback_dimension_result(scene_key: str, raw_text: str) -> dict:
+        """将非 JSON 的模型审查结论降级包装为标准结果，避免整单审查失败。"""
+        text = (raw_text or "").strip()
+        excerpt = text[:1200] if text else "模型未返回可解析内容"
+
+        if scene_key == "bid_review_compliance":
+            return {
+                "items": [
+                    {
+                        "compliance_category": "合规性审查",
+                        "clause_text": "",
+                        "check_result": "warning",
+                        "detail": excerpt,
+                        "bid_location": "全文",
+                        "severity": "warning",
+                        "suggestion": "模型返回了非 JSON 审查结论，已保留原始判断；建议人工复核并按问题逐项修订。",
+                    }
+                ]
+            }
+
+        if scene_key == "bid_review_consistency":
+            return {
+                "contradictions": [
+                    {
+                        "severity": "warning",
+                        "category": "scope",
+                        "description": "模型返回了非 JSON 一致性审查结论，已保留为降级问题项。",
+                        "chapter_a": "招标文件",
+                        "detail_a": excerpt,
+                        "chapter_b": "投标文件",
+                        "detail_b": excerpt,
+                        "suggestion": "按原始审查结论核对项目名称、编号、标包、服务范围、平台名称等关键字段。",
+                    }
+                ]
+            }
+
+        return {
+            "items": [
+                {
+                    "rating_item": "响应性审查",
+                    "score": 0,
+                    "max_score": 0,
+                    "coverage_status": "risk",
+                    "evidence": excerpt,
+                    "source_refs": [],
+                    "issues": ["模型返回了非 JSON 响应性审查结论，已保留为风险项。"],
+                    "suggestions": ["人工复核原始审查结论，并补齐评分项响应证据。"],
+                    "rewrite_suggestions": [],
+                    "chapter_targets": ["全文"],
+                    "confidence": "medium",
+                }
+            ]
+        }
 
     async def _run_responsiveness_check(
         self,
@@ -338,6 +396,23 @@ class ReviewService:
             "issue_distribution": issue_distribution,
         }
 
+    @staticmethod
+    def normalize_issue_ids(
+        responsiveness: dict | None,
+        compliance: dict | None,
+        consistency: dict | None,
+    ) -> None:
+        """Attach stable IDs so review results can be filtered, reloaded, selected, and fixed."""
+        for prefix, container, key in [
+            ("responsiveness", responsiveness, "items"),
+            ("compliance", compliance, "items"),
+            ("consistency", consistency, "contradictions"),
+        ]:
+            items = container.get(key, []) if container else []
+            for index, item in enumerate(items, start=1):
+                if isinstance(item, dict) and not item.get("id"):
+                    item["id"] = f"{prefix}-{index}"
+
     async def execute_review(
         self,
         task_id: uuid.UUID,
@@ -474,6 +549,7 @@ class ReviewService:
         )
 
         # 生成汇总（仅对成功维度计分）
+        self.normalize_issue_ids(resp_result, comp_result, cons_result)
         summary = self.generate_summary(resp_result, comp_result, cons_result, failed_dimensions)
 
         # 保存结果到数据库
